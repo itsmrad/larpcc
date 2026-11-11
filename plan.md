@@ -1,6 +1,6 @@
 # Larp CC plan
 
-Baseline: `14e299f` (Cargo workspace, placeholder `larp` binary). Plan adopted 2026-11-11 from the master draft. The section "Changes from the master draft" lists every material edit. Detailed stage contracts live in `docs/stages/`. Stage 1: [`docs/stages/01-profiles.md`](docs/stages/01-profiles.md).
+Baseline: `14e299f` (Cargo workspace, placeholder `larp` binary). Plan adopted 2026-11-11 from the master draft. The section "Changes from the master draft" lists every material edit. Detailed stage contracts live in `docs/stages/`. Stage 1: [`docs/stages/01-profiles.md`](docs/stages/01-profiles.md). Stage 2: [docs/stages/02-native-launch.md](docs/stages/02-native-launch.md).
 
 ## Product boundary
 
@@ -25,6 +25,8 @@ The MVP is complete when all of the following hold:
 4. The authorized native two-account matrix has passed for every advertised provider/OS/backend combination.
 
 Until that real-account authorization exists, the result is an engineering-complete candidate. It is not validated account-isolation support. Unsupported combinations are listed explicitly. Dropping Windows entirely, or dropping either provider, fails the cross-platform MVP goal. WSL is a separate Linux environment and is not Windows evidence. Production distribution, skills/MCP sharing, desktop, menu bar and ACP are separately gated tracks. They are not hidden MVP requirements, and they cannot enlarge the MVP boundary.
+
+Engineering completion does not enable provider execution. Stage 2 ordinary builds refuse `run` before process creation while qualification is pending; a separate synthetic-only build tests the launch engine and is excluded from ordinary packaging. Stage 3 enables only a documented and qualified provider/version/interface/backend/OS combination; unknown or changed combinations remain disabled. Real-account authorization and the advertised release matrix remain separate gates. A bound path or native file header is not qualification.
 
 ## Evidence baseline (2026-11-11)
 
@@ -52,7 +54,7 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
 ## Cross-stage conventions (frozen in stage 1)
 
 - **Command namespace.** `larp cc …`. There is no implicit or default profile. Each stage freezes only the commands it implements. The proposed later grammar is `larp cc run NAME -- ARGS`, `larp cc login|status|logout NAME`, `larp cc alias install|list|remove`. It is a proposal until its stage contract freezes it.
-- **Exit codes.** 0 = success or explicitly requested help. Missing-subcommand help goes to stderr and exits 2. 2 = usage error, including a missing confirmation flag. 1 = local operational failure. A launched provider's exit code is passed through (stage 2).
+- **Exit codes.** 0 = success or explicitly requested help. Missing-subcommand help goes to stderr and exits 2. 2 = usage error, including a missing confirmation flag. 1 = local operational failure. The synthetic stage-2 engine passes through native provider-shaped child exit status; ordinary builds refuse run until stage-3 qualification. Enabled qualified launches use that same exit-status contract.
 - **Error format.** Errors go to stderr as `error: …`, optionally followed by `hint: …` lines; clap missing-subcommand help is the exit-2 exception, with no `error:` prefix.
 - **Profiles.**
   - The immutable ID is a number and is never reused.
@@ -67,8 +69,8 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
 | Stage | Depends on | Delivers | Gate summary |
 |---|---|---|---|
 | 1 Profiles and contracts | planning PR | registry v1, `profile add/list/show/rename/forget`, help, baseline 3-OS CI | synthetic/platform tests, review, README fidelity |
-| 2 Native launch | 1 | provider binding (registry v2), `run`, LaunchPlan, Unix exec, Windows wait, Windows ACL hardening | OS-native process tests on Linux/macOS/Windows |
-| 3 Auth qualification | 2 | `login/status/logout`, confirmation and conflict policy | synthetic gate for code; real-account gate for release qualification |
+| 2 Native launch engine | 1 | provider binding (registry v2), ordinary run refusal, synthetic-only LaunchPlan/Unix exec/Windows wait, managed-tree safety | OS-native synthetic tests on Linux/macOS/Windows; ordinary launch remains disabled |
+| 3 Auth and launch qualification | 2 | exact version/interface/backend/OS launch qualification and enablement, login/status/logout, confirmation/conflict policy | synthetic gate for engineering; authorized native qualification gate for enabled combinations and release claims |
 | 4 Aliases | 2, 3 | alias install/list/remove, manifest (registry v3) | per-OS alias lifecycle plus account-safety regression |
 | 5 Cross-platform release | 1–4 | packaging, target matrix, reproducible archives | complete advertised account matrix, reproducible archives |
 
@@ -82,41 +84,34 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
 
 **Ownership:** two developer branches, `stage/1-registry` (core) and `stage/1-cli` (CLI, help, fixtures, e2e, CI). They share one contract seed commit and follow a contract-change rule. Independent testers and reviewers are arranged by the lead.
 
-**Merge gate:** the definition of done in the stage doc, evidenced on the final integrated head.
+**Merge gate:** the definition of done in the stage doc, evidenced on the final integrated head. The historical stage-1 contract is preserved; prospective stage-2 supersession is recorded in [the stage-2 baseline](docs/stages/02-native-launch.md#0-baseline-reconciliation-and-freeze).
 
-## Stage 2 — Explicit native launch and terminal lifecycle
+## Stage 2 — Explicit native launch engine and terminal lifecycle
 
-**Prerequisite:** stage 1 types and paths.
+**Prerequisite:** accepted stage 1 M1; exact-M1 reconciliation and reviewed detailed stage contract merged before code.
 
-**Deliverable:** `run`, provider binding and resolution, and a pure `LaunchPlan { executable, argv, cwd, env_delta }`.
-- **Binding.** One absolute official executable is bound per provider; users install it themselves. Larp never searches aliases recursively and never auto-downloads. A changed path needs explicit rebinding. Larp rejects its own managed launchers, missing or non-executable paths, and unsupported script shims. On Windows the MVP targets native official `.exe` files; `.cmd`/`.bat` support needs a separately reviewed quoting contract.
-- **Child environment.** Only the selected `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set in the child. CWD, terminal and unrelated environment are preserved.
-- **Conflict rejection.** Larp rejects, before launch, inherited profile overrides, provider API/token/routing overrides, and known home/backend flags. Errors name the variables, never their values. Version-specific allow/deny rules cover alternate auth and routing modes. Unsupported override paths fail closed and tell the user to run the official client directly. Enterprise policy is not stripped, and arbitrary provider configuration is not claimed to be sandboxed.
-- **Support scope.** Only fresh managed profiles are supported. No credential-store inspection. Version diagnostics use documented version interfaces and never make model requests.
-- **Unix.** `exec` with no resident launcher; exec errors keep useful diagnostics.
-- **Windows.** Inherited console and std handles; waits for the child without building shell strings. Propagates exit codes, including unsigned native values. Handles Ctrl-C/Break once. Defines parent-close behavior. No process-tree killing without a tested policy.
-- **Entry criterion carried from stage 1:** before any Windows provider launch or auth operation, verify ownership and safe ACLs (harden where safe, otherwise refuse) across the entire managed metadata tree: root, all parents within root, registry, lock, transient metadata and every profile home. Refuse unsafe or unverifiable roots, including alternate `LARPCC_HOME` roots; securing only the leaf homes is insufficient. Stage 1 makes no verified-private-directory claim on Windows. Synthetic broad-ACL fixtures for every path class must prove refusal before provider spawn.
+**Deliverable:** provider binding and resolution (registry v2), ordinary `run` refusal, and a pure LaunchPlan with native execution tested only in a dedicated synthetic build. Ordinary builds always refuse syntactically valid run before registry lookup, provider/version probe or process creation; no runtime environment/flag/path/fake marker unlocks it. Synthetic artifacts are excluded from default build/install/release packaging. Stage 2 is engineering completion, not enabled or released account support.
+- **Binding.** One absolute native executable path per provider; no PATH search, download or shim/wrapper execution. Native official targets are intended, but magic filtering proves neither provenance nor installation compatibility. Store update path, validate lexical and resolved containment, trusted ownership and ancestry, and execute the validated resolved path. Revalidate each synthetic launch; file identity excludes self including Windows hardlinks. Same-user/privileged path-reopen TOCTOU remains explicit.
+- **Child plan.** Exactly one selected home variable delta; cwd, terminal and unrelated environment preserved. No HOME/USERPROFILE/XDG/APPDATA writes or provider-content/credential reads.
+- **Policy.** Concrete vendor grammar/config admission is deferred to stage 3. Stage-2 policy fixtures are provisional synthetic grammar only, not a universal vendor denylist or partial TOML parser. No in-session auth workaround or claim filtering blocks interactive auth, MCP or external policy.
+- **Unix.** exec, no resident Larp supervisor; native fake tests PID, signals, IO, TTY and measured signal inheritance.
+- **Windows.** Inherited console/stdio, direct-child spawn/wait, no shell string, full native exit codes, separate Ctrl-C/Break tests and failure cleanup. Actual window-close behavior remains unverified until its native test; no tree-kill promise.
+- **Windows entry criterion carried from stage 1:** before any provider launch or auth, verify safe ownership/ACLs across root, managed parents, registry, lock, transient metadata and every existing registered home directory. Missing non-target homes are informational; unsafe existing homes block launch. Inspect directories, never provider contents. Verify trusted ancestor components from the local volume root with retained non-inheritable/no-delete-sharing handles; a leaf OPEN_REPARSE_POINT flag alone is insufficient. Refuse all unsafe/unverifiable/reparse paths, including alternate roots.
+- **Creation and existing trees.** Existing objects are verify-only with READ_CONTROL. No automatic ACL repair, SetSecurityInfo propagation or copying of provider state. New objects get explicit protected security descriptors at creation under verified parents. Broad/unprotected stage-1 trees refuse; operator reviews permissions manually or selects a new private root and fresh profiles.
 
-**Tests:** a fake provider asserts:
-- exact argv (spaces, quotes, metacharacters, empty arguments, Unicode)
-- CWD and environment, four distinct homes, no mutation of the parent
-- conflicts rejected before spawn
-- no fallback binary or profile
-- Unix: PID, exit status, signals, TTY
-- Windows: Ctrl-C/Break, console close, redirected IO, nonzero exits, no orphan on failed spawn
+**Tests:** native synthetic fake matrix for argv/env/cwd/four homes/no fallback; unchanged registry and no content reads; executable/ancestry/ACL adversarial cases; Unix PID/signals/PTY and Windows console/status/failure cleanup. Default-build refusal and nonpackaging are independently tested. Apply OS-specific cases only on their native runners, with explicit unsupported/pending evidence. No installed providers, network, credentials or account requests.
 
-Fixtures never invoke installed providers and contain no credentials.
+**Ownership:** core and Windows branches share one validated contract seed; core owns shared modules/manifests/CLI/CI/docs, Windows owns platform implementation and Windows-only tests. Independent terminal tester and OCR delegate reviewers are lead-arranged.
 
-**Ownership:** B-plan (resolver/policy), B-unix and B-windows (execution against one LaunchPlan), an independent terminal tester.
-
-**Merge gate:** OS-native process tests on all three OSes. No shell-shim support is claimed without tests.
+**Merge gate:** same integrated-head applicable native Linux/macOS/Windows and Ubuntu MSRV evidence, independent tests and per-file OCR delegate coverage, merged-tree equality. This does not enable real launch or qualify accounts. Detailed contract: [docs/stages/02-native-launch.md](docs/stages/02-native-launch.md).
 
 ## Stage 3 — Native authentication and account-safety qualification
 
-**Prerequisite:** stage 2. Freeze the exact CLI versions, backend modes and native command table first.
+**Prerequisite:** stage-2 engineering gates. Before enabling real run or auth, freeze exact provider/version/interface/backend/OS combinations, installation compatibility, documented argument/environment grammar and native command table. Unknown/changed combinations remain disabled; a permanent qualified flag on a bound path is insufficient. No version probe or auth operation is implied by stage-2 acceptance.
 
 **Deliverable:**
-- **Command mapping.** `login/status/logout` use the same LaunchPlan as `run`. Expected mapping: Claude `auth login|status|logout`; Codex `login`, `login status`, `logout`. Verify the mapping per supported version. Unknown versions get an explicit "unverified" diagnostic; native flags are never guessed. Refresh happens only through the client's supported lifecycle.
+- **Launch enablement.** Use the synthetic-tested engine only after the selected combination's authorized qualification gates pass. Start with narrow reviewed command/option shapes and refuse all unreviewed config/profile/settings/remote/auth overrides, including Codex --profile/-p and all -c/--config forms; do not implement a partial TOML parser. Preserve unrelated environment, with version-specific conflict names/prefix exceptions explicitly reviewed. CLI filtering does not guarantee exclusion of native interactive auth, MCP OAuth, enterprise or project policy. Per-home Codex TUI discovery is supported by pinned static source, but same-home daemon reuse retains start-time environment; aliases/symlinks/remote and non-TUI/Windows behavior need qualification. Candidate foreground/--no-daemon policy requires exact version/interface/backend/OS evidence; no unknown-version injection. Resolve sequential and concurrent reuse before enablement, with safe later-specified home-identity/live-daemon/leak checks. No credential-store reads.
+- **Command mapping.** `login/status/logout` use the same LaunchPlan as `run`. Expected mapping: Claude `auth login|status|logout`; Codex `login`, `login status`, `logout`. Verify the mapping per supported version. Unknown or changed versions get an explicit unverified refusal before provider execution; native flags are never guessed. Refresh happens only through the client's supported lifecycle.
 - **Confirmation.** Auth-changing commands need explicit selection and interactive confirmation. They fail closed in non-interactive use unless a deliberate confirmation flag is given. No logout-all.
 - **What Larp does not record.** No email, no tokens, no background status polling.
 - **Live sessions.** Cooperative auth-operation locks. Unix `exec` cannot exclude independently running official clients, so users must quiesce sessions first. Larp does not claim otherwise.
@@ -127,7 +122,7 @@ Fixtures never invoke installed providers and contain no credentials.
 
 **Ownership:** C-auth, C-policy, an independent C-qualification tester.
 
-**Merge gate:** the synthetic gate covers code. The real-account gate separately controls release qualification. Without authorization the status is "pending", never an inferred pass.
+**Merge/enablement gate:** synthetic evidence may complete engineering code while real launches remain disabled. Authorized exact-version/interface/backend/OS native qualification separately controls enablement and release claims; pending or unknown results never infer a pass. Real auth/account operations retain their separate explicit authorization requirements. The full advertised two-account matrix still gates release qualification.
 
 ## Stage 4 — Recognizable aliases and owned cleanup
 
@@ -144,7 +139,7 @@ Fixtures never invoke installed providers and contain no credentials.
 - **Removal.** Removes only explicitly selected, unmodified, owned artifacts. Modified or moved files need manual handling.
 - **Never deleted.** Provider directories, official binaries and user shell files.
 
-**Tests:** all four aliases launch the exact profile and argv. Also covered:
+**Tests:** synthetic helpers prove all four aliases select the exact profile and argv. Ordinary aliases inherit the run qualification gate; enabled real combinations need stage-3 qualification. Also covered:
 - PATH collisions, spaces and Unicode, duplicate names
 - stale or moved launcher, renamed profile, missing profile
 - interrupted install, concurrent installs
@@ -166,7 +161,7 @@ Fixtures never invoke installed providers and contain no credentials.
 
 **Tests:**
 - clean offline build after cache preparation
-- fresh-user archive install, help, profile, fake launch, alias, uninstall
+- fresh-user archive install, help, profile, alias and uninstall; ordinary run refuses unqualified combinations; launch-engine fake tests use separate nonpackaged synthetic artifacts
 - no absolute build paths or private data in archives
 - locked-source checksum verification
 - registry upgrade roundtrip and refusal to roll back an incompatible schema
@@ -211,8 +206,10 @@ Each track needs its own explicit approval and its own stage contract. Nothing i
 1. Stages renumbered 1–5 (were A–E). The P/F/G/H/I tracks are now named gated tracks and do not imply an order after stage 5.
 2. Stage 1 registry v1 holds profiles only. Provider bindings move to stage 2 (schema v2) and alias records to stage 4 (schema v3), each with read-upgrade tests. This avoids unused fields.
 3. The state directory is derived (`<root>/profiles/<id>`) instead of stored as an absolute path. The registry then contains no paths, so non-UTF-8 roots work and two sources of truth cannot disagree. Existing-directory adoption stays deferred.
-4. Windows ownership and safe ACL verification for the entire managed metadata tree moves from stage 1 to a stage 2 entry criterion. Stage 1 writes no credentials, and stage 2 is the first stage that lets a provider write into a profile directory. Stage 1 on Windows still rejects reparse points.
+4. Windows ownership and safe ACL verification for the entire managed metadata tree moves from stage 1 to a stage 2 entry criterion. Stage 1 writes no credentials; stage 2 tests synthetic writes only, and real provider writes remain gated by stage-3 qualification. Stage 1 on Windows still rejects reparse points.
 5. Baseline 3-OS CI (fmt, clippy, tests, MSRV) moves into stage 1. Stage 2's gate already required native Linux/macOS/Windows tests, which contradicted CI arriving in stage 5. The user approves native three-OS CI on standard public-repository runners with read-only permissions. This is no longer an approval blocker. No paid runners, secrets, artifact uploads, caches or custom images; broader spending remains separately gated.
 6. The stage 1 ownership split follows the lead's two-developer requirement: registry/core and CLI/help/fixtures. Independent testing is a lead-arranged role, not a developer branch. The stage 1 README update belongs to the CLI slice and is verified at the final head.
 7. `forget` "confirms metadata effect" is made concrete: `--yes` is required, and without it the command exits 2 and prints what would happen.
 8. Stage 1 freezes only the commands it implements plus the cross-stage conventions. Later commands are frozen by their own stage contracts.
+9. Stage 2 delivers a native launch engine and binding metadata, while ordinary run remains disabled before process creation until stage-3 provider/version/interface/backend/OS qualification. Synthetic-only artifacts are not ordinary build/install/release artifacts. Engineering completion and enabled/released capability are distinct.
+10. Existing Windows metadata/provider trees are verified, never automatically repaired. New objects are protected at creation under verified trusted ancestry. Unsafe/unverifiable existing trees refuse, preserving the whole-managed-set entry gate without propagating ACL changes into provider contents. Stage-2 policy tests are provisional; vendor grammar admission belongs to stage 3.
