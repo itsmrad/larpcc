@@ -445,22 +445,29 @@ fn r14_threads() {
 }
 #[test]
 fn r15_busy() {
-    let (_t, r) = fixture();
+    let (t, r) = fixture();
     initialize(&r);
     let f = paths::options()
         .open(r.root().join("registry.lock"))
         .unwrap();
+    // Windows byte-range locks prevent snapshot() from reading registry.lock while held.
+    let before = snapshot(t.path());
+    let registry_before = bytes(&r);
     f.lock().unwrap();
-    let before = snapshot(r.root());
+    let timeout = Duration::from_millis(200);
+    let started = std::time::Instant::now();
     assert!(matches!(
         store::mutate(
             r.root(),
             Mutation::Add(name("b"), Provider::Claude),
-            Duration::from_millis(200)
+            timeout
         ),
         Err(Error::Busy { .. })
     ));
-    assert_eq!(before, snapshot(r.root()));
+    assert!(started.elapsed() >= timeout);
+    assert_eq!(registry_before, bytes(&r));
+    drop(f);
+    assert_eq!(before, snapshot(t.path()));
 }
 #[test]
 fn r16_roots() {
