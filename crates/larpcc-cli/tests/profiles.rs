@@ -335,7 +335,7 @@ fn default_root_resolution() {
         .path()
         .join("home/Library/Application Support/larpcc");
     #[cfg(windows)]
-    let root = f.temp.path().join("local/larpcc");
+    let root = f.temp.path().join("local").join("larpcc");
     fs::create_dir_all(root.parent().unwrap()).unwrap();
     let out = f
         .command(&["cc", "profile", "add", "a", "--provider", "codex"])
@@ -349,10 +349,15 @@ fn default_root_resolution() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).contains(&format!(
-        "State dir: {}\n",
-        root.join("profiles/1").display()
-    )));
+    let state_dir = root.join("profiles").join("1");
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "Name:      a\nProvider:  codex\nID:        1\nState dir: {}\nState:     ok\n",
+            state_dir.display()
+        )
+    );
+    assert!(state_dir.is_dir());
     assert!(!f.root.exists());
 }
 #[cfg(unix)]
