@@ -80,14 +80,7 @@ impl Error {
             }
             Self::Unsafe { path, reason } if reason.starts_with("has mode ") => format!(
                 "run: chmod {} {}",
-                if matches!(
-                    path.file_name().and_then(|s| s.to_str()),
-                    Some("registry.json" | "registry.lock")
-                ) {
-                    "600"
-                } else {
-                    "700"
-                },
+                if !path.is_dir() { "600" } else { "700" },
                 path.display()
             ),
             Self::Unsafe { .. } => "fix or move it, or set LARPCC_HOME to another directory".into(),
@@ -101,8 +94,11 @@ impl Error {
             Self::TooLarge => "forget unused profiles or use a separate data root".into(),
             Self::Io {
                 action: "create directory",
+                source,
                 ..
-            } => "choose a data root under an existing parent directory".into(),
+            } if source.kind() == io::ErrorKind::NotFound => {
+                "choose a data root under an existing parent directory".into()
+            }
             Self::Io {
                 action: "sync",
                 source,
