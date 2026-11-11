@@ -7,7 +7,7 @@ Status: **frozen contract**. Developers start only after this document is merged
 **In scope:**
 - A metadata-only profile registry: data root, `registry.json` v1, a lock, atomic replace.
 - `larp cc profile add | list | show | rename | forget`, plus `--help` and `--version`.
-- An empty, private state directory created for each profile.
+- An empty state directory created for each profile (Unix owner/mode checked; Windows privacy is not verified in stage 1).
 - Baseline CI on native Linux, macOS and Windows runners, with an MSRV build.
 - A README that describes the integrated behavior.
 
@@ -50,7 +50,7 @@ larp cc profile forget <NAME> [--yes]
 - Options may appear before or after positionals (clap default). No other global flags.
 - `NAME`/`NEW_NAME` parse via `ProfileName::from_str`.
 - `PROVIDER` accepts exactly `claude` or `codex`. Help shows `[possible values: claude, codex]`.
-- Unknown subcommands exit 2. That includes `run`, `login`, `status`, `logout`, `alias`. Help must not mention unimplemented commands.
+- Unknown subcommands exit 2. That includes `run`, `login`, `status`, `logout`, `alias`. Help must not list unimplemented command entries; explanatory prose such as "no login" is allowed.
 
 ### 2.2 Help strings (frozen text; clap renders layout)
 
@@ -119,7 +119,7 @@ State directory kept: <dir>
 
 **Operational errors** (exit 1): the format is `error: <message>`, then zero or more `hint: <text>` lines. Stdout stays empty. Messages and hints come from `Error`'s `Display` and `hint()` (§7).
 
-**Usage errors** (exit 2) are clap's errors. They print `error: …`, a usage line and the "For more information, try '--help'." line. Invalid name and provider values render as clap's `error: invalid value '<input>' for '<NAME>': <NameError message>`.
+**Usage errors** (exit 2) normally use clap's `error: …`, usage and help guidance. Missing subcommands for bare `larp`, `larp cc` and `larp cc profile` instead print help to stderr, with no `error:` prefix, and exit 2. Invalid names render a clap invalid-value diagnostic for `<NAME>` (or `<NEW_NAME>`) containing the `NameError` message. Invalid providers use clap's enum/possible-values diagnostic for `--provider <PROVIDER>`, naming `claude` and `codex`; they never use `NameError`.
 
 **`forget` without `--yes`** is a usage error. If the profile does not exist, the result is `NotFound` with exit 1. If it exists, stderr is:
 ```text
@@ -130,7 +130,7 @@ Exit 2, and nothing is written.
 
 ### 2.5 Exit codes and robustness
 
-- **Exit codes.** 0 = success, or help/version. 1 = any `Error`, or a failed stdout write. 2 = a usage error.
+- **Exit codes.** 0 = success, or explicitly requested help/version. Missing-subcommand help exits 2. 1 = any `Error`, or a failed stdout write. 2 = a usage error.
 - **No panics.** No input or IO failure causes a panic. Non-test code has no `unwrap()`/`expect()` on IO, parsing or environment values.
 - **Stdout failures.** A stdout write failure, including `BrokenPipe`, exits 1. A `BrokenPipe` prints nothing. Any other write failure prints `error: cannot write output: <io error>`.
 
@@ -146,6 +146,7 @@ Exit 2, and nothing is written.
 **Validation of the resolved root (from any source, and from `Registry::at`):**
 - It must be absolute and contain no `..` component; otherwise `Error::InvalidRoot`.
 - The root is not canonicalized. Ancestors may be symlinks (for example macOS `/var`). Only the root and everything below it are checked (§4.3).
+- Creating a missing root requires its immediate parent to exist and be a directory. Never create missing ancestors; report `Io` (`create directory`) with a hint to choose a root under an existing parent. This also applies to default roots: Larp does not create missing OS application-data ancestors.
 - Root paths may contain spaces and Unicode, and on Unix arbitrary non-UTF-8 bytes. This works because no path is ever serialized.
 
 ## 4. On-disk format
@@ -185,10 +186,10 @@ Exit 2, and nothing is written.
 }
 ```
 
-**Writing:** `serde_json::to_writer_pretty` (2-space indentation), field order as shown, a trailing `\n`, profiles sorted by ascending `id`.
+**Writing:** serialize into memory with `serde_json::to_writer_pretty` (2-space indentation), field order as shown, a trailing `\n`, profiles sorted by ascending `id`. The complete prospective bytes, including the newline, must be at most 1 MiB (1,048,576 bytes); otherwise return `TooLarge` before creating any profile directory or touching the temp/registry files. This includes valid compact input that expands when pretty-printed.
 
 **Reading** fails as `Corrupt` unless every rule holds:
-1. The file is a regular file of at most 1 MiB.
+1. The file is a regular file of at most 1 MiB. Cap the actual read at 1 MiB + 1 byte (for example `Read::take`); reject if the extra byte is present. Metadata size may reject early but is never the sole bound, and no unbounded read/allocation is allowed.
 2. It is valid JSON with a top-level object. There are no trailing bytes and no BOM.
 3. `version` is present and is an unsigned integer. A value greater than 1 is `NewerSchema` (checked **before** strict parsing, so newer files with new fields report `NewerSchema`). A value of 0 is `Corrupt`.
 4. Strict parsing (`deny_unknown_fields`, duplicate keys rejected) finds `revision: u64`, `next_id: u64 >= 1` and a `profiles` array.
@@ -198,7 +199,7 @@ Exit 2, and nothing is written.
 
 **Defaults and counters:**
 - A missing file means the empty registry `{version 1, revision 0, next_id 1, profiles []}`, held in memory only.
-- `revision` increases by exactly 1 on every successful mutation.
+- `revision` increases by exactly 1 on every successful mutation; it is a diagnostic/test count, not concurrency control (the lock serializes writes).
 - `next_id` never decreases.
 - Counter overflow is `Error::Exhausted`.
 
@@ -220,7 +221,7 @@ Read operations check the root, `registry.json` and `profiles/` if they exist. T
 **Windows:**
 - `symlink_metadata().file_type().is_symlink()` rejects symlinks and junctions (`std` treats name-surrogate reparse points as symlinks).
 - Directory and file types are checked.
-- Owner, mode and ACL checks are deferred to stage 2. That is documented, not silent.
+- Owner, mode and ACL checks are deferred to stage 2. Stage 1 creates metadata under inherited ACLs, including alternate roots, and does not claim verified private Windows directories. Before any Windows provider launch/auth, stage 2 must verify ownership and safe ACLs on the entire managed tree (§8 and master plan), not just profile homes.
 
 ### 4.4 Per-profile directory status
 
@@ -245,42 +246,43 @@ Readers always see a complete old or new file, because writers replace it atomic
 
 ### 5.2 Write transaction (`add`, `rename`, `forget`)
 
-1. **Root.** Create it if missing, using `DirBuilder::recursive(true)` with mode 0o700 on Unix. Then check it, including the foreign-directory rule.
+1. **Root.** If missing, require an existing directory parent and create only the root (`DirBuilder::create`, non-recursive, mode 0o700 on Unix); never create ancestors. Then check it, including the foreign-directory rule. On Unix, sync the existing parent after root creation to persist that entry (only the selected root entry is created in that parent; no unrelated entry is changed).
 2. **Lock.** If `registry.lock` is missing, create it with `create_new` and mode 0o600 (`AlreadyExists` is fine). Check it (§4.3), then open it read/write without truncating. Acquire the lock with `File::try_lock` in a loop: sleep 25 ms between tries, deadline 10 s, then `Busy`.
-3. **Load** the registry under the lock (§5.1 steps 1–3). Any error aborts before a write.
-4. **Validate the operation.**
+3. **Load** the registry under the lock (§5.1 steps 1–3). Any error aborts before changing registry bytes or profile directories.
+4. **Validate and preflight in memory.**
    - `add`: if the name exists, `NameTaken`.
    - `rename`: the source must exist (`NotFound`), and the target must not (`NameTaken`; this includes renaming to the same name).
    - `forget`: the name must exist (`NotFound`).
-5. **`add` only — create the directory.**
-   - Ensure `profiles/` exists: `create_dir` with mode 0o700 if missing, then check it.
-   - Start with `id = next_id` and try `DirBuilder::new().mode(0o700).create(profiles/<id>)`, which is not recursive.
-   - On `AlreadyExists`, the directory is an orphan: increment `id` and retry, up to 1000 attempts; after that, `Unsafe{profiles, "contains too many unregistered directories"}`. Orphans are never reused, opened or deleted.
-   - Set `next_id = id + 1`.
-6. **Mutate** in memory and set `revision += 1`, using checked arithmetic.
-7. **Write the temp file.** Remove a stale `registry.json.tmp`; `remove_file` removes a symlink itself and never its target, and `NotFound` is fine. Then `create_new` with mode 0o600, `write_all` the serialized bytes, `sync_all`, and close.
-8. **Replace.** `rename(registry.json.tmp, registry.json)`. On Windows, retry `PermissionDenied` up to 10 times with 100 ms sleeps, for a reader holding the file open.
-9. **Sync the directory.** On Unix, open the root directory and `sync_all` it. Windows has no equivalent; this is documented.
-10. **Release** the lock (drop the file) and return the entry.
+   - Check `revision.checked_add(1)` before any profile mkdir. For `add`, check `id.checked_add(1)` for every candidate, starting at `next_id`, before attempting its mkdir; overflow is `Exhausted` even if that candidate is an orphan. Inspect candidate existence without opening or changing it; skip existing paths up to 1000 candidates, then `Unsafe{profiles, "contains too many unregistered directories"}`. Check existing `profiles/` safety before inspecting candidates.
+   - Build the prospective registry with the selected ID, checked successor and revision. Serialize and enforce §4.2's byte limit now, before creating `profiles/`, a profile directory, or touching temp/registry files. For rename/forget, do the same preflight without allocating an ID.
+5. **`add` only — create and persist the directory.**
+   - Ensure `profiles/` exists: non-recursive `create_dir` with mode 0o700 if missing, then check it. On Unix, sync root after creating `profiles/` to persist its parent entry.
+   - Create `profiles/<id>` non-recursively with mode 0o700. On `AlreadyExists`, leave that orphan untouched and return to step 4's candidate selection, capacity check and serialization for the next candidate (within the same 1000-candidate bound). Never reuse, open or delete an orphan.
+   - On Unix, sync `profiles/` after the successful mkdir and **before** writing/replacing the registry. A sync failure aborts before registry replacement.
+6. **Write the temp file.** Remove a stale `registry.json.tmp`; `remove_file` removes a symlink itself and never its target, and `NotFound` is fine. Then `create_new` with mode 0o600, `write_all` the preflighted bytes, `sync_all`, and close.
+7. **Replace.** `rename(registry.json.tmp, registry.json)`. On Windows, retry `PermissionDenied` up to 10 times with 100 ms sleeps, for a reader holding the file open.
+8. **Sync the directory.** On Unix, open the root directory and `sync_all` it. Windows has no supported equivalent in this contract; no power-loss durability is promised there.
+9. **Release** the lock (drop the file) and return the entry.
 
-**Rollback:**
-- If step 7 or 8 fails during `add`: best-effort `remove_dir(profiles/<id>)` (non-recursive; that directory was created empty in this same operation), then best-effort removal of the temp file. Return the original error.
-- After step 8 succeeds, nothing is rolled back. If step 9 fails, return `Io` with the hint `the change was applied but may not be durable; run 'larp cc profile list'`.
+**Failure invariants and rollback:**
+- First-write failures may leave root/lock scaffolding from steps 1–2, but no registry or profile directory is created by a failed preflight. With an already initialized root and lock, validation, size and counter failures leave the complete managed tree unchanged (including stale temp bytes). Missing-parent failure creates nothing, inside or outside root.
+- Before step 7 succeeds, any failure after this operation creates `profiles/<id>` triggers best-effort `remove_dir` of that exact empty directory (non-recursive), plus best-effort removal of a temp file created by this operation. Return the original error. A newly created `profiles/` parent may remain; never remove pre-existing paths or orphans.
+- After step 7 succeeds, nothing is rolled back. If step 8 fails, return `Io` with the hint `the change was applied but may not be durable; run 'larp cc profile list'`.
 
 `get`, `list` and the write operations all compute `DirStatus` against every profile, so identity duplicates are detected.
 
 ### 5.3 Crash and interruption states
 
-There is no signal handling. Ctrl-C or SIGKILL counts as a crash.
+There is no signal handling. Ctrl-C or SIGKILL counts as a **process crash**, not a power-loss test.
 
-| Interrupted after | Disk state | Next operation |
+| Process interrupted after | Disk state | Next operation |
 |---|---|---|
 | lock creation | empty `registry.lock` | normal; the OS releases the lock when the process dies |
 | step 5 | orphan empty `profiles/<id>` | `add` skips that ID; the orphan is never touched |
-| part of step 7 | partial `registry.json.tmp` | readers ignore it; the next writer removes it |
-| step 8, before step 9 | new registry; power loss may revert to old | both are valid |
+| part of step 6 | partial `registry.json.tmp` | readers ignore it; the next writer removes it |
+| step 7, before step 8 | complete new registry | readers use it; process death alone does not undo replacement |
 
-**Invariant:** every record's directory existed when its record was committed.
+**Invariant:** every record's directory existed when its record was committed. On supported local Unix filesystems that honor file/directory sync and atomic rename, step 5 persists both the profile entry and any new `profiles/` entry before registry replacement; step 8 persists the replacement. A power loss before the final sync may retain the old or new registry; any retained new record has its directory persisted first. Existing missing/unsafe homes remain informational (§4.4). Kill tests prove process-crash recovery only; they do not prove hardware/filesystem power-loss behavior. Windows supports process-crash recovery here, but no power-loss durability guarantee.
 
 ### 5.4 Concurrency guarantees and limits
 
@@ -296,9 +298,9 @@ There is no signal handling. Ctrl-C or SIGKILL counts as a crash.
 - A process running as the same user can swap files between Larp's checks and its use of them (TOCTOU). Larp detects static unsafe states, not an active same-user attacker.
 - On WSL, roots under `/mnt/c` usually fail mode checks; use a Linux path.
 
-## 6. Domain types and Rust interface (frozen)
+## 6. Domain types and Rust interface (CLI surface frozen)
 
-The crate stays bin-only (`larpcc-cli`, binary `larp`). Module tree:
+The crate stays bin-only (`larpcc-cli`, binary `larp`). Suggested internal module tree (only the seed file set and CLI-consumed interface below are frozen):
 
 ```text
 src/main.rs            mod cli; mod registry; fn main() -> ExitCode { cli::run() }
@@ -375,7 +377,7 @@ impl Registry {
 - Uppercase is rejected, not folded, so case-fold collisions cannot happen.
 - Names never become paths; IDs do. Path traversal through names is impossible by construction.
 
-**Implementation latitude:** internal items, such as a lock timeout parameter or an environment-lookup closure for testing root resolution, are registry-private and not frozen. Tests never mutate the process environment (`set_var` is `unsafe` in edition 2024 and races).
+**Implementation latitude:** the callable registry API, domain semantics and CLI-used fields are frozen; internal file layout and derives may change without changing those semantics. Parsing/storage helpers remain private. Internal items, such as a lock timeout parameter or an environment-lookup closure for testing root resolution, are registry-private and not frozen. Tests never mutate the process environment (`set_var` is `unsafe` in edition 2024 and races).
 
 ## 7. Error catalog (frozen)
 
@@ -393,8 +395,9 @@ impl Registry {
 | `NotFound { name }` | `no profile named <name>` | `run 'larp cc profile list'` |
 | `NameTaken { name }` | `a profile named <name> already exists` | none |
 | `Busy { path }` | `registry is locked by another Larp CC process (<p>)` | `retry when the other command finishes` |
+| `TooLarge` | `prospective registry exceeds 1 MiB` | `forget unused profiles or use a separate data root` |
 | `Exhausted` | `registry counters are exhausted` | none |
-| `Io { action, path, source }` | `cannot <action> <p>: <source>` | none, except §5.2 step 9 |
+| `Io { action, path, source }` | `cannot <action> <p>: <source>` | none, except §3 missing-parent guidance and §5.2 step 8 |
 
 - **`Io` actions:** `create directory`, `inspect`, `open`, `read`, `write`, `lock`, `rename`, `sync`, `remove`.
 - **`Corrupt` reasons** are human-readable and not frozen. Tests assert the message prefix and the exit code.
@@ -416,13 +419,13 @@ impl Registry {
 | Concern | Linux / macOS (`cfg(unix)`) | Windows (`cfg(windows)`) |
 |---|---|---|
 | Default root | XDG / `~/.local/share` (Linux); `~/Library/Application Support` (macOS) | `%LOCALAPPDATA%\larpcc` (not roaming) |
-| Private creation | modes 0700/0600 via `DirBuilderExt`/`OpenOptionsExt` | inherited ACL of `%LOCALAPPDATA%`; explicit ACL is a stage 2 entry criterion |
+| Creation | modes 0700/0600 via `DirBuilderExt`/`OpenOptionsExt` | inherited ACL of the selected root/parent; privacy unverified until stage 2 checks the entire managed tree |
 | Verification | owner (`libc::geteuid`), mode, symlink, type, `(dev, ino)` duplicates | reparse point (symlink/junction) and type only |
 | Lock | `File::lock`/`try_lock` (`flock`) | `File::lock`/`try_lock` (`LockFileEx`) |
 | Replace | `rename` (atomic on one filesystem) plus directory `fsync` | `rename` (`MoveFileExW` replace) with `PermissionDenied` retry; no directory sync |
 | Paths | non-UTF-8 supported (Linux tests; macOS filesystems reject it) | UTF-16 via `OsString`; Unicode supported |
 
-Only `cfg(unix)` and `cfg(windows)` branches are allowed, with no other OS-specific code. Help-fixture comparisons normalize CRLF. Windows code is verified only by Windows CI (§9.2). There is no local Windows target.
+Share the core locking, permissions and replacement code through `cfg(unix)` / `cfg(windows)`. Permit `cfg(target_os = "macos")` for default-root selection, and appropriate OS-specific test gates (such as Linux non-UTF-8 and `/dev/full` tests). Before stage 2 Windows launch/auth, require ownership and safe ACL verification/hardening for root, all managed parents within root, registry, lock, transient metadata and profile homes; refuse unsafe or unverifiable roots. Synthetic broad-ACL fixtures must cover each path class, including alternate roots, and prove refusal before spawn. Stage 1 makes no private-directory claim on Windows. Help-fixture comparisons normalize CRLF. Windows code is verified only by Windows CI (§9.2). There is no local Windows target.
 
 ## 9. Dependencies and toolchain
 
@@ -455,6 +458,8 @@ The scratch probe compiled this set offline with Rust 1.99.1 and 1.89, and resol
 
 ### 9.2 CI (owned by the CLI slice)
 
+User-approved scope: native three-OS CI on standard public-repository runners, read-only permissions, no paid runners, artifact uploads, caches or custom images. This approval is not a blocker; no broader spending is authorized.
+
 `.github/workflows/ci.yml` runs on `pull_request` and on `push` to `main`, with `permissions: contents: read` and no secrets.
 - **Runners:** standard GitHub-hosted runners only (`ubuntu-latest`, `macos-latest`, `windows-latest`). No paid runners.
 - **Toolchain:** the runner's preinstalled `rustup`; no third-party toolchain action.
@@ -468,12 +473,12 @@ The scratch probe compiled this set offline with Rust 1.99.1 and 1.89, and resol
 
 The seed commit is titled `Add stage 1 contract seed`. Exactly these files:
 - `Cargo.toml` (adds `rust-version`), `crates/larpcc-cli/Cargo.toml` (dependencies), `Cargo.lock`
-- `src/main.rs` in its final shape: `mod cli; #[allow(dead_code)] mod registry; fn main() -> ExitCode { cli::run() }`
+- `src/main.rs` with the final entry point and temporary seed lint allowances: `mod cli; #[allow(dead_code, unused_imports)] mod registry; fn main() -> ExitCode { cli::run() }`
 - `src/cli/mod.rs` with `pub fn run() -> ExitCode`. It prints the current placeholder line and returns success, so behavior and the README stay true.
 - `src/registry/model.rs` and `src/registry/error.rs`, complete per §6 and §7
-- `src/registry/mod.rs` with the §6 signatures. Each body is `{ let _ = (<every parameter>); unimplemented!("stage 1 registry") }`. The `let _` keeps unused-parameter warnings from failing `-D warnings`; this was verified in a scratch crate. `root()` is implemented for real.
+- `src/registry/mod.rs` with the §6 signatures. Each body is `{ let _ = (<every parameter>); unimplemented!("stage 1 registry") }`. The `let _` keeps unused-parameter warnings from failing `-D warnings`; this was verified in a scratch crate. `root()` is implemented for real. The seed-only `unused_imports` allowance covers currently unused public reexports (including `DirStatus`, `Profile` and `ProfileId`); `dead_code` alone does not cover these.
 
-**Requirements:** the seed must pass fmt, clippy `-D warnings` and build with `--locked --offline`. Push it immediately and report the seed SHA `S` to the lead.
+**Requirements:** run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`, `cargo build --workspace --locked --offline` and `cargo +1.89 build --workspace --locked --offline` on the actual seed, with no warnings. Push and report SHA `S` plus command evidence. Scratch probes are not seed validation. The lead must verify this evidence before creating/starting the CLI branch from `S`; failed or missing evidence blocks CLI work.
 
 ### 10.2 Slices
 
@@ -482,7 +487,7 @@ The seed commit is titled `Add stage 1 contract seed`. Exactly these files:
 | Registry/core | `stage/1-registry` (`M0`) | `src/registry/**`, the manifests and `Cargo.lock` (changes only via §10.3) |
 | CLI/help/fixtures | `stage/1-cli` (`S`) | `src/main.rs`, `src/cli/**`, `tests/**` (incl. `tests/common/`, `tests/fixtures/`), `.github/workflows/ci.yml`, `README.md` |
 
-- **CLI developer:** removes `#[allow(dead_code)]` when wiring, and updates the README last, to describe exactly the integrated behavior: commands, data root, limits from §5.4, Windows ACL deferral.
+- **CLI developer:** removes both seed-only `dead_code` and `unused_imports` allowances when wiring (trim unused reexports if necessary), and updates the README last, to describe exactly the integrated behavior: commands, data root, limits from §5.4, Windows ACL deferral.
 - **Registry developer:** never edits CLI-owned files.
 - **Neither** edits `plan.md`, this document, `AGENTS.md` or `CLAUDE.md`, except as §10.3 allows.
 
@@ -500,7 +505,7 @@ No silent drift: reviewers compare the final code with this document. Unfrozen d
 ### 10.4 Integration sequence
 
 1. `M0`: this planning PR is merged. The lead starts the registry thread.
-2. The seed `S` is pushed. The lead starts the CLI thread on `stage/1-cli` from `S`.
+2. The seed `S` is pushed and its actual warning-free §10.1 validation is verified. Only then the lead starts the CLI thread on `stage/1-cli` from `S`.
 3. Both slices work in parallel. On the CLI branch, storage-dependent end-to-end tests can fail until it is rebased onto a registry head. That is the only allowed red, and only before integration.
 4. The registry slice is done when it is green (fmt, clippy, unit tests, no stubs). It opens draft PR-R: `stage/1-registry` → `main`.
 5. The CLI developer rebases `stage/1-cli` onto PR-R's head and opens draft PR-C: `stage/1-cli` → `stage/1-registry`. PR-C's head `H` is the integrated head and the subject of all final evidence.
@@ -510,7 +515,7 @@ No silent drift: reviewers compare the final code with this document. Unfrozen d
 ## 11. Implementation notes (non-negotiable)
 
 - No `unsafe` except the single `geteuid` call.
-- At final head, `src/` contains no `unimplemented!`, `todo!`, `dbg!`, `allow(dead_code)` or `Command`.
+- At final head, `src/` contains no `unimplemented!`, `todo!`, `dbg!`, seed-only `allow(dead_code)` / `allow(unused_imports)` (including combined attributes) or `Command`.
 - The `State` column comes from `DirStatus`. The CLI derives nothing from the filesystem; all filesystem logic lives in `registry`.
 - One registry load per command. `list` and `show` do O(n) work with n ≤ (1 MiB of JSON). Sort with `sort_by` on name.
 - `show` and `forget` without `--yes` use `get`.
@@ -521,7 +526,8 @@ All tests are hermetic:
 - They use `tempfile` roots and an explicit `LARPCC_HOME` (or `Registry::at`).
 - They never touch the real home or installed providers.
 - They make no network calls.
-- They skip permission-denial assertions when `geteuid() == 0`.
+- Unix owner/mode and filesystem-identity assertions are gated with `cfg(unix)`; common behavior runs on all three OSes. Linux-only fixtures use `cfg(target_os = "linux")`.
+- They skip Unix permission-denial assertions when `geteuid() == 0`.
 
 ### 12.1 Registry unit tests (`src/registry/tests.rs`, registry slice)
 
@@ -544,9 +550,12 @@ All tests are hermetic:
 | R15 | The test holds `registry.lock`; `add` with a 200 ms timeout gives `Busy`; the registry is unchanged |
 | R16 | Root resolution through an injected environment: precedence, empty values ignored, relative `XDG_DATA_HOME` ignored, relative or `..` `LARPCC_HOME` gives `InvalidRoot`, missing `HOME` gives `NoDataDir` |
 | R17 | Linux: a non-UTF-8 root works, and the registry bytes contain no path |
-| R18 | `next_id = u64::MAX` or `revision = u64::MAX`: `add` gives `Exhausted` and nothing changes |
+| R18 | Initialized root/lock: test `next_id = u64::MAX`, `revision = u64::MAX` with no candidate directory, and `next_id = u64::MAX - 1` with that candidate occupied by an orphan. `add` gives `Exhausted`; full tree and registry bytes unchanged. Max revision also blocks rename/forget unchanged |
 | R19 | Unix: after one successful `add` (so the lock and `profiles/` exist), chmod the root to 0500, which still passes the check. A second `add` creates `profiles/2`, then fails creating the temp file and returns `Io`. `profiles/2` is gone (rollback) and the registry bytes are unchanged |
 | R20 | Display and `hint()` strings for every `Error`/`NameError` variant equal §7 |
+| R21 | Near-limit readable registry: add and longer valid rename each cross 1 MiB; separately use compact valid input under the cap whose prospective pretty output exceeds it. Each returns `TooLarge`, with existing tree/registry/temp unchanged and no new home. Also test exactly-limit output accepted, limit + 1 rejected; bounded-reader helper rejects a stream emitting limit + 1 bytes despite a smaller metadata hint |
+| R22 | Root `<temp>/missing-parent/root`: `add` returns `Io` with existing-parent guidance, neither missing-parent nor root exists afterwards; outside-root snapshot unchanged |
+| R23 | Phase-controlled private test failures at step 5 parent sync, step 5 profile sync, temp write/sync and replace: no new registry record, rollback of this operation's home only, orphans unchanged. Record Unix sync order: new root → parent sync; new profiles parent → root sync; new profile → profiles sync; registry temp sync → replace → root sync. No production hooks/framework |
 
 ### 12.2 End-to-end tests (`tests/`, CLI slice)
 
@@ -554,20 +563,20 @@ The helper `tests/common/mod.rs` runs `env!("CARGO_BIN_EXE_larp")`. It sets a fr
 
 | ID | Case |
 |---|---|
-| C01 | Help fixtures for `larp`, `cc`, `profile` and each of the 5 subcommands with `--help`: exit 0, exact stdout (CRLF normalized), no `run/login/status/logout/alias` text |
+| C01 | Help fixtures for `larp`, `cc`, `profile` and each of the 5 subcommands with `--help`: exit 0, exact stdout (CRLF normalized), no unimplemented `run/login/status/logout/alias` command entries; explanatory "no login" prose is allowed |
 | C02 | `larp --version` prints `larp 0.1.0\n`, exit 0. `-V` gives the same |
-| C03 | Exit 2, stdout empty, stderr starts `error:`, for: `larp`; `larp cc`; `larp cc profile`; `larp cc run x`; `larp cc login x`; `larp cc alias`; `add`; `add x`; `add x --provider gpt`; `add Bad --provider claude`; `add 'a b' …`; `add é …`; `add con …`; `show`; `rename a`; `--foo`; extra positional; `forget a` (existing) without `--yes`, whose stderr matches §2.4 and which writes nothing |
+| C03 | Exit 2, stdout empty, stderr starts `error:`, for: `larp cc run x`; `larp cc login x`; `larp cc alias`; `add`; `add x`; `add x --provider gpt`; `add Bad --provider claude`; `add 'a b' …`; `add é …`; `add con …`; `show`; `rename a`; `--foo`; extra positional; `forget a` (existing) without `--yes`, whose stderr matches §2.4 and which writes nothing. Separately, bare `larp`, `larp cc`, `larp cc profile` exit 2 with stdout empty and the corresponding help on stderr (no `error:` prefix). Name errors include `NameError`; provider errors name the provider argument and possible values, never the name template |
 | C04 | Lifecycle with exact stdout: add `work` claude, add `personal` codex, list, show, rename `work`→`job` (same ID and directory), `forget personal --yes`, list, re-add `personal` (ID 3; `profiles/2` still exists) |
 | C05 | Exit 1 with exact `error:`/`hint:` lines: show missing, rename missing, rename to a taken name, add a taken name, forget missing (with and without `--yes`) |
 | C06 | Every invalid fixture: `list` and `add` exit 1 with the prefix `error: registry`, and the file bytes are unchanged. The newer fixture gives the §7 schema message. Valid fixtures, including CRLF and reformatted JSON, list correctly |
-| C07 | Read-only commands (help, version, list, show, all C03 cases) with a non-existent `LARPCC_HOME`: the root is never created |
-| C08 | No out-of-root writes: snapshot every sentinel tree and the temp parent (paths, sizes, SHA-256, modes) before and after C04; they are identical. The root contains only the §4.1 entries |
+| C07 | Read-only commands (help, version, list, show, C03 parse/help cases; existing-profile forget confirmation is tested separately) with a non-existent `LARPCC_HOME`: the root is never created |
+| C08 | No out-of-root writes: snapshot every sentinel tree and content under the temp parent **excluding the managed-root subtree** (paths, sizes, SHA-256, modes) before and after C04; these outside-root snapshots are identical. Exclude the temp parent's own size/mtime, which can change when the root entry is created. The root contains only the §4.1 entries |
 | C09 | No provider execution (Unix): `PATH` starts with a directory whose executable `claude`/`codex` scripts create a marker file; after C04, no marker exists |
 | C10 | Multi-process: 16 concurrent distinct adds all exit 0 (16 listed, `revision 16`). 8 concurrent same-name adds give one 0 and seven 1, with one directory. 8 adds alongside a `list` loop: every `list` exits 0 |
 | C11 | The test holds the `File::lock` on `registry.lock` for 500 ms while an `add` runs; the `add` exits 0 only after the lock is released |
 | C12 | Kill recovery, 30 iterations with fixed-seed delays of 0–20 ms: spawn `add`, then `Child::kill` (SIGKILL / TerminateProcess). After each, `list` exits 0, every record's directory exists, and a following `add` succeeds. Runs on all OSes |
 | C13 | Root containing spaces and Unicode (`dir with space/ünï cödé`): the lifecycle passes and `show` prints the path. Linux: a non-UTF-8 `LARPCC_HOME` passes the lifecycle |
-| C14 | `LARPCC_HOME` relative, or with `..`, gives exit 1 with the §7 message. With `LARPCC_HOME` unset, the per-OS default under the sentinel `HOME`/`XDG_DATA_HOME`/`LOCALAPPDATA` is used, as shown by `show` |
+| C14 | `LARPCC_HOME` relative, or with `..`, gives exit 1 with the §7 message. With `LARPCC_HOME` unset, the per-OS default (precreate its immediate parent in the fixture) under the sentinel `HOME`/`XDG_DATA_HOME`/`LOCALAPPDATA` is used, as shown by `show` |
 | C15 | Unix, not root: root 0755 gives exit 1 with a `chmod 700` hint; a read-only root (0500) makes `add` exit 1 with no new files |
 | C16 | Linux: stdout set to `/dev/full` makes `list` exit 1 with no `panicked` in stderr |
 | C17 | Windows: a junction root (`cmd /C mklink /J`) gives exit 1 with `is a symbolic link or reparse point` |
@@ -577,7 +586,7 @@ The helper `tests/common/mod.rs` runs `env!("CARGO_BIN_EXE_larp")`. It sets a fr
 | ID | Check |
 |---|---|
 | T01 | Fresh clone at `H`: fmt, clippy `-D warnings`, `cargo test --locked --offline`, release build, `cargo +1.89 test`; CI green on all three OSes for exactly `H` |
-| T02 | Linux `strace -f -e trace=%file,execve,%process` over the C04 lifecycle: the only `execve` is `larp`; no file access outside `LARPCC_HOME` except loader, libc, locale, `/proc/self`, `/dev`; none under the sentinel `HOME`/`CLAUDE_CONFIG_DIR`/`CODEX_HOME` |
+| T02 | Linux `strace -f -e trace=%file,execve,%process` over the C04 lifecycle: the only `execve` is `larp`; no file access outside `LARPCC_HOME` except immediate-parent inspection/sync needed to create the root (§5.2), loader, libc, locale, `/proc/self`, `/dev`; none under the sentinel `HOME`/`CLAUDE_CONFIG_DIR`/`CODEX_HOME` |
 | T03 | Hand-edited registries (trailing comma, BOM, CRLF, tabs, reordered keys, `"version": 1.0`) behave per §4.2 |
 | T04 | Permission matrix under umask 077, 022 and 002; group-readable root is rejected; registry mode 0400 still allows reads and writes, because writes replace the file through the directory, and leaves the new file at 0600 |
 | T05 | Stress: 64 concurrent mixed add/rename/forget/list processes × 10 runs, then a 200-iteration kill loop. Invariants: valid registry, unique IDs and names, `revision` equals the successful mutations, every record has its directory, orphans untouched |
@@ -589,7 +598,7 @@ The helper `tests/common/mod.rs` runs `env!("CARGO_BIN_EXE_larp")`. It sets a fr
 ## 13. Definition of done (merge evidence)
 
 The lead merges only when **all** of the following hold for the same integrated head `H`:
-1. PR-R and PR-C are open as drafts, from distinct worktrees, with no AI or co-author trailers.
+1. PR-R and PR-C are open as drafts, from distinct worktrees, with the existing human Git identity, preserving human co-authors and omitting AI co-author/generated-by trailers.
 2. Every R and C test passes. Local Linux evidence plus CI on Linux, macOS, Windows and MSRV 1.89, all for `H`.
 3. fmt and clippy `-D warnings` are clean with `--locked`, and the §11 greps come back empty.
 4. The README describes exactly `H`'s behavior, and every README command has been verified at `H` (T07).

@@ -42,7 +42,7 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
 - **Branches.** Use `stage/<n>-<slice>` from accepted `main`. A dependent sub-branch declares its exact parent SHA. Each concurrent writer gets its own lead-allocated worktree. If isolation is unavailable, serialize the work.
 - **Pipeline.** Stage planner → developers (separate visible worktree threads) → independent testers on the integrated head → open-code-review (OCR) delegate reviewers → fix cycles → fresh final-head evidence → the **main lead merges**. OCR selects files and rules; the reviewers do the review and report per-file coverage. OCR's model pipeline is never used, and nobody reports "OCR review passed". Reviews prioritize simplification, correctness, efficient data structures, performance and security.
 - **Invalidation.** A fix invalidates the affected checks and reviews. Integration and conflict-resolution commits need their own final-head checks and review. Workers never merge and never enable auto-merge.
-- **Git identity.** Commits use the existing human Git identity. Human co-authors are kept. No AI, generated-by or co-author trailers.
+- **Git identity.** Commits use the existing human Git identity. Human co-authors are kept. Preserve human co-authors; omit AI co-author trailers and generated-by signatures.
 - **Handoffs.** Every handoff is at most 10 lines: artifact paths, branch/base/head SHA, checks, review coverage, blockers. Artifacts never contain secrets, auth transcripts or account identifiers.
 - **Separate authorization** is required for: real login/refresh/logout, live MCP OAuth, desktop app launches, destructive operations, new spending, production deployment.
 - **Code shape.** Everything starts in the existing `larpcc-cli` crate, with modules `cli`, `registry`, `provider`, `launch`, `aliases` added only by the stage that needs them. A shared library is extracted only when a second shipped consumer exists. No async runtime, empty crates, plugin framework or ACP dependency. Each new dependency is justified against `std` in its stage contract. `Cargo.lock` is committed and the MSRV is declared.
@@ -52,8 +52,8 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
 ## Cross-stage conventions (frozen in stage 1)
 
 - **Command namespace.** `larp cc …`. There is no implicit or default profile. Each stage freezes only the commands it implements. The proposed later grammar is `larp cc run NAME -- ARGS`, `larp cc login|status|logout NAME`, `larp cc alias install|list|remove`. It is a proposal until its stage contract freezes it.
-- **Exit codes.** 0 = success or help. 2 = usage error, including a missing confirmation flag. 1 = local operational failure. A launched provider's exit code is passed through (stage 2).
-- **Error format.** Errors go to stderr as `error: …`, optionally followed by `hint: …` lines.
+- **Exit codes.** 0 = success or explicitly requested help. Missing-subcommand help goes to stderr and exits 2. 2 = usage error, including a missing confirmation flag. 1 = local operational failure. A launched provider's exit code is passed through (stage 2).
+- **Error format.** Errors go to stderr as `error: …`, optionally followed by `hint: …` lines; clap missing-subcommand help is the exit-2 exception, with no `error:` prefix.
 - **Profiles.**
   - The immutable ID is a number and is never reused.
   - The name is a mutable unique label (`[a-z][a-z0-9_-]{0,31}`, Windows device names reserved).
@@ -76,7 +76,7 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
 
 **Prerequisite:** this planning PR is merged.
 
-**Deliverable:** a metadata-only profile registry plus `larp cc profile add|list|show|rename|forget` with help. It creates empty, private state directories. It reads no provider files and runs no provider. Baseline CI runs fmt, clippy and tests on native Linux, macOS and Windows runners, plus an MSRV build. Registry schema v1 holds profiles only. Provider bindings and alias records arrive with stages 2 and 4 as schema bumps with read-upgrade tests.
+**Deliverable:** a metadata-only profile registry plus `larp cc profile add|list|show|rename|forget` with help. It creates empty state directories (Unix owner/mode checked; Windows privacy unverified until stage 2). It reads no provider files and runs no provider. Baseline CI runs fmt, clippy and tests on native Linux, macOS and Windows runners, plus an MSRV build. Registry schema v1 holds profiles only. Provider bindings and alias records arrive with stages 2 and 4 as schema bumps with read-upgrade tests.
 
 **Tests:** CRUD and restart stability; rename stability; malformed and newer-schema files left untouched; permissions; symlink/junction rejection; concurrent multi-process mutations; kill-during-write recovery; path traversal; Unicode and spaces; no writes outside the data root; no provider execution.
 
@@ -95,7 +95,7 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
 - **Support scope.** Only fresh managed profiles are supported. No credential-store inspection. Version diagnostics use documented version interfaces and never make model requests.
 - **Unix.** `exec` with no resident launcher; exec errors keep useful diagnostics.
 - **Windows.** Inherited console and std handles; waits for the child without building shell strings. Propagates exit codes, including unsigned native values. Handles Ctrl-C/Break once. Defines parent-close behavior. No process-tree killing without a tested policy.
-- **Entry criterion carried from stage 1:** the profile directory gets owner-only ACL creation and verification on Windows before any provider can write into it.
+- **Entry criterion carried from stage 1:** before any Windows provider launch or auth operation, verify ownership and safe ACLs (harden where safe, otherwise refuse) across the entire managed metadata tree: root, all parents within root, registry, lock, transient metadata and every profile home. Refuse unsafe or unverifiable roots, including alternate `LARPCC_HOME` roots; securing only the leaf homes is insufficient. Stage 1 makes no verified-private-directory claim on Windows. Synthetic broad-ACL fixtures for every path class must prove refusal before provider spawn.
 
 **Tests:** a fake provider asserts:
 - exact argv (spaces, quotes, metacharacters, empty arguments, Unicode)
@@ -211,8 +211,8 @@ Each track needs its own explicit approval and its own stage contract. Nothing i
 1. Stages renumbered 1–5 (were A–E). The P/F/G/H/I tracks are now named gated tracks and do not imply an order after stage 5.
 2. Stage 1 registry v1 holds profiles only. Provider bindings move to stage 2 (schema v2) and alias records to stage 4 (schema v3), each with read-upgrade tests. This avoids unused fields.
 3. The state directory is derived (`<root>/profiles/<id>`) instead of stored as an absolute path. The registry then contains no paths, so non-UTF-8 roots work and two sources of truth cannot disagree. Existing-directory adoption stays deferred.
-4. Windows owner-only ACL verification moves from stage 1 to a stage 2 entry criterion. Stage 1 writes no credentials, and stage 2 is the first stage that lets a provider write into a profile directory. Stage 1 on Windows still rejects reparse points.
-5. Baseline 3-OS CI (fmt, clippy, tests, MSRV) moves into stage 1. Stage 2's gate already required native Linux/macOS/Windows tests, which contradicted CI arriving in stage 5. The repository is public, so standard GitHub-hosted runners are free. No paid runners and no secrets.
+4. Windows ownership and safe ACL verification for the entire managed metadata tree moves from stage 1 to a stage 2 entry criterion. Stage 1 writes no credentials, and stage 2 is the first stage that lets a provider write into a profile directory. Stage 1 on Windows still rejects reparse points.
+5. Baseline 3-OS CI (fmt, clippy, tests, MSRV) moves into stage 1. Stage 2's gate already required native Linux/macOS/Windows tests, which contradicted CI arriving in stage 5. The user approves native three-OS CI on standard public-repository runners with read-only permissions. This is no longer an approval blocker. No paid runners, secrets, artifact uploads, caches or custom images; broader spending remains separately gated.
 6. The stage 1 ownership split follows the lead's two-developer requirement: registry/core and CLI/help/fixtures. Independent testing is a lead-arranged role, not a developer branch. The stage 1 README update belongs to the CLI slice and is verified at the final head.
 7. `forget` "confirms metadata effect" is made concrete: `--yes` is required, and without it the command exits 2 and prints what would happen.
 8. Stage 1 freezes only the commands it implements plus the cross-stage conventions. Later commands are frozen by their own stage contracts.
