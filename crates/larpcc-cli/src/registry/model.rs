@@ -36,6 +36,9 @@ impl FromStr for Provider {
 #[serde(transparent)]
 pub struct ProfileId(u64);
 impl ProfileId {
+    pub(super) fn new(value: u64) -> Self {
+        Self(value)
+    }
     pub fn get(self) -> u64 {
         self.0
     }
@@ -88,7 +91,8 @@ impl<'de> Deserialize<'de> for ProfileName {
         Self::parse(&String::deserialize(d)?).map_err(serde::de::Error::custom)
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     pub id: ProfileId,
     pub name: ProfileName,
