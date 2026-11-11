@@ -188,10 +188,11 @@ Every new bind, provider-list row, and synthetic run validates again in this ord
    managed objects remains euid only. Windows executable/ancestor owners may be user, SYSTEM,
    Administrators or well-known TrustedInstaller service SID
    (`S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464`); this is a declared OS trust
-   model, not protection from those principals. Allow ACEs granting any
-   write/delete/owner/DACL/generic-write/generic-all or directory child-creation/delete-child right
-   to other principals refuse; unknown ACEs/masks fail closed. Execute/read permission failures are
-   operational errors.
+   model, not protection from those principals. For the executable file itself, allow ACEs granting
+   write/append/delete/owner/DACL/generic-write/generic-all rights to other principals refuse;
+   unknown ACEs/masks fail closed. Existing ancestor directories use the distinct component-control
+   rule in §5.1, not the executable-file write mask. Execute/read permission failures are operational
+   errors.
 4. Read at most the first four executable bytes from the validated file handle. Linux `7f454c46`;
    macOS `feedface`, `cefaedfe`, `feedfacf`, `cffaedfe`, `cafebabe`, `bebafeca`, `cafebabf`,
    `bfbafeca`; Windows first two bytes `4d5a` and stored **and resolved** extension `.exe`
@@ -260,9 +261,28 @@ allocate under a verified user-private parent (e.g. runner workspace), not blind
 Do not silently weaken this for tests. macOS `/var` alias may resolve through safe root-owned
 ancestors.
 
-Windows requires a local drive/volume, persistent ACLs, trusted ownership and no untrusted
-write/control ACE on every ancestor from volume root; reparse flag/type checked on every component,
-not merely final leaf. Walk components in order using full paths from that verified anchor. Open
+Windows requires a local drive/volume, persistent ACLs and the trusted ancestor owners listed in
+§4. For **existing ancestor directories**, distinguish control of the selected existing component
+from permission to create a different child. Inspect each component's DACL; NULL/empty DACLs,
+unsupported ACE types/flags or unknown access-mask bits refuse. Ordinary allow/deny ACEs may carry
+`OBJECT_INHERIT_ACE`, `CONTAINER_INHERIT_ACE`, `NO_PROPAGATE_INHERIT_ACE`, `INHERIT_ONLY_ACE` and
+`INHERITED_ACE`. An ordinary `INHERIT_ONLY_ACE` does not apply to that ancestor itself; validate its
+structure but do not count its SID/mask as effective control of that ancestor. Inspect the next
+component's actual ACL separately, including any ACE inherited there as effective. This exemption
+is ancestor-only: stricter managed-object confidentiality/protected-DACL checks remain unchanged.
+
+For an effective ordinary allow ACE to any principal outside the §4 trust set, reject
+`FILE_DELETE_CHILD`, `FILE_WRITE_EA`, `FILE_WRITE_ATTRIBUTES`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`,
+`GENERIC_WRITE` or `GENERIC_ALL`. The only permitted mask bits for such an allow are
+`FILE_LIST_DIRECTORY`, `FILE_READ_EA`, `FILE_READ_ATTRIBUTES`, `FILE_TRAVERSE`, `READ_CONTROL`,
+`SYNCHRONIZE`, `GENERIC_READ`, `GENERIC_EXECUTE`, `FILE_ADD_FILE` and `FILE_ADD_SUBDIRECTORY`.
+The last two directory-specific rights alone permit sibling creation, not replacement/control of
+the already selected component. Do not apply their file-object aliases `FILE_WRITE_DATA`/`FILE_APPEND_DATA` as ancestor-directory write
+control. Deny ACEs do not cancel an unsafe allow for this conservative check; denial of required
+Larp access remains an operational error. No general effective-access evaluator is introduced.
+Reparse flag/type is checked on every component, not merely the final leaf.
+
+Walk components in order using full paths from that verified anchor. Open
 each existing directory with `CreateFileW(OPEN_EXISTING, READ_CONTROL | FILE_READ_ATTRIBUTES,
 FILE_SHARE_READ | FILE_SHARE_WRITE, ... BACKUP_SEMANTICS | OPEN_REPARSE_POINT)`, non-inheritable,
 **no FILE_SHARE_DELETE**, then query actual opened type, tag, owner, ACL and identity; retain those
@@ -615,7 +635,7 @@ Acceptance groups: [G01–G03](#g01-g03), [B01–B03](#b01-b03), [B04–B06](#b0
 | <a id="u05"></a>U05 | macOS SDK ABI/constants and absence/iterator convention validation, all managed path classes extended allow refusal, query failure and allocation cleanup; executable/ancestor foreign-write ACL refusal. Reject-only, no automatic ACL mutation. |
 | <a id="w01-w03"></a>W01–W03 | Every managed class broad/unprotected/NULL/empty/deny/unknown ACE/owner/access/query/volume state; all foreign allow principals, READ_CONTROL-only verification; native non-elevated plus separately labeled elevated results. New objects private before use, collision/retry/rollback, descriptor/handle lifetime and noninheritance. Existing unsafe trees refuse with byte+ACL snapshots proving no provider-content changes; no transparent upgrade test. |
 | <a id="w04"></a>W04 | Separate isolated console harnesses: Ctrl-C with harness/driver/fake sharing console and no CREATE_NEW_PROCESS_GROUP for driver; harness own handler absorbs broadcast, GenerateConsoleCtrlEvent(CTRL_C_EVENT,0), fake records exactly once, wrapper remains waiting until child exits. Break harness creates driver group with CREATE_NEW_PROCESS_GROUP and sends CTRL_BREAK_EVENT to its group ID; fake records exactly once. Explicit ready handshakes, bounded waits, no event forwarding. ConPTY closure may be recorded separately; never substitute it for real conhost Close/Logoff/Shutdown. Registration/unregistration failure, spawn failure and wait failure injected via private test seam, cleanup verified. |
-| <a id="w05-w08"></a>W05–W08 | GetExitCodeProcess full-u32 status; CREATE_NO_WINDOW/piped IO; all-tag final/ancestor reparse and identity/self hardlink; no-delete ancestor handles prevent compatible rename, sharing failure refuses, registry atomic replace still works, child does not inherit inspection/lock handles. Existing-name race refuses or revalidates under trusted parent; no unsafe collision truncation. |
+| <a id="w05-w08"></a>W05–W08 | GetExitCodeProcess full-u32 status; CREATE_NO_WINDOW/piped IO; all-tag final/ancestor reparse and identity/self hardlink; no-delete ancestor handles prevent compatible rename, sharing failure refuses, registry atomic replace still works, child does not inherit inspection/lock handles. Existing-name race refuses or revalidates under trusted parent; no unsafe collision truncation. Non-elevated positive ancestry fixture: a trusted-owned ancestor grants an untrusted SID only FILE_ADD_FILE/FILE_ADD_SUBDIRECTORY, with a safe existing selected branch and ordinary inherit-only ACEs; both data-root and executable ancestry must pass without system-volume ACL edits. Negative fixtures separately cover effective delete-child/write-attributes/write-EA/owner/DACL rights, effective unsafe grants inherited onto the next component, reparse control and hostile missing-component collisions. Missing components still require exclusive protected creation and collision verification/refusal; sibling-creation permission never authorizes adopting a foreign-created object. |
 
 Applicable matrix: common G/B/P/M/L on Linux, macOS, Windows native runners; U01–04 Unix
 (Linux-specific raw-byte assertions Linux only); U05 macOS; W01–08 Windows. Ubuntu MSRV 1.89 runs
