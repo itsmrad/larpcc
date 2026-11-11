@@ -1,0 +1,11 @@
+[package]
+name = "larpcc-cli"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "CLI-first account profiles for Claude Code and Codex"
+
+[[bin]]
+name = "larp"
+path = "src/main.rs"

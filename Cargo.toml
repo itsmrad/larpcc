@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/larpcc-cli"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/itsmrad/larpcc"
+publish = false
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
