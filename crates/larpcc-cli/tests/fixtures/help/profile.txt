@@ -1,0 +1,13 @@
+Manage profile records (no login, no provider launch)
+
+Usage: larp cc profile <COMMAND>
+
+Commands:
+  add     Register a profile and create its empty state directory
+  list    List profiles
+  show    Show one profile
+  rename  Rename a profile; its ID and state directory do not change
+  forget  Remove a profile from the registry; its state directory is kept
+
+Options:
+  -h, --help  Print help

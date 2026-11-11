@@ -1,0 +1,10 @@
+Remove a profile from the registry; its state directory is kept
+
+Usage: larp cc profile forget [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>  Profile name
+
+Options:
+      --yes   Confirm removing the profile from the registry
+  -h, --help  Print help

@@ -1,0 +1,10 @@
+Register a profile and create its empty state directory
+
+Usage: larp cc profile add --provider <PROVIDER> <NAME>
+
+Arguments:
+  <NAME>  Profile name: 1-32 characters from a-z, 0-9, '-', '_', starting with a letter
+
+Options:
+      --provider <PROVIDER>  Provider this profile is for [possible values: claude, codex]
+  -h, --help                 Print help

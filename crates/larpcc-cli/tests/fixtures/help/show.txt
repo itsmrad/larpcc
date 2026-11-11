@@ -1,0 +1,9 @@
+Show one profile
+
+Usage: larp cc profile show <NAME>
+
+Arguments:
+  <NAME>  Profile name
+
+Options:
+  -h, --help  Print help
