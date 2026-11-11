@@ -1,0 +1,10 @@
+Rename a profile; its ID and state directory do not change
+
+Usage: larp cc profile rename <NAME> <NEW_NAME>
+
+Arguments:
+  <NAME>      Profile name
+  <NEW_NAME>  New profile name
+
+Options:
+  -h, --help  Print help

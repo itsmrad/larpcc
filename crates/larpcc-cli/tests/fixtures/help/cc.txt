@@ -1,0 +1,11 @@
+Manage Claude Code and Codex profiles
+
+Usage: larp cc <COMMAND>
+
+Commands:
+  profile  Manage profile records (no login, no provider launch)
+
+Options:
+  -h, --help  Print help
+
+Data directory: $LARPCC_HOME if set, otherwise $XDG_DATA_HOME/larpcc or ~/.local/share/larpcc (Linux), ~/Library/Application Support/larpcc (macOS), %LOCALAPPDATA%\larpcc (Windows).

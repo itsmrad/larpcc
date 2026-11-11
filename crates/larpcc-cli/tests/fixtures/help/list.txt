@@ -1,0 +1,6 @@
+List profiles
+
+Usage: larp cc profile list
+
+Options:
+  -h, --help  Print help

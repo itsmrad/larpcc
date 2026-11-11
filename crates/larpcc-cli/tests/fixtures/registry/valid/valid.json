@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "revision": 1,
+  "next_id": 2,
+  "profiles": [
+    {
+      "id": 1,
+      "name": "work",
+      "provider": "claude"
+    }
+  ]
+}

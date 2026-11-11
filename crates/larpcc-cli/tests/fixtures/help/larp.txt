@@ -1,0 +1,10 @@
+Named Claude Code and Codex account profiles
+
+Usage: larp <COMMAND>
+
+Commands:
+  cc  Manage Claude Code and Codex profiles
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
