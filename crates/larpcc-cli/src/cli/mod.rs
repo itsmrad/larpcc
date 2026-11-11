@@ -10,6 +10,7 @@ use std::{
 #[derive(Parser)]
 #[command(
     name = "larp",
+    bin_name = "larp",
     version,
     about = "Named Claude Code and Codex account profiles",
     arg_required_else_help = true,
@@ -17,11 +18,11 @@ use std::{
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: RootAction,
 }
 
 #[derive(Subcommand)]
-enum Command {
+enum RootAction {
     #[command(
         about = "Manage Claude Code and Codex profiles",
         arg_required_else_help = true,
@@ -30,12 +31,12 @@ enum Command {
     )]
     Cc {
         #[command(subcommand)]
-        command: CcCommand,
+        command: CcAction,
     },
 }
 
 #[derive(Subcommand)]
-enum CcCommand {
+enum CcAction {
     #[command(
         about = "Manage profile records (no login, no provider launch)",
         arg_required_else_help = true,
@@ -43,12 +44,12 @@ enum CcCommand {
     )]
     Profile {
         #[command(subcommand)]
-        command: ProfileCommand,
+        command: ProfileAction,
     },
 }
 
 #[derive(Subcommand)]
-enum ProfileCommand {
+enum ProfileAction {
     /// Register a profile and create its empty state directory
     Add {
         /// Profile name: 1-32 characters from a-z, 0-9, '-', '_', starting with a letter
@@ -99,15 +100,15 @@ pub fn run() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let Command::Cc {
-        command: CcCommand::Profile { command },
+    let RootAction::Cc {
+        command: CcAction::Profile { command },
     } = cli.command;
     let registry = match Registry::locate() {
         Ok(registry) => registry,
         Err(error) => return operational_error(error),
     };
     // Confirmation is read-only, including when the selected profile is missing.
-    if let ProfileCommand::Forget { name, yes: false } = &command {
+    if let ProfileAction::Forget { name, yes: false } = &command {
         return match registry.get(name) {
             Ok(entry) => {
                 let _ = writeln!(
@@ -156,15 +157,15 @@ fn escape_error_values(error: &mut clap::Error) {
     }
 }
 
-fn execute(command: ProfileCommand, registry: &Registry) -> Result<String, Error> {
+fn execute(command: ProfileAction, registry: &Registry) -> Result<String, Error> {
     Ok(match command {
-        ProfileCommand::Add { name, provider } => render::added(&registry.add(name, provider)?),
-        ProfileCommand::List => render::list(registry.list()?),
-        ProfileCommand::Show { name } => render::show(&registry.get(&name)?),
-        ProfileCommand::Rename { name, new_name } => {
+        ProfileAction::Add { name, provider } => render::added(&registry.add(name, provider)?),
+        ProfileAction::List => render::list(registry.list()?),
+        ProfileAction::Show { name } => render::show(&registry.get(&name)?),
+        ProfileAction::Rename { name, new_name } => {
             render::renamed(&name, &registry.rename(&name, new_name)?)
         }
-        ProfileCommand::Forget { name, .. } => render::forgotten(&registry.forget(&name)?),
+        ProfileAction::Forget { name, .. } => render::forgotten(&registry.forget(&name)?),
     })
 }
 

@@ -25,7 +25,7 @@ impl Registry {
         &self.root
     }
     pub fn list(&self) -> Result<Vec<ProfileEntry>, Error> {
-        let data = store::load(&self.root)?;
+        let data = store::load(self.root())?;
         let mut entries = paths::entries(&self.root, &data.profiles)?;
         entries.sort_by(|a, b| a.profile.name.cmp(&b.profile.name));
         Ok(entries)
@@ -38,21 +38,21 @@ impl Registry {
     }
     pub fn add(&self, name: ProfileName, provider: Provider) -> Result<ProfileEntry, Error> {
         store::mutate(
-            &self.root,
+            self.root(),
             store::Mutation::Add(name, provider),
             std::time::Duration::from_secs(10),
         )
     }
     pub fn rename(&self, from: &ProfileName, to: ProfileName) -> Result<ProfileEntry, Error> {
         store::mutate(
-            &self.root,
+            self.root(),
             store::Mutation::Rename(from.clone(), to),
             std::time::Duration::from_secs(10),
         )
     }
     pub fn forget(&self, name: &ProfileName) -> Result<ProfileEntry, Error> {
         store::mutate(
-            &self.root,
+            self.root(),
             store::Mutation::Forget(name.clone()),
             std::time::Duration::from_secs(10),
         )

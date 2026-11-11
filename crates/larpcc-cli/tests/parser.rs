@@ -18,7 +18,8 @@ fn help_fixtures_and_missing_subcommands() {
             "{}/tests/fixtures/help/{fixture}.txt",
             env!("CARGO_MANIFEST_DIR")
         ))
-        .unwrap();
+        .unwrap()
+        .replace("\r\n", "\n");
         let help = f.run(&[args.as_slice(), &["--help"]].concat(), 0);
         assert_eq!(stdout(&help), expected);
         if args.len() < 3 {

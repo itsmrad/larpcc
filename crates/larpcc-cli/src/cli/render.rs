@@ -51,7 +51,7 @@ pub fn list(mut entries: Vec<ProfileEntry>) -> String {
     if entries.is_empty() {
         return "No profiles.\n".into();
     }
-    entries.sort_by(|a, b| a.profile.name.cmp(&b.profile.name));
+    entries.sort_by(|a, b| a.profile.name.as_str().cmp(b.profile.name.as_str()));
     let mut rows = vec![[
         "NAME".into(),
         "PROVIDER".into(),
@@ -60,7 +60,7 @@ pub fn list(mut entries: Vec<ProfileEntry>) -> String {
     ]];
     rows.extend(entries.iter().map(|e| {
         [
-            e.profile.name.to_string(),
+            e.profile.name.as_str().to_owned(),
             e.profile.provider.to_string(),
             e.profile.id.to_string(),
             state(&e.status).into(),

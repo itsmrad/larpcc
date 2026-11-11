@@ -91,16 +91,31 @@ fn operational_errors_and_read_only_missing_root() {
     let f = Fixture::new();
     assert_eq!(stdout(&f.profile(&["list"], 0)), "No profiles.\n");
     let missing = "error: no profile named absent\nhint: run 'larp cc profile list'\n";
-    for args in [
-        vec!["show", "absent"],
-        vec!["forget", "absent"],
-        vec!["forget", "absent", "--yes"],
-    ] {
+    for args in [vec!["show", "absent"], vec!["forget", "absent"]] {
         assert_eq!(stderr(&f.profile(&args, 1)), missing);
         assert!(!f.root.exists());
     }
+    // Confirmed forget is a write transaction: first-write scaffolding is allowed (§5.2).
+    let outside = f.outside_snapshot();
+    assert_eq!(
+        stderr(&f.profile(&["forget", "absent", "--yes"], 1)),
+        missing
+    );
+    assert!(!f.root.join("registry.json").exists());
+    assert!(!f.root.join("profiles").exists());
+    assert_eq!(outside, f.outside_snapshot());
     f.profile(&["add", "a", "--provider", "claude"], 0);
     f.profile(&["add", "b", "--provider", "codex"], 0);
+    let existing = fs::read(f.root.join("registry.json")).unwrap();
+    let outside = f.outside_snapshot();
+    assert_eq!(
+        stderr(&f.profile(&["forget", "absent", "--yes"], 1)),
+        missing
+    );
+    assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), existing);
+    assert_eq!(fs::read_dir(f.root.join("profiles")).unwrap().count(), 2);
+    assert_eq!(outside, f.outside_snapshot());
+
     for args in [
         vec!["add", "a", "--provider", "codex"],
         vec!["rename", "b", "a"],
