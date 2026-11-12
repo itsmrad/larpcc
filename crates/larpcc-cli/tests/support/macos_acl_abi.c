@@ -22,7 +22,7 @@ static void require(int condition, const char *label) {
 }
 static int scan(acl_t acl, int expected_tag) {
     require(acl_valid(acl) == 0, "acl_valid");
-    acl_entry_t entry;
+    acl_entry_t entry = NULL;
     int which = ACL_FIRST_ENTRY, count = 0;
     for (;;) {
         errno = 0;
@@ -32,7 +32,7 @@ static int scan(acl_t acl, int expected_tag) {
             break;
         }
         require(result == 0 && entry != NULL, "iterator entry");
-        acl_tag_t tag;
+        acl_tag_t tag = ACL_UNDEFINED_TAG;
         require(acl_get_tag_type(entry, &tag) == 0 && tag == expected_tag, "iterator tag");
         count++;
         which = ACL_NEXT_ENTRY;
@@ -40,7 +40,7 @@ static int scan(acl_t acl, int expected_tag) {
     return count;
 }
 static int presence(int fd, int expected_tag) {
-    struct stat ordinary, extended;
+    struct stat ordinary = {0}, extended = {0};
     require(fstat(fd, &ordinary) == 0, "valid descriptor fstat");
     require(fpathconf(fd, _PC_EXTENDED_SECURITY_NP) == 1, "volume extended-security support");
     filesec_t security = filesec_init();
@@ -85,10 +85,10 @@ int main(void) {
     puts("valid descriptor: extended-security supported; fstatx success; ACL property absent; wrapper ENOENT");
     filesec_t bad = filesec_init();
     require(bad != NULL, "failure fixture allocation");
-    struct stat unused;
+    struct stat unused = {0};
     errno = 0;
     require(fstatx_np(-1, &unused, bad) == -1 && errno == EBADF, "invalid fd query must fail");
-    int present;
+    int present = -1;
     errno = 0;
     require(filesec_query_property(bad, (filesec_property_t)-1, &present) == -1 && errno == EINVAL, "invalid property must fail");
     filesec_free(bad);
@@ -104,8 +104,8 @@ int main(void) {
     require(mbr_uid_to_uuid(getuid(), user) == 0, "synthetic ACL qualifier");
     for (int tag = ACL_EXTENDED_ALLOW; tag <= ACL_EXTENDED_DENY; tag++) {
         acl_t acl = acl_init(1);
-        acl_entry_t entry;
-        acl_permset_t permissions;
+        acl_entry_t entry = NULL;
+        acl_permset_t permissions = NULL;
         require(acl && acl_create_entry(&acl, &entry) == 0, "synthetic ACL entry");
         require(acl_set_tag_type(entry, tag) == 0 && acl_set_qualifier(entry, user) == 0, "synthetic ACL tag/qualifier");
         require(acl_get_permset(entry, &permissions) == 0 && acl_add_perm(permissions, ACL_READ_DATA) == 0, "synthetic ACL permission");
