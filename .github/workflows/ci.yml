@@ -40,6 +40,13 @@ jobs:
       - run: cargo +stable test --workspace --locked
       - if: runner.os == 'Windows'
         run: |
+          cargo +stable test --bin larp --locked platform::windows::tests::w01_w03_existing_security_refuses_without_changing_contents_or_acl -- --exact --nocapture 2>&1 | Tee-Object -Variable cleanupEvidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $text = $cleanupEvidence -join "`n"
+          if ($text -notmatch 'test result: ok\. 1 passed; 0 failed;' -or $text -notmatch 'platform::windows::tests::w01_w03_existing_security_refuses_without_changing_contents_or_acl') { throw 'missing exact native security/cleanup test execution' }
+          if ($text.Contains('empty-DACL specimen cleanup unsupported')) { Write-Output 'Native specimen cleanup remains unsupported and unqualified.' }
+      - if: runner.os == 'Windows'
+        run: |
           cargo +stable test --workspace --locked w01_actual_token_elevation_is_recorded -- --nocapture 2>&1 | Tee-Object -Variable evidence
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $text = $evidence -join "`n"

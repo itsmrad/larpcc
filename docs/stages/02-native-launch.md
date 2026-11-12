@@ -317,25 +317,47 @@ cross-platform inode-pinning layer. Same-user/privileged TOCTOU remains the M1 l
 
 Managed dirs retain euid ownership and mode &0077 ==0; files same owner/mode rule and regular type.
 Linux mode mask is the managed-object POSIX access-ACL gate; no chmod repair. macOS additionally
-refuses **any extended allow ACE** on managed objects, not only foreign write. Native private FFI
-stays in macos.rs: `acl_t`/`acl_entry_t` opaque pointers; `acl_type_t` and `acl_tag_t` represented
-as `libc::c_int` for the C-enum ABI, `acl_get_link_np(*const c_char, acl_type_t)->acl_t`,
-`acl_get_entry(acl_t,c_int,*mut acl_entry_t)->c_int`, `acl_get_tag_type(acl_entry_t,*mut
-acl_tag_t)->c_int`, `acl_free(*mut c_void)->c_int`. Use Darwin constants ACL_TYPE_EXTENDED=0x100,
-ACL_EXTENDED_ALLOW=1, ACL_EXTENDED_DENY=2, ACL_FIRST_ENTRY=0, ACL_NEXT_ENTRY=-1 (not Linux values).
-Check those enum sizes/constants against the target SDK in seed validation. `acl_get_entry` returns
-0 for an entry; exhaustion is -1/EINVAL in Apple's implementation, not Linux's 0 return convention;
-validate ACL before iteration, reject unknown tag or unexpected error. Null acquisition accepts only
-a documented no-ACL absence result confirmed by native fixture, never generic
-EINVAL/access/unsupported errors; if that cannot be distinguished, refuse and correct the contract
-before enabling the platform. RAII frees each returned allocation once on every branch. Native SDK
-ABI/constant validation and ACL fixtures are required before macOS acceptance. Static ABI/iterator
-references: [Apple ACL
-header](https://raw.githubusercontent.com/apple-oss-distributions/Libc/main/include/sys/acl.h) and
-[entry
-implementation](https://raw.githubusercontent.com/apple-oss-distributions/Libc/main/posix1e/acl_entry.c),
-read 2026-11-11; native SDK confirmation remains required. No automatic ACL repair; hint `remove the
-extended ACL manually after reviewing it`. No shell command constructed by Larp.
+refuses **any extended allow ACE** on managed objects and executable ancestry/targets. Query errors,
+unknown tags and unsupported volumes refuse; no principal/permission parser or repair is added.
+
+Approved, native-proven acquisition amendment: path-based ancestor checks open a no-follow,
+nonblocking, CLOEXEC handle and compare identity/type/owner/mode snapshots. Provided-handle checks
+never reopen the diagnostic path. Require `fpathconf(fd, _PC_EXTENDED_SECURITY_NP)` == 1. Acquire
+an opaque filesec allocation with `filesec_init`, then require successful
+`fstatx_np(fd, *mut libc::stat, filesec)` and matching descriptor identity/type/owner/mode. Only a
+successful `filesec_query_property(filesec, FILESEC_ACL=5, *mut c_int)` reporting zero means no ACL.
+When present, `filesec_get_property` must return an ACL copy; null/error/sentinel results refuse.
+No errno, including ENOENT or EINVAL, is interpreted as acquisition success or absence. The
+wrapper `acl_get_fd_np` hides whether ENOENT came from the object query or absent property and
+is therefore not used for production acquisition.
+
+All FFI remains private in macos.rs: filesec_t/acl_t/acl_entry_t opaque pointers;
+filesec_init()->filesec_t, filesec_free(filesec_t)->void,
+filesec_query_property(filesec_t,c_int,*mut c_int)->c_int,
+filesec_get_property(filesec_t,c_int,*mut c_void)->c_int,
+fstatx_np(c_int,*mut libc::stat,filesec_t)->c_int; ACL validation/entry/tag/free retain c_int ABI.
+The x86_64 `fstatx_np$INODE64` link name follows Darwin's __DARWIN_INODE64 header macro; arm64
+uses the unsuffixed name. The x86 branch is source-only until native/link qualified.
+Darwin constants remain ACL_TYPE_EXTENDED=0x100, ACL_EXTENDED_ALLOW=1, ACL_EXTENDED_DENY=2,
+ACL_FIRST_ENTRY=0, ACL_NEXT_ENTRY=-1, plus FILESEC_ACL=5 and _PC_EXTENDED_SECURITY_NP=13.
+Validate each allocated ACL before iteration. acl_get_entry returns 0 for an entry and
+-1/EINVAL for exhaustion of a validated ACL with known cursor; any other result/tag/error refuses.
+
+Allocation ownership is independently grounded in pinned
+[Apple filesec.c](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/gen/filesec.c):
+filesec_free frees the filesec and its internal raw security buffer. The FILESEC_ACL getter
+uses acl_copy_int_native to allocate an independent ACL copy; the caller frees that copy with
+acl_free. Rust keeps separate OwnedFileSec/OwnedAcl RAII owners, each freed exactly once on every
+return path. Borrowed entries never outlive their ACL. No raw security pointer escapes this module.
+[Apple statx_np.c](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/sys/statx_np.c)
+distinguishes successful object queries and KAUTH_FILESEC_NOACL; acquisition failures remain failures.
+
+Exact core42644d4 native C probe [run43190333433/job131087719574](https://github.com/itsmrad/larpcc/actions/runs/43190333433/job/131087719574)
+passed on macOS26.7.2 arm64: SDK sizes/constants/signatures, supported valid descriptor absence
+separately from missing path/invalid fd, real empty/allow/deny ACLs and iterator exhaustion.
+That C result is not Rust/native platform acceptance or leak proof; native Rust checks and
+independent QA/OCR remain required. Reject-only hint: `remove the extended ACL manually after reviewing it`.
+No shell command is constructed by Larp.
 
 ### 5.3 Windows trust, verify-only existing objects, secure new objects
 
@@ -577,9 +599,8 @@ prefixes and unpaired surrogates are preserved. The existing before-IO lexical-c
 precedence and resolved containment are unchanged; no clap validator is added.
 
 Approved opened-handle amendment: `verify_opened` derives type/security/owner/identity from the
-provided File without reopening the diagnostic path or reading contents. macOS uses the supplemental
-`acl_get_fd_np(fd: c_int, kind: c_int) -> acl_t` for provided-handle ACL acquisition, checked against
-the native SDK alongside the existing link-path ABI. Callers retain verified
+provided File without reopening the diagnostic path or reading contents. macOS uses the descriptor filesec/fstatx acquisition and explicit ACL-presence query in §5.2;
+no acquisition wrapper errno is treated as absence. Callers retain verified
 parents and compare its returned identity against the inspected object before data reads/use.
 Metadata inspection remains READ_CONTROL-only on Windows; actual data/lock opens are nontruncating,
 use required access and are verified separately. Registry handles allow atomic replacement and are
