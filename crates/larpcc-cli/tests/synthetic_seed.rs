@@ -13,7 +13,7 @@ fn synthetic_seed_cannot_launch() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         stderr(&out),
-        include_str!("fixtures/qualification-pending.txt")
+        include_str!("fixtures/qualification-pending.txt").replace("\r\n", "\n")
     );
     assert!(!f.root.exists());
 }

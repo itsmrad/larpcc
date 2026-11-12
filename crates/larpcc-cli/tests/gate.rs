@@ -17,7 +17,7 @@ fn ordinary_run_refuses_before_root_or_environment_inspection() {
         assert!(output.stdout.is_empty());
         assert_eq!(
             stderr(&output),
-            include_str!("fixtures/qualification-pending.txt")
+            include_str!("fixtures/qualification-pending.txt").replace("\r\n", "\n")
         );
     }
     assert!(!f.root.exists());
