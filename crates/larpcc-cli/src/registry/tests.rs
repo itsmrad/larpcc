@@ -36,7 +36,19 @@ fn name(s: &str) -> ProfileName {
     ProfileName::parse(s).unwrap()
 }
 fn fixture() -> (tempfile::TempDir, Registry) {
-    let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    let temp = builder
+        .tempdir_in(
+            std::env::var_os("LARPCC_TEST_PARENT")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
+        )
+        .unwrap();
     let r = Registry::at(temp.path().join("root")).unwrap();
     (temp, r)
 }
@@ -159,14 +171,14 @@ fn r04_invalid_unchanged() {
         format!("\u{feff}{valid}"),
         format!("{valid} trailing"),
         "[]".into(),
-        valid.replace("\"version\": 1,", ""),
-        valid.replace("\"version\": 1", "\"version\": 0"),
-        valid.replace("\"version\": 1", "\"version\": \"1\""),
-        valid.replace("\"version\": 1", "\"version\": 1.0"),
-        valid.replace("\"version\": 1", "\"version\": 1, \"extra\": 4"),
+        valid.replace("\"version\": 2,", ""),
+        valid.replace("\"version\": 2", "\"version\": 0"),
+        valid.replace("\"version\": 2", "\"version\": \"1\""),
+        valid.replace("\"version\": 2", "\"version\": 1.0"),
+        valid.replace("\"version\": 2", "\"version\": 1, \"extra\": 4"),
         valid.replace("\"id\": 1", "\"id\": 1, \"extra\": 4"),
         valid.replace("\"id\": 1", "\"id\": 1, \"id\": 1"),
-        valid.replace("\"version\": 1", "\"version\": 1, \"version\": 1"),
+        valid.replace("\"version\": 2", "\"version\": 1, \"version\": 1"),
         valid.replace("\"id\": 1", "\"id\": 0"),
         valid.replace("\"id\": 1", "\"id\": 2"),
         valid.replace("\"id\": 1", "\"id\": \"../x\""),
@@ -210,11 +222,11 @@ fn r04_invalid_unchanged() {
 fn r05_newer() {
     let (_t, r) = fixture();
     initialize(&r);
-    write(&r, r#"{"version":2,"future":true}"#);
+    write(&r, r#"{"version":3,"future":true}"#);
     let before = bytes(&r);
     assert!(matches!(
         r.add(name("x"), Provider::Codex),
-        Err(Error::NewerSchema { found: 2, .. })
+        Err(Error::NewerSchema { found: 3, .. })
     ));
     assert_eq!(before, bytes(&r));
 }
@@ -282,6 +294,7 @@ fn r10_stale_temp() {
     initialize(&r);
     let temp = r.root().join("registry.json.tmp");
     fs::write(&temp, b"garbage").unwrap();
+    fs::set_permissions(&temp, fs::Permissions::from_mode(0o600)).unwrap();
     add(&r, "b");
     assert!(!temp.exists());
     #[cfg(unix)]
@@ -289,9 +302,9 @@ fn r10_stale_temp() {
         let outside = t.path().join("outside");
         fs::write(&outside, b"unchanged").unwrap();
         symlink(&outside, &temp).unwrap();
-        add(&r, "c");
+        assert!(r.add(name("c"), Provider::Claude).is_err());
         assert_eq!(fs::read(outside).unwrap(), b"unchanged");
-        assert!(!temp.exists());
+        assert!(temp.is_symlink());
     }
     #[cfg(not(unix))]
     let _ = t;
@@ -305,7 +318,7 @@ fn r11_unsafe_paths() {
         ("", "mode", true),
         ("registry.json", "mode", true),
         ("registry.json", "symlink", true),
-        ("registry.lock", "symlink", false),
+        ("registry.lock", "symlink", true),
         ("profiles", "symlink", true),
         ("profiles", "mode", true),
     ] {
@@ -517,7 +530,7 @@ fn r16_roots() {
 #[test]
 fn r17_non_utf8() {
     use std::os::unix::ffi::OsStringExt;
-    let t = tempfile::tempdir().unwrap();
+    let (t, _) = fixture();
     let r = Registry::at(
         t.path()
             .join(std::ffi::OsString::from_vec(b"root\xff".to_vec())),
@@ -616,9 +629,9 @@ fn r20_errors() {
         (
             Error::NewerSchema {
                 path: p.clone(),
-                found: 2,
+                found: 3,
             },
-            "registry /root/registry.json uses schema version 2; this Larp CC supports version 1",
+            "registry /root/registry.json uses schema version 3; this Larp CC supports version 2",
             Some("upgrade Larp CC; the file was not modified"),
         ),
         (
@@ -951,4 +964,207 @@ fn captured_mode_hints_survive_removal() {
             ))
         );
     }
+}
+
+#[cfg(unix)]
+fn native_fixture(t: &tempfile::TempDir, name: &str) -> PathBuf {
+    let path = t.path().join(name);
+    #[cfg(target_os = "macos")]
+    let magic = [0xcf, 0xfa, 0xed, 0xfe];
+    #[cfg(not(target_os = "macos"))]
+    let magic = *b"\x7fELF";
+    fs::write(&path, magic).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+#[cfg(unix)]
+#[test]
+fn bindings_upgrade_noop_precedence_and_counters() {
+    let (t, r) = fixture();
+    initialize(&r);
+    let v1 = br#"{"version":1,"revision":0,"next_id":1,"profiles":[]}"#;
+    write(&r, v1);
+    assert!(r.list().unwrap().is_empty());
+    assert_eq!(bytes(&r), v1);
+    let first = native_fixture(&t, "native-a");
+    let second = native_fixture(&t, "native-b");
+    assert_eq!(
+        r.bind(Provider::Codex, first.clone(), false).unwrap(),
+        BindOutcome::Bound
+    );
+    let data = store::load(r.root()).unwrap();
+    assert_eq!(data.version, 2);
+    assert_eq!(data.revision, 1);
+    assert_eq!(data.next_id, 1);
+    let mut max: serde_json::Value = serde_json::from_slice(&bytes(&r)).unwrap();
+    max["revision"] = serde_json::json!(u64::MAX);
+    write(&r, serde_json::to_vec(&max).unwrap());
+    fs::remove_file(&first).unwrap();
+    let unchanged = bytes(&r);
+    assert_eq!(
+        r.bind(Provider::Codex, first.clone(), false).unwrap(),
+        BindOutcome::Unchanged
+    );
+    assert_eq!(bytes(&r), unchanged);
+    assert!(matches!(
+        r.bind(Provider::Codex, second.clone(), false),
+        Err(Error::AlreadyBound { .. })
+    ));
+    assert!(matches!(
+        r.bind(Provider::Codex, second, true),
+        Err(Error::Exhausted)
+    ));
+    assert_eq!(bytes(&r), unchanged);
+    assert!(matches!(
+        &r.bindings().unwrap()[1].1,
+        BindingState::Invalid(..)
+    ));
+}
+#[cfg(unix)]
+#[test]
+fn bindings_strict_v2_and_sorted_serialization() {
+    let (t, r) = fixture();
+    let executable = native_fixture(&t, "native");
+    r.bind(Provider::Codex, executable.clone(), false).unwrap();
+    r.bind(Provider::Claude, executable, false).unwrap();
+    let data = store::load(r.root()).unwrap();
+    assert_eq!(
+        data.bindings.iter().map(|b| b.provider).collect::<Vec<_>>(),
+        Provider::ALL
+    );
+    let good = String::from_utf8(bytes(&r)).unwrap();
+    let mut invalid = vec![
+        good.replace("\"bindings\"", "\"unknown\""),
+        good.replace("\"bindings\": [", "\"bindings\": [], \"bindings\": ["),
+    ];
+    let mut value: serde_json::Value = serde_json::from_str(&good).unwrap();
+    value["bindings"].as_array_mut().unwrap().reverse();
+    invalid.push(value.to_string());
+    for path in [
+        "relative",
+        "/bad/../x",
+        "/bad//x",
+        "/bad/./x",
+        "/bad/",
+        "/bad\0x",
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(&good).unwrap();
+        value["bindings"][0]["executable"] = path.into();
+        invalid.push(value.to_string());
+    }
+    for input in invalid {
+        write(&r, &input);
+        assert!(matches!(r.bindings(), Err(Error::Corrupt { .. })));
+        assert_eq!(bytes(&r), input.as_bytes());
+    }
+}
+#[cfg(unix)]
+#[test]
+fn all_fixed_metadata_refuses_unsafe_temp_and_lock_on_reads() {
+    let (t, r) = fixture();
+    initialize(&r);
+    for name in ["registry.lock", "registry.json.tmp"] {
+        let path = r.root().join(name);
+        let outside = t.path().join(format!("outside-{name}"));
+        fs::write(&outside, b"invented sentinel").unwrap();
+        let original = fs::read(&path).ok();
+        if path.exists() {
+            fs::remove_file(&path).unwrap();
+        }
+        symlink(&outside, &path).unwrap();
+        let before = bytes(&r);
+        assert!(r.list().is_err());
+        assert!(r.rename(&name_parse("initial"), name_parse("new")).is_err());
+        assert_eq!(bytes(&r), before);
+        assert_eq!(fs::read(&outside).unwrap(), b"invented sentinel");
+        assert!(path.is_symlink());
+        fs::remove_file(&path).unwrap();
+        if let Some(bytes) = original {
+            fs::write(&path, bytes).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+    fn name_parse(s: &str) -> ProfileName {
+        s.parse().unwrap()
+    }
+}
+#[cfg(unix)]
+#[test]
+fn binding_executable_native_type_links_containment_and_self_checks() {
+    let (t, r) = fixture();
+    let native = native_fixture(&t, "native");
+    r.bind(Provider::Claude, native.clone(), false).unwrap();
+    let link = t.path().join("link");
+    symlink(&native, &link).unwrap();
+    assert!(r.bind(Provider::Claude, link.clone(), true).is_ok());
+    let unsafe_parent = t.path().join("unsafe-parent");
+    fs::create_dir(&unsafe_parent).unwrap();
+    fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o777)).unwrap();
+    let unsafe_target = unsafe_parent.join("native");
+    fs::copy(&native, &unsafe_target).unwrap();
+    assert!(r.bind(Provider::Claude, unsafe_target, true).is_err());
+    assert!(
+        r.bind(Provider::Claude, std::env::current_exe().unwrap(), true)
+            .is_err()
+    );
+    let inside = r.root().join("native");
+    fs::copy(&native, &inside).unwrap();
+    assert!(r.bind(Provider::Claude, inside, true).is_err());
+    fs::write(&native, b"#!/bin/sh\n").unwrap();
+    assert!(
+        r.bindings()
+            .unwrap()
+            .iter()
+            .any(|(_, s)| matches!(s, BindingState::Invalid(..)))
+    );
+}
+
+#[test]
+fn exact_v2_first_mutation_bytes() {
+    let (_temporary, r) = fixture();
+    add(&r, "work");
+    let expected =
+        include_str!("../../tests/fixtures/registry/valid/v2.json").replace("\r\n", "\n");
+    assert_eq!(bytes(&r), expected.as_bytes());
+    assert_eq!(
+        store::serialize(&store::parse(Path::new("registry.json"), expected.as_bytes()).unwrap())
+            .unwrap(),
+        expected.as_bytes()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn provided_handle_is_verified_without_reopening_diagnostic_path() {
+    let (t, _) = fixture();
+    let path = t.path().join("original");
+    fs::write(&path, b"synthetic metadata").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let file = fs::File::open(&path).unwrap();
+    let original = file.metadata().unwrap();
+    fs::rename(&path, t.path().join("moved")).unwrap();
+    fs::write(&path, b"different unsafe file").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let checked =
+        crate::platform::verify_opened(file, &path, crate::platform::ObjectKind::File).unwrap();
+    assert_eq!(
+        checked.identity,
+        crate::platform::FileIdentity::Unix {
+            dev: original.dev(),
+            ino: original.ino()
+        }
+    );
+    let unsafe_file = fs::File::open(&path).unwrap();
+    assert!(matches!(
+        crate::platform::verify_opened(
+            unsafe_file,
+            &t.path().join("unused-diagnostic"),
+            crate::platform::ObjectKind::File
+        ),
+        Err(Error::ManagedMode {
+            mode: 0o644,
+            directory: false,
+            ..
+        })
+    ));
 }

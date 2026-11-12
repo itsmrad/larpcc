@@ -150,7 +150,7 @@ fn registry_fixtures_preserved_on_failure() {
                         assert_eq!(
                             err,
                             format!(
-                                "error: registry {} uses schema version 2; this Larp CC supports version 1\nhint: upgrade Larp CC; the file was not modified\n",
+                                "error: registry {} uses schema version 3; this Larp CC supports version 2\nhint: upgrade Larp CC; the file was not modified\n",
                                 f.root.join("registry.json").display()
                             )
                         );
@@ -178,7 +178,7 @@ fn concurrent_mutations_and_readers() {
             .collect();
         let mut successes = 0;
         for child in children {
-            let result = child.wait_with_output().unwrap();
+            let result = wait_output(child).unwrap();
             match result.status.code() {
                 Some(0) => {
                     successes += 1;
@@ -230,7 +230,7 @@ fn concurrent_mutations_and_readers() {
         f.profile(&["list"], 0);
     }
     for child in children {
-        let out = child.wait_with_output().unwrap();
+        let out = wait_output(child).unwrap();
         assert!(out.status.success(), "{}", stderr(&out));
     }
 }
@@ -254,7 +254,7 @@ fn waits_for_writer_lock() {
     thread::sleep(Duration::from_millis(500));
     assert!(child.try_wait().unwrap().is_none());
     file.unlock().unwrap();
-    let out = child.wait_with_output().unwrap();
+    let out = wait_output(child).unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(start.elapsed() >= Duration::from_millis(500));
     assert!(stdout(&out).starts_with("Added profile b (codex, id 2)."));
@@ -301,6 +301,7 @@ fn unicode_root_and_invalid_roots() {
     let mut f = Fixture::new();
     let parent = f.temp.path().join("dir with space");
     fs::create_dir(&parent).unwrap();
+    private(&parent, true);
     f.root = parent.join("ünï cödé");
     lifecycle(&f);
     for path in ["relative".into(), f.temp.path().join("..\u{2f}bad")] {
@@ -338,6 +339,9 @@ fn default_root_resolution() {
     #[cfg(windows)]
     let root = f.temp.path().join("local").join("larpcc");
     fs::create_dir_all(root.parent().unwrap()).unwrap();
+    private(root.parent().unwrap(), true);
+    #[cfg(target_os = "macos")]
+    private(root.parent().unwrap().parent().unwrap(), true);
     let out = f
         .command(&["cc", "profile", "add", "a", "--provider", "codex"])
         .env_remove("LARPCC_HOME")

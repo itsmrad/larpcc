@@ -776,6 +776,7 @@ pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
         },
     };
     // SAFETY: removes exactly our registered static handler, after known child completion/cleanup.
+    // Preserve a primary spawn/wait error; standalone removal failure is reported below.
     let removed = set_handler(false);
     if !removed && result.is_ok() {
         return Err(Error::Console {

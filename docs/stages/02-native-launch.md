@@ -204,7 +204,7 @@ Every new bind, provider-list row, and synthetic run validates again in this ord
 
 Stored path is kept for future self-update lookup and printed in bindings. `LaunchTarget` carries
 both stored and resolved path plus validated identity. Execute the **resolved** path, never the
-stored symlink spelling. Unix explicitly sets argv0 to stored path using `CommandExt::arg0`; Windows
+stored symlink spelling. Unix explicitly supplies stored path as argv0 to `execve`; Windows
 argv0 follows std's resolved executable command-line construction, no stored-argv0 promise. Unix
 permits symlinked installation paths only after validating every link's containing ancestry, chain
 and final ancestry (bounded 40 hops; loop/error refuses); symlink owner euid/root and parent
@@ -431,7 +431,7 @@ New error messages/hints (all stderr `error:` then optional `hint:`, final newli
 | ArgConflict {label} | `unsupported launch argument: <fixed label>` | `the argument form has not been admitted by the launch policy` / 1 |
 | Launch {path,source} | `cannot launch <p>: <escaped IO source>` | `check the native executable and its access permissions` / 1 |
 | Console {action,source} | `cannot <fixed console action>: <escaped IO source>` | none / 1 |
-| Wait {source} | `cannot wait for provider: <escaped IO source>` | `the direct child may require manual cleanup` / 1 |
+| Wait {source,cleanup_failed} | `cannot wait for provider: <escaped IO source>` | `the direct child may require manual cleanup`; when cleanup_failed, append `; cleanup failed; the direct child may still be running` / 1 |
 
 Approved pre-seed API amendment: `Error::ManagedMode { path: PathBuf, mode: u32,
 directory: bool }` carries the observed Unix permission/special bits (`metadata.mode() & 0o7777`)
@@ -455,14 +455,20 @@ seed acceptance.
 
 ## 7. Native execution and platform ABI
 
-Unix uses `std::os::unix::process::CommandExt::{arg0,exec}`, no shell and no resident Larp
-supervisor. stdin/out/err inherited, no cwd setter. Registry locks and inspection descriptors are
-dropped before exec; other private descriptors CLOEXEC. Exec returning is Launch error. Do not
-assert blanket std signal-mask/disposition resets: native fake reports the actual inherited mask and
-dispositions (including SIGPIPE) against a direct native launch on each Unix runner. Freeze/document
-measured expectations; caught-handler reset versus ignored dispositions must follow the selected
-API/OS behavior. Terminal/session/process-group inheritance is measured, not synthesized. No shell
-fallback for ENOEXEC.
+Approved implementation amendment: Unix uses a private `platform/unix.rs` helper calling
+`libc::execve` on the validated resolved absolute path, with stored-path argv0 and exact native
+OsString bytes. Owned CString argv/environment vectors and live null-terminated pointer arrays
+are built and validated before signal changes; embedded NUL is a Launch error. The environment
+inherits all unrelated variables and applies only the selected home delta, without process-global
+environment mutation. No PATH lookup, execvp, shell fallback or resident Larp supervisor is used.
+This replaces the prescribed CommandExt API because pinned Rust 1.89 uses execvp (including
+ENOEXEC shell fallback) and temporarily assigns environ. The supported std direct-launch SIGPIPE
+default is matched explicitly; mask and other dispositions remain inherited. Capture errno
+immediately on exec failure and restore the captured SIGPIPE disposition where it changed.
+Native signal, PID, PTY/job-control, failed-exec environment/signal preservation and harmless
+ENOEXEC marker regressions are required. CWD/session/group and stdin/out/err remain inherited;
+all registry locks/inspection descriptors are dropped before replacement. No identity-pinned
+execution claim is added.
 
 Windows builds `Command` with resolved executable and OsString args, inherited stdio/console, no
 shell or new process group in production. Arg fidelity is promised only for tested CRT-compatible
@@ -474,7 +480,7 @@ children. Handler registration failure aborts without child. Spawn failure unreg
 returns Launch. On successful spawn wait for direct child; on normal completion unregister then exit
 with full u32 status. Unregister failure yields Console error rather than success (child already
 exited). On wait failure attempt `Child::kill`, then bounded polling/reap for 2 seconds, unregister,
-return original Wait error; append fixed cleanup-failed hint if still live. Do not silently report 0
+return the original Wait source in `Error::Wait { source, cleanup_failed }`; set cleanup_failed when bounded cleanup cannot confirm termination/reap (live or unknown), even if kill/reap/unregister also fails. Never wrap or parse source text for cleanup state. The false hint is unchanged; true appends the fixed cleanup-failed suffix. Do not silently report 0
 or discard Child on that path. No job/tree kill: only the known direct child is cleanup target.
 No-console operation registers handler if supported; API failure refuses rather than ignoring it.
 Close/Logoff/Shutdown are delegated to Windows default handler behavior; actual window closure
@@ -482,7 +488,7 @@ remains unverified without its separate native test. Killing Larp may leave a ch
 tree-cleanup promise. A provider daemon is not a Larp supervisor.
 
 Dependencies: existing std/clap/serde/json/libc/tempfile retained; exact target-only `windows-sys
-=0.61.2` with `Win32_Foundation`, `Win32_Security`, `Win32_Security_Authorization`,
+=0.61.2` with `Win32_Foundation`, **`Win32_Globalization`** (approved native ordinal containment), `Win32_Security`, `Win32_Security_Authorization`,
 `Win32_Storage_FileSystem`, `Win32_System_Console`, `Win32_System_Threading`,
 **`Win32_System_SystemServices`**; test ConPTY uses `Win32_System_Pipes`. No additional framework.
 Static ABI inventory and provenance are in `windows-security-api-evidence.md` (archive SHA256
@@ -546,6 +552,9 @@ pub struct CheckedObject { pub file: std::fs::File, pub identity: FileIdentity }
 pub struct AnchoredPath { pub ancestors: Vec<CheckedObject> }
 pub fn anchor(path: &Path) -> Result<AnchoredPath, Error>; // existing parent chain
 pub fn inspect(path: &Path, kind: ObjectKind) -> Result<Option<CheckedObject>, Error>;
+pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error>; // pure native component containment
+pub fn verify_opened(file: std::fs::File, path: &Path, kind: ObjectKind)
+    -> Result<CheckedObject, Error>; // validates provided handle, never reopens diagnostic path
 pub fn inspect_home(path: &Path) -> Result<DirStatus, Error>;
 pub fn create_file(path: &Path) -> Result<CheckedObject, Error>; // create-new protected
 pub fn create_directory(path: &Path) -> Result<CheckedObject, Error>; // nonrecursive
@@ -554,6 +563,22 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
 ```
 
 Derive Clone/Debug/PartialEq/Eq on identity and suitable data structs, not file handles.
+Approved containment amendment: `contains_path` is crate-private and pure. Unix uses native
+Path::starts_with. Windows compares exact encode_wide components with maintained windows-sys
+CompareStringOrdinal, ignore-case true, without lossy strings, normalization or Unicode casing.
+Lengths are checked before i32 conversion; zero API results are errors. Component boundaries,
+prefixes and unpaired surrogates are preserved. The existing before-IO lexical-containment
+precedence and resolved containment are unchanged; no clap validator is added.
+
+Approved opened-handle amendment: `verify_opened` derives type/security/owner/identity from the
+provided File without reopening the diagnostic path or reading contents. macOS uses the supplemental
+`acl_get_fd_np(fd: c_int, kind: c_int) -> acl_t` for provided-handle ACL acquisition, checked against
+the native SDK alongside the existing link-path ABI. Callers retain verified
+parents and compare its returned identity against the inspected object before data reads/use.
+Metadata inspection remains READ_CONTROL-only on Windows; actual data/lock opens are nontruncating,
+use required access and are verified separately. Registry handles allow atomic replacement and are
+closed before rename; no-follow and no-delete parent retention are unchanged.
+
 AnchoredPath owns handles and is held by caller for the entire scoped operation; no raw HANDLE/SID
 escape. `anchor(path)` anchors parents, not leaf; `inspect` checks leaf on opened handle. On Unix
 same shape uses File handles but does not imply openat/identity-pinned execution. `inspect_home`

@@ -1,7 +1,10 @@
-#![allow(dead_code)] // Seed errors are frozen before implementation.
 use super::{DirStatus, ProfileName, Provider};
 use std::{fmt, io, path::PathBuf};
 #[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "The shared catalog includes synthetic-only and OS-specific errors, never reachable from ordinary run."
+)]
 pub enum Error {
     ManagedMode {
         path: PathBuf,
@@ -41,6 +44,7 @@ pub enum Error {
     },
     Wait {
         source: io::Error,
+        cleanup_failed: bool,
     },
     NoDataDir,
     InvalidRoot {
@@ -121,7 +125,7 @@ impl fmt::Display for Error {
                 )
             }
             Self::Console { action, source } => write!(f, "cannot {action}: {source}"),
-            Self::Wait { source } => write!(f, "cannot wait for provider: {source}"),
+            Self::Wait { source, .. } => write!(f, "cannot wait for provider: {source}"),
             Self::NoDataDir => f.write_str("cannot determine the data directory"),
             Self::InvalidRoot { path, reason } => {
                 write!(
@@ -146,7 +150,7 @@ impl fmt::Display for Error {
             }
             Self::NewerSchema { path, found } => write!(
                 f,
-                "registry {} uses schema version {found}; this Larp CC supports version 1",
+                "registry {} uses schema version {found}; this Larp CC supports version 2",
                 crate::registry::display::path(path)
             ),
             Self::NotFound { name } => write!(f, "no profile named {name}"),
@@ -194,7 +198,7 @@ impl Error {
                 "the argument form has not been admitted by the launch policy".into()
             }
             Self::Launch { .. } => "check the native executable and its access permissions".into(),
-            Self::Wait { .. } => "the direct child may require manual cleanup".into(),
+            Self::Wait {cleanup_failed,..} => if *cleanup_failed {"the direct child may require manual cleanup; cleanup failed; the direct child may still be running"} else {"the direct child may require manual cleanup"}.into(),
             Self::NoDataDir | Self::InvalidRoot { .. } => {
                 "set LARPCC_HOME to an absolute path".into()
             }
@@ -205,6 +209,10 @@ impl Error {
                 if *directory { "700" } else { "600" },
                 crate::registry::display::path(path)
             ),
+            Self::Unsafe { reason, .. } if reason == "has an extended ACL that grants access" => "remove the extended ACL manually after reviewing it".into(),
+            #[cfg(windows)]
+            Self::Unsafe { .. } => "use a private data root under trusted parents; review existing permissions manually; Larp CC will not repair or copy provider state".into(),
+            #[cfg(not(windows))]
             Self::Unsafe { .. } => "fix or move it, or set LARPCC_HOME to another directory".into(),
             Self::Corrupt { path, .. } => format!(
                 "Larp CC did not modify it; move it aside to start an empty registry (state directories under {} are not touched)",
@@ -296,6 +304,32 @@ mod stage2_fixtures {
         for (error, message, hint) in cases {
             assert_eq!(error.to_string(), message);
             assert_eq!(error.hint().as_deref(), hint);
+        }
+    }
+}
+
+#[cfg(test)]
+mod wait_fixtures {
+    use super::*;
+    #[test]
+    fn wait_source_and_cleanup_state_have_independent_rendering() {
+        for cleanup_failed in [false, true] {
+            let error = Error::Wait {
+                source: io::Error::other("synthetic wait failure"),
+                cleanup_failed,
+            };
+            assert_eq!(
+                error.to_string(),
+                "cannot wait for provider: synthetic wait failure"
+            );
+            assert_eq!(
+                error.hint().unwrap(),
+                if cleanup_failed {
+                    "the direct child may require manual cleanup; cleanup failed; the direct child may still be running"
+                } else {
+                    "the direct child may require manual cleanup"
+                }
+            );
         }
     }
 }

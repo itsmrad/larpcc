@@ -7,3 +7,14 @@ pub fn text(value: &str) -> String {
 pub fn path(value: &Path) -> String {
     text(&value.to_string_lossy())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn controls_and_bidi_escape_while_other_unicode_is_preserved() {
+        assert_eq!(
+            super::text("é\n\u{202e}\u{200b}\x1b"),
+            "é\\n\\u{202e}\\u{200b}\\u{1b}"
+        );
+    }
+}

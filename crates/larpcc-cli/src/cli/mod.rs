@@ -134,12 +134,14 @@ pub fn run() -> ExitCode {
         CcAction::Run { .. } => return operational_error(Error::QualificationPending),
         CcAction::Provider { command } => {
             return match Registry::locate().and_then(|r| match command {
-                ProviderAction::List => r.bindings().map(|_| String::new()),
+                ProviderAction::List => r.bindings().map(render::bindings),
                 ProviderAction::Bind {
                     provider,
                     executable,
                     replace,
-                } => r.bind(provider, executable, replace).map(|_| String::new()),
+                } => r
+                    .bind(provider, executable.clone(), replace)
+                    .map(|outcome| render::bound(provider, &executable, outcome)),
             }) {
                 Ok(output) => write_output(
                     output.as_bytes(),
@@ -219,11 +221,19 @@ fn execute(command: ProfileAction, registry: &Registry) -> Result<String, Error>
 
 fn operational_error(error: Error) -> ExitCode {
     let mut stderr = io::stderr().lock();
-    let _ = writeln!(stderr, "error: {error}");
+    let _ = writeln!(
+        stderr,
+        "error: {}",
+        crate::registry::display::text(&error.to_string())
+    );
     if let Some(hint) = error.hint() {
-        let _ = writeln!(stderr, "hint: {hint}");
+        let _ = writeln!(stderr, "hint: {}", crate::registry::display::text(&hint));
     }
-    ExitCode::FAILURE
+    if matches!(error, Error::AlreadyBound { .. }) {
+        ExitCode::from(2)
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 fn write_output(output: &[u8], stdout: &mut impl Write, stderr: &mut impl Write) -> ExitCode {

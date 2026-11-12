@@ -1,5 +1,5 @@
-// Seed-only allowances: implementations replace explicit refusal stubs after S.
-#![allow(dead_code, unused_imports)]
+// Windows implementation still belongs to its separate owner; remove this seed-only allowance at integration.
+#![cfg_attr(windows, allow(dead_code, unused_imports))]
 use crate::registry::{DirStatus, Error};
 use std::{
     fs::File,
@@ -24,6 +24,7 @@ pub struct CheckedObject {
 pub struct AnchoredPath {
     pub ancestors: Vec<CheckedObject>,
 }
+#[cfg(windows)]
 pub fn unavailable(path: &Path) -> Error {
     Error::Unsafe {
         path: path.into(),
