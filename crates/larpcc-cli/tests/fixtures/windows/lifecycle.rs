@@ -152,12 +152,13 @@ fn entry() {
         "faults" => {
             FAULT.with(|f| f.set(1));
             assert!(matches!(
-                spawn_wait(&plan("exit", &root)),
+                spawn_wait(&plan("sleep", &root)),
                 Err(Error::Console {
                     action: "register console handler",
                     ..
                 })
             ));
+            assert!(!root.join("pid").exists());
             FAULT.with(|f| f.set(0));
             let mut missing = plan("exit", &root);
             missing.executable = root.join("missing.exe");
@@ -200,6 +201,14 @@ fn entry() {
                     0
                 );
                 assert_ne!(code, 259, "failed-wait cleanup left direct child running");
+            }
+            FAULT.with(|f| f.set(4));
+            match spawn_wait(&plan("sleep", &root)) {
+                Err(Error::Wait {
+                    source,
+                    cleanup_failed: true,
+                }) => assert_eq!(source.to_string(), "injected wait failure"),
+                other => panic!("cleanup failure must preserve original wait error: {other:?}"),
             }
             FAULT.with(|f| f.set(0));
             // Remove handler left deliberately registered by failed unregistration seam.

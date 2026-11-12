@@ -538,42 +538,49 @@ fn resolved(file: &File, path: &Path) -> Result<PathBuf, Error> {
     drive_root(&result)?;
     Ok(result)
 }
-fn inside(path: &Path, root: &Path) -> Option<bool> {
-    // Compare components, not string prefixes. Ordinal Unicode folding is done by Windows.
-    let mut p = path.components();
+pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error> {
+    drive_root(path)?;
+    drive_root(root)?;
+    let units = |component: Component<'_>| -> Vec<u16> {
+        match component {
+            Component::Prefix(p) => match p.kind() {
+                Prefix::Disk(d) | Prefix::VerbatimDisk(d) => vec![u16::from(d), u16::from(b':')],
+                _ => p.as_os_str().encode_wide().collect(),
+            },
+            c => c.as_os_str().encode_wide().collect(),
+        }
+    };
+    let mut parts = path.components();
     for r in root.components() {
-        let Some(c) = p.next() else {
-            return Some(false);
+        let Some(p) = parts.next() else {
+            return Ok(false);
         };
-        if !ordinal_equal(c.as_os_str(), r.as_os_str())? {
-            return Some(false);
+        if !ordinal_units(&units(p), &units(r)).map_err(|source| Error::Io {
+            action: "compare native path",
+            path: path.into(),
+            source,
+        })? {
+            return Ok(false);
         }
     }
-    Some(true)
+    Ok(true)
 }
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn CompareStringOrdinal(
-        a: *const u16,
-        a_len: i32,
-        b: *const u16,
-        b_len: i32,
-        ignore_case: i32,
-    ) -> i32;
-}
-fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> Option<bool> {
-    let a: Vec<_> = a.encode_wide().collect();
-    let b: Vec<_> = b.encode_wide().collect();
-    let (Ok(an), Ok(bn)) = (i32::try_from(a.len()), i32::try_from(b.len())) else {
-        return None;
-    };
-    // SAFETY: exact counted UTF-16 buffers; Windows ordinal comparison preserves native spelling.
+fn ordinal_units(a: &[u16], b: &[u16]) -> io::Result<bool> {
+    use windows_sys::Win32::Globalization::CompareStringOrdinal;
+    let an = i32::try_from(a.len()).map_err(|_| io::Error::other("native path is too long"))?;
+    let bn = i32::try_from(b.len()).map_err(|_| io::Error::other("native path is too long"))?;
+    // SAFETY: exact counted native UTF-16 buffers, checked i32 lengths, no normalization/loss.
     match unsafe { CompareStringOrdinal(a.as_ptr(), an, b.as_ptr(), bn, 1) } {
-        1 | 3 => Some(false),
-        2 => Some(true),
-        _ => None,
+        1 | 3 => Ok(false),
+        2 => Ok(true),
+        _ => Err(io::Error::last_os_error()),
     }
+}
+fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> io::Result<bool> {
+    ordinal_units(
+        &a.encode_wide().collect::<Vec<_>>(),
+        &b.encode_wide().collect::<Vec<_>>(),
+    )
 }
 
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
@@ -618,13 +625,13 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
                 }
             }
         };
-    if inside(&target, &canonical_root).unwrap_or(true) {
+    if contains_path(&target, &canonical_root)? {
         return Err(unsafe_path(path, "is inside the Larp CC data directory"));
     }
     for p in [path, target.as_path()] {
         if !p
             .extension()
-            .is_some_and(|x| ordinal_equal(x, std::ffi::OsStr::new("exe")) == Some(true))
+            .is_some_and(|x| ordinal_equal(x, std::ffi::OsStr::new("exe")).unwrap_or(false))
         {
             return Err(unsafe_path(path, "must end in .exe"));
         }
@@ -700,11 +707,19 @@ fn set_handler(add: bool) -> bool {
 #[cfg(feature = "synthetic-launch")]
 fn wait_child(child: &mut std::process::Child) -> io::Result<std::process::ExitStatus> {
     #[cfg(test)]
-    if FAULT.with(|f| f.get() == 3) {
+    if FAULT.with(|f| matches!(f.get(), 3 | 4)) {
         FAILED_CHILD.with(|p| p.set(child.id()));
         return Err(io::Error::other("injected wait failure"));
     }
     child.wait()
+}
+#[cfg(feature = "synthetic-launch")]
+fn poll_cleanup(child: &mut std::process::Child) -> io::Result<Option<std::process::ExitStatus>> {
+    #[cfg(test)]
+    if FAULT.with(|f| f.get() == 4) {
+        return Err(io::Error::other("injected cleanup query failure"));
+    }
+    child.try_wait()
 }
 #[cfg(feature = "synthetic-launch")]
 pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
@@ -740,24 +755,22 @@ pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
                 .map(|code| code as u32)
                 .ok_or_else(|| Error::Wait {
                     source: io::Error::other("child status is unavailable"),
+                    cleanup_failed: false,
                 }),
             Err(source) => {
                 let _ = child.kill();
                 let deadline = Instant::now() + Duration::from_secs(2);
                 let mut reaped = false;
                 while Instant::now() < deadline {
-                    if matches!(child.try_wait(), Ok(Some(_))) {
+                    if matches!(poll_cleanup(&mut child), Ok(Some(_))) {
                         reaped = true;
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(Error::Wait {
-                    source: if reaped {
-                        source
-                    } else {
-                        io::Error::new(source.kind(), "wait failed; direct-child cleanup failed")
-                    },
+                    source,
+                    cleanup_failed: !reaped,
                 })
             }
         },
@@ -1283,17 +1296,12 @@ mod tests {
     }
     #[test]
     fn w06_ordinal_component_boundaries_and_native_surrogates() {
-        assert_eq!(
-            inside(Path::new(r"C:\DATA\child"), Path::new(r"c:\data")),
-            Some(true)
-        );
-        assert_eq!(
-            inside(Path::new(r"C:\database"), Path::new(r"C:\data")),
-            Some(false)
-        );
+        assert!(contains_path(Path::new(r"C:\DATA\child"), Path::new(r"c:\data")).unwrap());
+        assert!(!contains_path(Path::new(r"C:\database"), Path::new(r"C:\data")).unwrap());
+        assert!(contains_path(Path::new(r"\\?\C:\DATA\child"), Path::new(r"c:\data")).unwrap());
         let a = OsString::from_wide(&[0xd800]);
         let b = OsString::from_wide(&[0xd801]);
-        assert_eq!(ordinal_equal(&a, &b), Some(false));
+        assert!(!ordinal_equal(&a, &b).unwrap());
         assert!(wide(Path::new(&OsString::from_wide(&[0x43, 0, 0x44]))).is_err());
     }
 }
