@@ -175,6 +175,32 @@ fn entry() {
                 spawn_wait(&plan("sleep", &root)),
                 Err(Error::Wait { .. })
             ));
+            let pid = FAILED_CHILD.with(|p| p.get());
+            assert_ne!(pid, 0);
+            // SAFETY: query only the direct child ID recorded by the failed wait seam; never terminate by PID.
+            let h = unsafe {
+                windows_sys::Win32::System::Threading::OpenProcess(
+                    windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
+                    0,
+                    pid,
+                )
+            };
+            if !h.is_null() {
+                // SAFETY: successful OpenProcess transfers ownership.
+                let h = unsafe { OwnedHandle::from_raw_handle(h) };
+                let mut code = 0;
+                // SAFETY: live process handle and valid status output.
+                assert_ne!(
+                    unsafe {
+                        windows_sys::Win32::System::Threading::GetExitCodeProcess(
+                            h.as_raw_handle(),
+                            &mut code,
+                        )
+                    },
+                    0
+                );
+                assert_ne!(code, 259, "failed-wait cleanup left direct child running");
+            }
             FAULT.with(|f| f.set(0));
             // Remove handler left deliberately registered by failed unregistration seam.
             assert!(set_handler(false));

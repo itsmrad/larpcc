@@ -676,7 +676,10 @@ unsafe extern "system" fn console_handler(event: u32) -> i32 {
     i32::from(event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
 }
 #[cfg(all(test, feature = "synthetic-launch"))]
-thread_local! { static FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+thread_local! {
+    static FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static FAILED_CHILD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 #[cfg(feature = "synthetic-launch")]
 fn set_handler(add: bool) -> bool {
     #[cfg(test)]
@@ -695,6 +698,7 @@ fn set_handler(add: bool) -> bool {
 fn wait_child(child: &mut std::process::Child) -> io::Result<std::process::ExitStatus> {
     #[cfg(test)]
     if FAULT.with(|f| f.get() == 3) {
+        FAILED_CHILD.with(|p| p.set(child.id()));
         return Err(io::Error::other("injected wait failure"));
     }
     child.wait()
@@ -1055,6 +1059,53 @@ mod tests {
         assert!(anchor(&hostile.join("leaf")).is_err());
         assert!(create_directory(&hostile).is_err());
         assert!(inspect(&hostile, ObjectKind::Directory).is_err());
+    }
+    #[test]
+    fn w01_opened_verifier_checks_actual_handle_without_reopening_name() {
+        let temp = fixture();
+        let root = temp.path().join("private");
+        drop(create_directory(&root).unwrap());
+        let path = root.join("data");
+        let old = create_file(&path).unwrap();
+        let expected = old.identity.clone();
+        drop(old);
+        let old = open(
+            &path,
+            READ_CONTROL | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        )
+        .unwrap()
+        .unwrap();
+        let _parents = anchor(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let newer = create_file(&path).unwrap();
+        assert_ne!(newer.identity, expected);
+        assert_eq!(
+            verify_opened(old, &path, ObjectKind::File)
+                .unwrap()
+                .identity,
+            expected
+        );
+        drop(newer);
+        let name = wide(&path).unwrap();
+        // SAFETY: existing fixture only, noninheritable exclusive open to provoke sharing failure.
+        let h = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                READ_CONTROL | FILE_READ_ATTRIBUTES,
+                0,
+                null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+                null_mut(),
+            )
+        };
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        // SAFETY: successful exclusive open transfers handle ownership.
+        let exclusive = unsafe { File::from_raw_handle(h) };
+        assert!(inspect(&path, ObjectKind::File).is_err());
+        drop(exclusive);
+        assert!(inspect(&path, ObjectKind::File).unwrap().is_some());
     }
     #[test]
     fn w06_executable_magic_identity_hardlink_self_and_ancestry() {
