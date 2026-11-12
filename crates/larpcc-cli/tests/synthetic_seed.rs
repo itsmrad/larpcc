@@ -12,9 +12,6 @@ fn synthetic_driver_refuses_missing_profile() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    #[cfg(unix)]
     assert!(stderr(&out).contains("no profile named work"));
-    #[cfg(windows)]
-    assert!(stderr(&out).contains("platform safety validation is unavailable"));
     assert!(!f.root.exists());
 }

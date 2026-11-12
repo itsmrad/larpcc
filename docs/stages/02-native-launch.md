@@ -283,10 +283,16 @@ Larp access remains an operational error. No general effective-access evaluator 
 Reparse flag/type is checked on every component, not merely the final leaf.
 
 Walk components in order using full paths from that verified anchor. Open
-each existing directory with `CreateFileW(OPEN_EXISTING, READ_CONTROL | FILE_READ_ATTRIBUTES,
+each existing directory with `CreateFileW(OPEN_EXISTING, READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
 FILE_SHARE_READ | FILE_SHARE_WRITE, ... BACKUP_SEMANTICS | OPEN_REPARSE_POINT)`, non-inheritable,
 **no FILE_SHARE_DELETE**, then query actual opened type, tag, owner, ACL and identity; retain those
-handles until the relevant transaction/validation ends. A retained preceding ancestor cannot be
+handles until the relevant transaction/validation ends. The added FILE_LIST_DIRECTORY access applies only to ancestor PIN opens, with no enumeration or
+content reads; metadata inspection remains READ_CONTROL/access-only. Shared store::fixed retains
+actual anchor guards (not just metadata inspect handles) through reads/transactions, including
+newly created profiles parents. A syntactic `root/profiles/1` anchor excludes its leaf and never
+queries profile 1; it retains existing root when profiles is missing. Native scope tests must
+prove these held guards prevent root/profiles rename through the real scoped call sites.
+A retained preceding ancestor cannot be
 renamed/deleted through a compatible Windows open. Sharing conflict, unsupported queries, any
 reparse tag, unresolved namespace, or foreign-write control refuses before registry
 consumption/creation. Check next component only after anchoring its parent. Do not rely on a name
@@ -604,7 +610,7 @@ Two branches suffice. Core owns all shared code under
 manifests/lock, non-Windows tests/support drivers/shared fixtures, CI, README. Windows owns only
 `crates/larpcc-cli/src/platform/windows.rs`, `crates/larpcc-cli/tests/windows_*.rs`,
 `crates/larpcc-cli/tests/fixtures/windows/**`. Lead owns plan changes. No concurrent edits to shared
-files; Windows requests a shared change from core and waits/rebases.
+files; Windows requests a shared change from core and waits for a lead-directed snapshot merge.
 
 Seed S, first core commit from M2, includes manifests/features, concrete platform surface, fixed
 errors/fixtures, driver/fake support declarations, ordinary refusal wired **for real**, and

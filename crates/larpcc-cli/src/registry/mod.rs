@@ -3,7 +3,7 @@ mod error;
 mod model;
 mod paths;
 mod store;
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod tests;
 pub use error::{Error, NameError};
 #[cfg(feature = "synthetic-launch")]

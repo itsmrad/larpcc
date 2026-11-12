@@ -1,16 +1,24 @@
-#![cfg(unix)]
 mod common;
 use common::*;
-use std::{fs, os::unix::fs::PermissionsExt, process::Stdio};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::{fs, process::Stdio};
 #[test]
 fn binders_serialize_and_noop_does_not_revalidate_or_increment() {
     let f = Fixture::new();
-    let native = f.temp.path().join("native");
+    let native = f.temp.path().join(if cfg!(windows) {
+        "native.exe"
+    } else {
+        "native"
+    });
     #[cfg(target_os = "macos")]
     let magic = [0xcf, 0xfa, 0xed, 0xfe];
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(unix, not(target_os = "macos")))]
     let magic = *b"\x7fELF";
-    fs::write(&native, magic).unwrap();
+    #[cfg(windows)]
+    let magic = *b"MZ\0\0";
+    create_file(&native, &magic);
+    #[cfg(unix)]
     fs::set_permissions(&native, fs::Permissions::from_mode(0o700)).unwrap();
     let path = native.to_str().unwrap();
     let children = (0..8)
@@ -41,7 +49,21 @@ fn binders_serialize_and_noop_does_not_revalidate_or_increment() {
         format!("claude is already bound to {path}.\n")
     );
     assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), before);
-    let output = f.run(&["cc", "provider", "bind", "claude", "/missing-native"], 2);
+    let missing = f.temp.path().join(if cfg!(windows) {
+        "missing-native.exe"
+    } else {
+        "missing-native"
+    });
+    let output = f.run(
+        &[
+            "cc",
+            "provider",
+            "bind",
+            "claude",
+            missing.to_str().unwrap(),
+        ],
+        2,
+    );
     assert!(stderr(&output).contains("without --replace"));
     let rows = stdout(&f.run(&["cc", "provider", "list"], 0));
     assert!(rows.contains("invalid: does not exist"));
@@ -49,6 +71,7 @@ fn binders_serialize_and_noop_does_not_revalidate_or_increment() {
     assert!(rows.contains("unbound"));
 }
 
+#[cfg(unix)]
 #[test]
 fn control_paths_are_escaped_and_lexical_failures_do_not_create_root() {
     let f = Fixture::new();
@@ -74,6 +97,7 @@ fn control_paths_are_escaped_and_lexical_failures_do_not_create_root() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn self_hardlink_and_bounded_installation_link_chain() {
     let f = Fixture::new();
