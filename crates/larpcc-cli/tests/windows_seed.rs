@@ -2,10 +2,18 @@
 mod common;
 use common::*;
 #[test]
-fn seed_metadata_explicitly_refuses_before_creation() {
+fn ordinary_execution_remains_closed_even_with_synthetic_markers() {
     let f = Fixture::new();
-    for args in [vec!["list"], vec!["add", "work", "--provider", "claude"]] {
-        assert!(stderr(&f.profile(&args, 1)).contains("platform safety validation is unavailable"));
+    for provider in ["claude", "codex"] {
+        let mut command = f.command(&["cc", "run", provider, "--", "prompt"]);
+        command
+            .env("LARPCC_FAKE_MODE", "exit")
+            .env("LARPCC_FAKE_EXIT", "0");
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("provider launch is disabled pending stage 3 qualification")
+        );
     }
     assert!(!f.root.exists());
 }
