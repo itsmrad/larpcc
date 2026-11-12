@@ -1222,3 +1222,70 @@ fn fixed_guards_pin_real_root_and_profiles_without_querying_sentinel_leaf() {
     fs::rename(root, &moved_root).unwrap();
     fs::rename(&moved_root, root).unwrap();
 }
+
+#[test]
+fn atomic_replacement_reads_one_complete_validated_snapshot() {
+    let (_temp, registry) = fixture();
+    initialize(&registry);
+    let replacement = registry.root().join("replacement");
+    let mut data = store::load(registry.root()).unwrap();
+    data.revision += 1;
+    let expected = data.revision;
+    fixture_file(&replacement, &store::serialize(&data).unwrap());
+    let mut calls = 0;
+    let result = store::load_with(registry.root(), |path| {
+        calls += 1;
+        if calls == 1 {
+            fs::rename(&replacement, path).unwrap();
+        }
+    })
+    .unwrap();
+    assert_eq!(result.revision, expected);
+    assert_eq!(calls, 2);
+}
+#[test]
+fn atomic_replacement_churn_is_bounded_without_consuming_invalid_bytes() {
+    let (_temp, registry) = fixture();
+    initialize(&registry);
+    let replacement = registry.root().join("replacement");
+    let mut calls = 0;
+    let error = store::load_with(registry.root(), |path| {
+        calls += 1;
+        fixture_file(&replacement, b"invalid encoding must never be read");
+        fs::rename(&replacement, path).unwrap();
+    })
+    .err()
+    .unwrap();
+    assert_eq!(calls, 32);
+    assert!(
+        matches!(error, Error::Unsafe {reason,..} if reason == "filesystem identity cannot be verified")
+    );
+}
+#[cfg(unix)]
+#[test]
+fn atomic_unsafe_replacement_refuses_without_retry() {
+    for symlink_replacement in [false, true] {
+        let (_temp, registry) = fixture();
+        initialize(&registry);
+        let mut calls = 0;
+        let replacement = registry.root().join("replacement");
+        let error = store::load_with(registry.root(), |path| {
+            calls += 1;
+            if symlink_replacement {
+                symlink("missing", &replacement).unwrap();
+            } else {
+                fixture_file(&replacement, b"invalid encoding");
+                fs::set_permissions(&replacement, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            fs::rename(&replacement, path).unwrap();
+        })
+        .err()
+        .unwrap();
+        assert_eq!(calls, 1);
+        if symlink_replacement {
+            assert!(matches!(error, Error::Io { .. }));
+        } else {
+            assert!(matches!(error, Error::ManagedMode { mode: 0o644, .. }));
+        }
+    }
+}

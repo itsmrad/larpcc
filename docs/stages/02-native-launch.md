@@ -305,7 +305,14 @@ identity/type/security before reading. Read a single handle's complete old/new r
 mutation retain ancestor/root/profiles/lock handles without delete-sharing; registry/temp data
 handles can be closed before replacement. Never retain a no-delete registry handle across rename.
 Namespace control comes from retained safe parents, not the advisory lock. Identity mismatch during
-opening aborts. Windows rename sharing retries remain bounded as M1. Tests must verify no-delete
+opening aborts that acquisition without reading bytes. Lead-approved concurrency correction:
+only managed replaceable `registry.json` and optional `registry.json.tmp` acquisitions may retry
+an internally typed namespace identity change, at most 32 fresh attempts per acquisition. Every
+attempt repeats type/owner/mode/ACL/volume/no-follow and opened-handle identity checks under retained
+safe parents. Exhaustion retains `filesystem identity cannot be verified`. Unsafe observations,
+permissions, other I/O, parse and size errors never retry. Directory pins, locks, homes and
+provider executables retain immediate identity-mismatch refusal. Optional temp disappearance
+retains its existing missing-object semantics; no bytes are consumed before a matching validation. Windows rename sharing retries remain bounded as M1. Tests must verify no-delete
 ancestor behavior and registry replacement compatibility; unavailable semantics on a
 runner/filesystem fail the corresponding gate, not inferred safe.
 
