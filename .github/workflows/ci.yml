@@ -49,6 +49,7 @@ jobs:
       - run: cargo +stable build --release --bin larp --locked
       - run: cargo +stable clippy --workspace --all-targets --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked -- -D warnings
       - run: cargo +stable test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
+      - run: cargo +stable test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
 
   msrv:
     timeout-minutes: 20
@@ -62,3 +63,4 @@ jobs:
       - run: rustup toolchain install 1.89 --profile minimal
       - run: cargo +1.89 test --workspace --locked
       - run: cargo +1.89 test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
+      - run: cargo +1.89 test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked

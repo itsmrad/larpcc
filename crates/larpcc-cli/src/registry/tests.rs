@@ -35,22 +35,35 @@ pub(super) fn phase(action: &str, path: &Path) -> Result<(), Error> {
 fn name(s: &str) -> ProfileName {
     ProfileName::parse(s).unwrap()
 }
-fn fixture() -> (tempfile::TempDir, Registry) {
-    let mut builder = tempfile::Builder::new();
+#[cfg(windows)]
+#[path = "../../tests/fixtures/windows/private.rs"]
+mod windows_private;
+#[cfg(windows)]
+type FixtureTemp = windows_private::PrivateTempDir;
+#[cfg(unix)]
+type FixtureTemp = tempfile::TempDir;
+fn fixture() -> (FixtureTemp, Registry) {
+    let parent = std::env::var_os("LARPCC_TEST_PARENT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    #[cfg(unix)]
+    let temp = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(parent)
+        .unwrap();
+    #[cfg(windows)]
+    let temp = windows_private::tempdir(&parent).unwrap();
+    let registry = Registry::at(temp.path().join("root")).unwrap();
+    (temp, registry)
+}
+fn fixture_file(path: &Path, bytes: &[u8]) {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        builder.permissions(fs::Permissions::from_mode(0o700));
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
-    let temp = builder
-        .tempdir_in(
-            std::env::var_os("LARPCC_TEST_PARENT")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
-        )
-        .unwrap();
-    let r = Registry::at(temp.path().join("root")).unwrap();
-    (temp, r)
+    #[cfg(windows)]
+    windows_private::create_file(path, bytes).unwrap();
 }
 fn add(r: &Registry, s: &str) -> ProfileEntry {
     r.add(name(s), Provider::Claude).unwrap()
@@ -283,7 +296,7 @@ fn r09_orphan() {
     paths::mkdir(r.root()).unwrap();
     paths::mkdir(&r.root().join("profiles")).unwrap();
     paths::mkdir(&r.root().join("profiles/1")).unwrap();
-    fs::write(r.root().join("profiles/1/keep"), b"unchanged").unwrap();
+    fixture_file(&r.root().join("profiles/1/keep"), b"unchanged");
     let before = snapshot(&r.root().join("profiles/1"));
     assert_eq!(add(&r, "a").profile.id.get(), 2);
     assert_eq!(before, snapshot(&r.root().join("profiles/1")));
@@ -293,8 +306,7 @@ fn r10_stale_temp() {
     let (t, r) = fixture();
     initialize(&r);
     let temp = r.root().join("registry.json.tmp");
-    fs::write(&temp, b"garbage").unwrap();
-    fs::set_permissions(&temp, fs::Permissions::from_mode(0o600)).unwrap();
+    fixture_file(&temp, b"garbage");
     add(&r, "b");
     assert!(!temp.exists());
     #[cfg(unix)]
@@ -367,12 +379,19 @@ fn r11_unsafe_paths() {
 }
 #[test]
 fn r12_status() {
-    for kind in ["missing", "file", "mode", "symlink"] {
+    for kind in [
+        "missing",
+        "file",
+        #[cfg(unix)]
+        "mode",
+        #[cfg(unix)]
+        "symlink",
+    ] {
         let (t, r) = fixture();
         let e = add(&r, "a");
         fs::remove_dir(&e.state_dir).unwrap();
         match kind {
-            "file" => fs::write(&e.state_dir, b"file").unwrap(),
+            "file" => fixture_file(&e.state_dir, b"file"),
             #[cfg(unix)]
             "mode" => {
                 paths::mkdir(&e.state_dir).unwrap();
@@ -416,7 +435,7 @@ fn r12_status() {
 fn r13_foreign() {
     let (_t, r) = fixture();
     paths::mkdir(r.root()).unwrap();
-    fs::write(r.root().join("notes.txt"), b"keep").unwrap();
+    fixture_file(&r.root().join("notes.txt"), b"keep");
     let before = snapshot(r.root());
     assert!(r.list().unwrap().is_empty());
     assert!(matches!(
@@ -926,7 +945,11 @@ fn extra_error_hints_and_missing_parent_guidance() {
     };
     assert_eq!(
         e.hint().as_deref(),
-        Some("fix or move it, or set LARPCC_HOME to another directory")
+        Some(if cfg!(windows) {
+            "use a private data root under trusted parents; review existing permissions manually; Larp CC will not repair or copy provider state"
+        } else {
+            "fix or move it, or set LARPCC_HOME to another directory"
+        })
     );
 }
 
@@ -1167,4 +1190,35 @@ fn provided_handle_is_verified_without_reopening_diagnostic_path() {
             ..
         })
     ));
+}
+
+#[cfg(windows)]
+#[test]
+fn fixed_guards_pin_real_root_and_profiles_without_querying_sentinel_leaf() {
+    let (temporary, registry) = fixture();
+    initialize(&registry);
+    let home = registry.root().join("profiles/1");
+    fs::remove_dir(&home).unwrap();
+    fixture_file(&home, b"synthetic non-directory sentinel leaf");
+    let root = registry.root();
+    let profiles = root.join("profiles");
+    let moved_root = temporary.path().join("moved-root");
+    let moved_profiles = root.join("moved-profiles");
+    let held = store::fixed(root).unwrap();
+    assert!(matches!(
+        fs::rename(root, &moved_root).unwrap_err().raw_os_error(),
+        Some(5 | 32)
+    ));
+    assert!(matches!(
+        fs::rename(&profiles, &moved_profiles)
+            .unwrap_err()
+            .raw_os_error(),
+        Some(5 | 32)
+    ));
+    // The same operations must succeed after dropping only these guards, excluding static ACL denial.
+    drop(held);
+    fs::rename(&profiles, &moved_profiles).unwrap();
+    fs::rename(&moved_profiles, &profiles).unwrap();
+    fs::rename(root, &moved_root).unwrap();
+    fs::rename(&moved_root, root).unwrap();
 }

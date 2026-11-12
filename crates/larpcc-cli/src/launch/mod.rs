@@ -81,13 +81,7 @@ fn arguments(args: &[OsString]) -> Result<(), Error> {
 }
 pub fn execute(plan: &LaunchPlan) -> Result<u32, Error> {
     let root = Registry::locate()?;
-    let (_, identity) = crate::platform::executable(&plan.executable, root.root())?;
-    if identity != plan.identity {
-        return Err(Error::Unsafe {
-            path: plan.executable.clone(),
-            reason: "changed since validation".into(),
-        });
-    }
+    validate_identity(plan, root.root())?;
     #[cfg(windows)]
     {
         crate::platform::spawn_wait(plan)
@@ -96,6 +90,17 @@ pub fn execute(plan: &LaunchPlan) -> Result<u32, Error> {
     {
         crate::platform::execve(&plan.executable, &plan.argv0, &plan.argv, &plan.env_delta)
     }
+}
+
+fn validate_identity(plan: &LaunchPlan, root: &std::path::Path) -> Result<(), Error> {
+    let (_, identity) = crate::platform::executable(&plan.executable, root)?;
+    if identity != plan.identity {
+        return Err(Error::Unsafe {
+            path: plan.executable.clone(),
+            reason: "changed since validation".into(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
@@ -198,5 +203,57 @@ mod tests {
             args
         );
         assert!(plan(&target(Provider::Claude), vec![raw], &[]).is_err());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod replacement_tests {
+    use super::*;
+    use std::{
+        fs,
+        os::unix::fs::{PermissionsExt, symlink},
+    };
+    #[test]
+    fn controlled_replacement_refuses_and_stored_alias_update_preserves_resolved_target() {
+        let parent = std::env::var_os("LARPCC_TEST_PARENT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let temporary = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .unwrap();
+        let root = temporary.path().join("root");
+        let a = temporary.path().join("a");
+        let b = temporary.path().join("b");
+        let alias = temporary.path().join("alias");
+        #[cfg(target_os = "macos")]
+        let magic = [0xcf, 0xfa, 0xed, 0xfe];
+        #[cfg(not(target_os = "macos"))]
+        let magic = *b"\x7fELF";
+        for path in [&a, &b] {
+            fs::write(path, magic).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        symlink(&a, &alias).unwrap();
+        let registry = Registry::at(root.clone()).unwrap();
+        registry
+            .add("work".parse().unwrap(), Provider::Claude)
+            .unwrap();
+        registry
+            .bind(Provider::Claude, alias.clone(), false)
+            .unwrap();
+        let first = registry.launch_target(&"work".parse().unwrap()).unwrap();
+        let original = plan(&first, vec!["prompt".into()], &[]).unwrap();
+        fs::remove_file(&alias).unwrap();
+        symlink(&b, &alias).unwrap();
+        assert_eq!(original.executable, a);
+        assert!(validate_identity(&original, &root).is_ok());
+        let updated = registry.launch_target(&"work".parse().unwrap()).unwrap();
+        assert_eq!(updated.resolved_executable, b);
+        assert_ne!(updated.identity, first.identity);
+        fs::rename(&b, &a).unwrap();
+        assert!(
+            matches!(validate_identity(&original,&root),Err(Error::Unsafe {reason,..}) if reason=="changed since validation")
+        );
     }
 }

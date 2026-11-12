@@ -295,7 +295,7 @@ pub(super) fn mutate(
     data.revision = data.revision.checked_add(1).ok_or(Error::Exhausted)?;
     let parent = root.join("profiles");
     let mut created_home = None;
-    let mut _profiles_handle = None;
+    let mut _profiles_pins = None;
     let mut created_temp = false;
     let temp = root.join("registry.json.tmp");
     let mut applied = false;
@@ -327,8 +327,7 @@ pub(super) fn mutate(
                 if paths::mkdir(&parent)? {
                     paths::sync(root)?;
                 }
-                _profiles_handle =
-                    crate::platform::inspect(&parent, crate::platform::ObjectKind::Directory)?;
+                _profiles_pins = Some(fixed(root)?);
                 // Unlike parent creation, an existing candidate is always an orphan.
                 match crate::platform::create_directory(&home) {
                     Ok(_) => {
@@ -390,7 +389,7 @@ fn replace(from: &Path, to: &Path) -> Result<(), Error> {
     fs::rename(from, to).map_err(|e| io("rename", to, e))
 }
 // Thread-local test failures never exist in the production binary.
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 pub(super) fn phase(action: &str, path: &Path) -> Result<(), Error> {
     super::tests::phase(action, path)
 }
@@ -404,6 +403,8 @@ pub(super) fn fixed(root: &Path) -> Result<Vec<crate::platform::CheckedObject>, 
             held.push(object);
         }
     }
+    // The leaf is a syntactic sentinel only; anchor inspects its existing parents, never profile 1.
+    held.extend(crate::platform::anchor(&root.join("profiles").join("1"))?.ancestors);
     for name in ["registry.json", "registry.lock", "registry.json.tmp"] {
         inspect(&root.join(name), ObjectKind::File)?;
     }
@@ -424,14 +425,14 @@ fn persist(
     }
     let mut file = crate::platform::create_file(&temp)?.file;
     *created_temp = true;
-    #[cfg(all(test, not(windows)))]
+    #[cfg(test)]
     phase("write", &temp)?;
     file.write_all(bytes).map_err(|e| io("write", &temp, e))?;
-    #[cfg(all(test, not(windows)))]
+    #[cfg(test)]
     phase("file sync", &temp)?;
     file.sync_all().map_err(|e| io("sync", &temp, e))?;
     drop(file);
-    #[cfg(all(test, not(windows)))]
+    #[cfg(test)]
     phase("replace", &target)?;
     replace(&temp, &target)?;
     *applied = true;

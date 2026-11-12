@@ -1,4 +1,3 @@
-#![cfg(not(windows))] // Restored with secure Windows metadata implementation.
 mod common;
 use common::*;
 use std::{
@@ -300,8 +299,7 @@ fn killed_writes_recover() {
 fn unicode_root_and_invalid_roots() {
     let mut f = Fixture::new();
     let parent = f.temp.path().join("dir with space");
-    fs::create_dir(&parent).unwrap();
-    private(&parent, true);
+    create_directory(&parent);
     f.root = parent.join("ünï cödé");
     lifecycle(&f);
     for path in ["relative".into(), f.temp.path().join("..\u{2f}bad")] {
@@ -451,7 +449,7 @@ fn non_utf8_root_and_stdout_full() {
 fn junction_root_rejected() {
     let f = Fixture::new();
     let target = f.temp.path().join("junction-target");
-    fs::create_dir(&target).unwrap();
+    create_directory(&target);
     let status = std::process::Command::new("cmd")
         .args(["/C", "mklink", "/J"])
         .arg(&f.root)
@@ -475,7 +473,7 @@ fn missing_and_unsafe_state_are_informational() {
         stdout(&f.profile(&["list"], 0)),
         "NAME  PROVIDER  ID  STATE\nwork  claude    1   missing\n"
     );
-    fs::write(&state, b"synthetic file in place of a directory").unwrap();
+    create_file(&state, b"synthetic file in place of a directory");
     assert!(
         stdout(&f.profile(&["show", "work"], 0))
             .ends_with("State:     unsafe: is not a directory\n")
