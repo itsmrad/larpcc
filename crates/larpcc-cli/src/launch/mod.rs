@@ -11,23 +11,7 @@ pub fn plan(
         Provider::Claude => "CLAUDE_CONFIG_DIR",
         Provider::Codex => "CODEX_HOME",
     };
-    let mut names = Vec::new();
-    for (name, _) in env {
-        if let Some(name) = name.to_str() {
-            #[cfg(windows)]
-            let name = name.to_ascii_uppercase();
-            #[cfg(windows)]
-            let name = name.as_str();
-            if name == variable {
-                names.push(variable.to_owned());
-            }
-            if name.starts_with("LARPCC_SYNTHETIC_DENY_") {
-                names.push("LARPCC_SYNTHETIC_DENY_".into());
-            }
-        }
-    }
-    names.sort();
-    names.dedup();
+    let names = environment_conflicts(variable, env);
     if !names.is_empty() {
         return Err(Error::EnvConflict { names });
     }
@@ -40,6 +24,36 @@ pub fn plan(
         env_delta: vec![(variable.into(), t.state_dir.as_os_str().to_owned())],
         identity: t.identity.clone(),
     })
+}
+fn environment_conflicts(variable: &str, env: &[(OsString, OsString)]) -> Vec<String> {
+    const PREFIX: &[u8] = b"LARPCC_SYNTHETIC_DENY_";
+    let mut names = Vec::new();
+    for (name, _) in env {
+        // OsStr's encoded bytes preserve ASCII even with unrelated non-Unicode suffixes.
+        let bytes = name.as_encoded_bytes();
+        if ascii_equal(bytes, variable.as_bytes()) {
+            names.push(variable.to_owned());
+        }
+        if bytes
+            .get(..PREFIX.len())
+            .is_some_and(|prefix| ascii_equal(prefix, PREFIX))
+        {
+            names.push("LARPCC_SYNTHETIC_DENY_".into());
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+fn ascii_equal(value: &[u8], label: &[u8]) -> bool {
+    #[cfg(windows)]
+    {
+        value.eq_ignore_ascii_case(label)
+    }
+    #[cfg(unix)]
+    {
+        value == label
+    }
 }
 fn arguments(args: &[OsString]) -> Result<(), Error> {
     let mut label = false;
@@ -255,5 +269,49 @@ mod replacement_tests {
         assert!(
             matches!(validate_identity(&original,&root),Err(Error::Unsafe {reason,..}) if reason=="changed since validation")
         );
+    }
+}
+
+#[cfg(test)]
+mod environment_key_tests {
+    use super::*;
+    #[test]
+    fn known_ascii_prefix_has_no_non_unicode_suffix_exception() {
+        #[cfg(unix)]
+        let (denied, unrelated) = {
+            use std::os::unix::ffi::OsStringExt;
+            (
+                OsString::from_vec(b"LARPCC_SYNTHETIC_DENY_\xff".to_vec()),
+                OsString::from_vec(b"OTHER_\xff".to_vec()),
+            )
+        };
+        #[cfg(windows)]
+        let (denied, unrelated) = {
+            use std::os::windows::ffi::OsStringExt;
+            let mut denied = "larpcc_synthetic_deny_".encode_utf16().collect::<Vec<_>>();
+            denied.push(0xd800);
+            let mut unrelated = "OTHER_".encode_utf16().collect::<Vec<_>>();
+            unrelated.push(0xd800);
+            (
+                OsString::from_wide(&denied),
+                OsString::from_wide(&unrelated),
+            )
+        };
+        let env = vec![
+            (denied, OsString::from("invented-secret")),
+            (unrelated, OsString::new()),
+        ];
+        assert_eq!(
+            environment_conflicts("CODEX_HOME", &env),
+            vec!["LARPCC_SYNTHETIC_DENY_"]
+        );
+        let lower = vec![(OsString::from("codex_home"), OsString::new())];
+        #[cfg(windows)]
+        assert_eq!(
+            environment_conflicts("CODEX_HOME", &lower),
+            vec!["CODEX_HOME"]
+        );
+        #[cfg(unix)]
+        assert!(environment_conflicts("CODEX_HOME", &lower).is_empty());
     }
 }
