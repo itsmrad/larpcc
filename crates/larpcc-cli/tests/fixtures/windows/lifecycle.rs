@@ -1,6 +1,15 @@
 //! Compiled test-only processes. No production dispatch or environment unlock.
 use super::*;
+use crate::platform::{FileIdentity, fixture_private};
 use std::os::windows::process::CommandExt;
+use std::{
+    ffi::OsString,
+    os::windows::{
+        ffi::OsStringExt,
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
+    },
+    path::{Path, PathBuf},
+};
 use std::{
     process::{Child, Command, Output, Stdio},
     sync::atomic::{AtomicUsize, Ordering},
@@ -10,7 +19,7 @@ use windows_sys::Win32::System::{
     Console::*,
     Threading::{CREATE_NEW_CONSOLE, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW},
 };
-const ENTRY: &str = "platform::windows::lifecycle::entry";
+const ENTRY: &str = "launch::windows::lifecycle::entry";
 static EVENTS: AtomicUsize = AtomicUsize::new(0);
 unsafe extern "system" fn count(event: u32) -> i32 {
     if event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT {

@@ -1,4 +1,6 @@
 mod types;
+#[cfg(windows)]
+mod windows;
 use crate::registry::{Error, LaunchTarget, Provider, Registry};
 use std::ffi::OsString;
 pub use types::LaunchPlan;
@@ -98,7 +100,7 @@ pub fn execute(plan: &LaunchPlan) -> Result<u32, Error> {
     validate_identity(plan, root.root())?;
     #[cfg(windows)]
     {
-        crate::platform::spawn_wait(plan)
+        windows::spawn_wait(plan)
     }
     #[cfg(unix)]
     {

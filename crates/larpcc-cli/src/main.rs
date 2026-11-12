@@ -1,7 +1,4 @@
 mod cli;
-#[cfg(all(feature = "synthetic-launch", windows))]
-#[path = "launch/types.rs"]
-mod launch;
 mod platform;
 mod provider;
 mod registry;
