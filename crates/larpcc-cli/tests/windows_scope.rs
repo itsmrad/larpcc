@@ -103,6 +103,7 @@ fn w07_cli_mutation_retains_actual_root_and_profiles_pins_until_completion() {
         );
     }
     lock.unlock().unwrap();
+    drop(lock);
     let out = wait_output(cleanup.0.take().unwrap()).unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("Renamed profile work to renamed"));
