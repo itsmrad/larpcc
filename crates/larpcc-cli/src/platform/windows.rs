@@ -1050,7 +1050,14 @@ mod tests {
                 "fixture class {i}"
             );
             assert_eq!(snapshot_named_security(&path), before);
-            std::fs::remove_dir(&path).unwrap();
+            let name = wide(&path).unwrap();
+            // SAFETY: remove this known empty synthetic directory through its trusted parent.
+            assert_ne!(
+                unsafe { RemoveDirectoryW(name.as_ptr()) },
+                0,
+                "fixture cleanup class {i}: {}",
+                io::Error::last_os_error()
+            );
         }
     }
     fn snapshot_named_security(path: &Path) -> Vec<u8> {
