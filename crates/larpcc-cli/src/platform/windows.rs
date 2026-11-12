@@ -813,6 +813,9 @@ pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
 }
 
 #[cfg(test)]
+use super::fixture_private;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read, Write};
@@ -1450,6 +1453,3 @@ mod tests {
 #[cfg(all(test, feature = "synthetic-launch"))]
 #[path = "../../tests/fixtures/windows/lifecycle.rs"]
 mod lifecycle;
-
-#[cfg(test)]
-use super::fixture_private;
