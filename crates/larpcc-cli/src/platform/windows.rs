@@ -137,11 +137,8 @@ fn user_sid(path: &Path) -> Result<Vec<u8>, Error> {
 fn sid_string(sid: &[u8]) -> String {
     let authority = sid[2..8].iter().fold(0u64, |v, b| (v << 8) | u64::from(*b));
     let mut text = format!("S-1-{authority}");
-    for part in sid[8..].chunks_exact(4) {
-        text.push_str(&format!(
-            "-{}",
-            u32::from_le_bytes(part.try_into().unwrap())
-        ));
+    for part in sid[8..].as_chunks::<4>().0 {
+        text.push_str(&format!("-{}", u32::from_le_bytes(*part)));
     }
     text
 }
@@ -179,7 +176,7 @@ fn check_acl(acl: &[u8], user: &[u8], policy: Policy) -> Result<(), &'static str
             return Err(bad);
         }
         let n = u16::from_le_bytes([header[2], header[3]]) as usize;
-        if n < 16 || n % 4 != 0 {
+        if n < 16 || !n.is_multiple_of(4) {
             return Err(bad);
         }
         let ace = acl
@@ -391,7 +388,7 @@ fn open(path: &Path, access: u32, sharing: u32) -> Result<Option<File>, Error> {
     // SAFETY: successful CreateFileW transfers exclusive ownership of handle.
     Ok(Some(unsafe { File::from_raw_handle(h) }))
 }
-pub fn anchor(path: &Path) -> Result<AnchoredPath, Error> {
+fn anchor_existing(path: &Path) -> Result<(AnchoredPath, bool), Error> {
     drive_root(path)?;
     let mut current = PathBuf::new();
     let mut ancestors = Vec::new();
@@ -413,7 +410,7 @@ pub fn anchor(path: &Path) -> Result<AnchoredPath, Error> {
             FILE_SHARE_READ | FILE_SHARE_WRITE,
         )? {
             Some(file) => file,
-            None => break,
+            None => return Ok((AnchoredPath { ancestors }, false)),
         };
         ancestors.push(verify(
             file,
@@ -422,10 +419,16 @@ pub fn anchor(path: &Path) -> Result<AnchoredPath, Error> {
             Policy::Ancestor,
         )?);
     }
-    Ok(AnchoredPath { ancestors })
+    Ok((AnchoredPath { ancestors }, true))
+}
+pub fn anchor(path: &Path) -> Result<AnchoredPath, Error> {
+    anchor_existing(path).map(|(a, _)| a)
 }
 pub fn inspect(path: &Path, kind: ObjectKind) -> Result<Option<CheckedObject>, Error> {
-    let _parents = anchor(path)?;
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Ok(None);
+    }
     // Metadata-only, including directory security. Core reopens data with identity comparison.
     open(
         path,
@@ -450,7 +453,14 @@ pub fn inspect_home(path: &Path) -> Result<DirStatus, Error> {
     })
 }
 fn create(path: &Path, kind: ObjectKind) -> Result<CheckedObject, Error> {
-    let _parents = anchor(path)?;
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(Error::Io {
+            action: "create directory",
+            path: path.into(),
+            source: io::Error::from(io::ErrorKind::NotFound),
+        });
+    }
     let user = sid_string(&user_sid(path)?);
     let flags = if kind == ObjectKind::Directory {
         "OICI"
@@ -595,7 +605,10 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
         return Err(unsafe_path(path, "is inside the Larp CC data directory"));
     }
     for p in [path, target.as_path()] {
-        if !p.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe")) {
+        if !p
+            .extension()
+            .is_some_and(|x| ordinal_equal(x, std::ffi::OsStr::new("exe")))
+        {
             return Err(unsafe_path(path, "must end in .exe"));
         }
     }
@@ -648,15 +661,38 @@ unsafe extern "system" fn console_handler(event: u32) -> i32 {
     use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
     i32::from(event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
 }
+#[cfg(all(test, feature = "synthetic-launch"))]
+thread_local! { static FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+#[cfg(feature = "synthetic-launch")]
+fn set_handler(add: bool) -> bool {
+    #[cfg(test)]
+    if FAULT.with(|f| f.get() == if add { 1 } else { 2 }) {
+        return false;
+    }
+    // SAFETY: static handler remains valid throughout the process lifetime.
+    unsafe {
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(
+            Some(console_handler),
+            i32::from(add),
+        ) != 0
+    }
+}
+#[cfg(feature = "synthetic-launch")]
+fn wait_child(child: &mut std::process::Child) -> io::Result<std::process::ExitStatus> {
+    #[cfg(test)]
+    if FAULT.with(|f| f.get() == 3) {
+        return Err(io::Error::other("injected wait failure"));
+    }
+    child.wait()
+}
 #[cfg(feature = "synthetic-launch")]
 pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
     use std::{
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
-    use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
     // SAFETY: static handler performs no allocation/IO and is valid until removal.
-    if unsafe { SetConsoleCtrlHandler(Some(console_handler), 1) } == 0 {
+    if !set_handler(true) {
         return Err(Error::Console {
             action: "register console handler",
             source: io::Error::last_os_error(),
@@ -677,7 +713,7 @@ pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
             path: plan.executable.clone(),
             source,
         }),
-        Ok(mut child) => match child.wait() {
+        Ok(mut child) => match wait_child(&mut child) {
             Ok(status) => status
                 .code()
                 .map(|code| code as u32)
@@ -706,8 +742,8 @@ pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
         },
     };
     // SAFETY: removes exactly our registered static handler, after known child completion/cleanup.
-    let removed = unsafe { SetConsoleCtrlHandler(Some(console_handler), 0) };
-    if removed == 0 && result.is_ok() {
+    let removed = set_handler(false);
+    if !removed && result.is_ok() {
         return Err(Error::Console {
             action: "unregister console handler",
             source: io::Error::last_os_error(),
@@ -926,13 +962,9 @@ mod tests {
         {
             let path = temp.path().join(format!("unsafe-{i}"));
             directory_with(&path, sddl);
-            let file = open(
-                &path,
-                READ_CONTROL | FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-            )
-            .unwrap()
-            .unwrap();
+            let file = open(&path, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .unwrap()
+                .unwrap();
             let before = snapshot_security(&file);
             assert!(inspect(&path, ObjectKind::Directory).is_err(), "{sddl}");
             assert_eq!(snapshot_security(&file), before);
@@ -1015,3 +1047,7 @@ mod tests {
         assert!(wide(Path::new(&OsString::from_wide(&[0x43, 0, 0x44]))).is_err());
     }
 }
+
+#[cfg(all(test, feature = "synthetic-launch"))]
+#[path = "../../tests/fixtures/windows/lifecycle.rs"]
+mod lifecycle;
