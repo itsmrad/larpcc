@@ -407,9 +407,10 @@ fn anchor_existing(path: &Path) -> Result<(AnchoredPath, bool), Error> {
             Component::RootDir | Component::Normal(_) => current.push(component),
             _ => return Err(unsafe_path(path, "must be normalized")),
         }
+        // Directory read-category access enforces sharing; this handle is never enumerated.
         let file = match open(
             &current,
-            READ_CONTROL | FILE_READ_ATTRIBUTES,
+            READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
         )? {
             Some(file) => file,
