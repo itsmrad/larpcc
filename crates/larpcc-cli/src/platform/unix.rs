@@ -453,6 +453,10 @@ pub fn execve(
     Err(launch(source))
 }
 
+pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error> {
+    Ok(path.starts_with(root))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,8 +520,4 @@ mod tests {
             matches!(error,Error::Launch {source,..} if source.kind()==io::ErrorKind::InvalidInput)
         );
     }
-}
-
-pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error> {
-    Ok(path.starts_with(root))
 }
