@@ -1368,6 +1368,34 @@ mod tests {
         assert!(before.starts_with(b"MZ"));
     }
     #[test]
+    fn w06_native_file_and_directory_reparse_paths_refuse() {
+        let temp = fixture();
+        let root = temp.path().join("private");
+        drop(create_directory(&root).unwrap());
+        let target = root.join("target.exe");
+        drop(create_file(&target).unwrap());
+        let link = root.join("link.exe");
+        std::os::windows::fs::symlink_file(&target, &link)
+            .expect("native file-reparse fixture unavailable; W06 cannot qualify on this runner");
+        assert!(
+            matches!(inspect(&link, ObjectKind::File), Err(Error::Unsafe { reason, .. }) if reason == "is a symbolic link or reparse point")
+        );
+        assert!(
+            matches!(executable(&link, &root.join("data")), Err(Error::Unsafe { reason, .. }) if reason == "is a symbolic link or reparse point")
+        );
+        let selected = root.join("selected");
+        drop(create_directory(&selected).unwrap());
+        let alias = root.join("directory-link");
+        std::os::windows::fs::symlink_dir(&selected, &alias).expect(
+            "native directory-reparse fixture unavailable; W06 cannot qualify on this runner",
+        );
+        assert!(
+            matches!(anchor(&alias.join("leaf")), Err(Error::Unsafe { reason, .. }) if reason == "is a symbolic link or reparse point")
+        );
+        assert!(create_file(&alias.join("collision")).is_err());
+        assert!(!selected.join("collision").exists());
+    }
+    #[test]
     fn w06_ordinal_component_boundaries_and_native_surrogates() {
         assert!(contains_path(Path::new(r"C:\DATA\child"), Path::new(r"c:\data")).unwrap());
         assert!(!contains_path(Path::new(r"C:\database"), Path::new(r"C:\data")).unwrap());
