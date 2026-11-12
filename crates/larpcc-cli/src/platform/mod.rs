@@ -32,3 +32,7 @@ mod windows;
 pub use windows::*;
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(all(test, windows))]
+#[path = "../../tests/fixtures/windows/private.rs"]
+pub(crate) mod fixture_private;

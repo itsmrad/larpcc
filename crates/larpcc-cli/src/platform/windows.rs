@@ -1128,6 +1128,7 @@ mod tests {
             .to_vec()
         }
     }
+    #[cfg(feature = "synthetic-launch")]
     fn snapshot_security(file: &File) -> Vec<u8> {
         let mut raw = null_mut();
         // SAFETY: live handle, valid outputs, copy before Local owner drops.
@@ -1451,5 +1452,4 @@ mod tests {
 mod lifecycle;
 
 #[cfg(test)]
-#[path = "../../tests/fixtures/windows/private.rs"]
-mod fixture_private;
+use super::fixture_private;
