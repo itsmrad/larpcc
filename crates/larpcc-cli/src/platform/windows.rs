@@ -278,6 +278,9 @@ fn security(file: &File, path: &Path, policy: Policy) -> Result<(), Error> {
         at(dacl.cast()).ok_or_else(|| unsafe_path(path, "access control cannot be verified"))?;
     check_acl(acl, &user, policy).map_err(|r| unsafe_path(path, r))
 }
+fn local_acl_volume(drive_type: u32, flags: u32) -> bool {
+    matches!(drive_type, 2 | 3 | 5 | 6) && flags & FILE_PERSISTENT_ACLS != 0
+}
 fn verify(
     file: File,
     path: &Path,
@@ -319,20 +322,20 @@ fn verify(
     let root = wide(&drive_root(path)?)?;
     let mut flags = 0;
     // SAFETY: terminated local root; live handle and valid optional query outputs.
-    if unsafe { GetDriveTypeW(root.as_ptr()) } != 3
-        || unsafe {
-            GetVolumeInformationByHandleW(
-                file.as_raw_handle(),
-                null_mut(),
-                0,
-                null_mut(),
-                null_mut(),
-                &mut flags,
-                null_mut(),
-                0,
-            )
-        } == 0
-        || flags & FILE_PERSISTENT_ACLS == 0
+    let drive_type = unsafe { GetDriveTypeW(root.as_ptr()) };
+    if unsafe {
+        GetVolumeInformationByHandleW(
+            file.as_raw_handle(),
+            null_mut(),
+            0,
+            null_mut(),
+            null_mut(),
+            &mut flags,
+            null_mut(),
+            0,
+        )
+    } == 0
+        || !local_acl_volume(drive_type, flags)
     {
         return Err(unsafe_path(
             path,
@@ -857,6 +860,16 @@ mod tests {
         }
     }
     #[test]
+    fn w01_local_volume_acl_capability_refuses_remote_unknown_and_unsupported() {
+        for drive_type in 0..=6 {
+            assert!(!local_acl_volume(drive_type, 0));
+            assert_eq!(
+                local_acl_volume(drive_type, FILE_PERSISTENT_ACLS),
+                matches!(drive_type, 2 | 3 | 5 | 6)
+            );
+        }
+    }
+    #[test]
     fn w01_unknown_truncated_and_empty_acls_fail_closed() {
         let user = user_sid(Path::new(r"C:\synthetic")).unwrap();
         let good = acl(&[(0, 0, FILE_ALL_ACCESS, "SY")]);
@@ -987,6 +1000,8 @@ mod tests {
             let before = snapshot_security(&file);
             assert!(inspect(&path, ObjectKind::Directory).is_err(), "{sddl}");
             assert_eq!(snapshot_security(&file), before);
+            drop(file);
+            std::fs::remove_dir(&path).unwrap();
         }
     }
     fn snapshot_security(file: &File) -> Vec<u8> {
@@ -1146,6 +1161,42 @@ mod tests {
                 b"invented provider contents; never consumed"
             );
         }
+    }
+    #[test]
+    fn w01_read_control_verification_needs_no_dacl_write_or_directory_enumeration() {
+        let temp = fixture();
+        let user = sid_string(&user_sid(temp.path()).unwrap());
+        let read_only = temp.path().join("read-control");
+        directory_with(&read_only, &format!("D:P(A;;0x20080;;;{user})"));
+        assert!(
+            inspect(&read_only, ObjectKind::Directory)
+                .unwrap()
+                .is_some()
+        );
+        assert!(create_file(&read_only.join("denied")).is_err());
+        std::fs::remove_dir(&read_only).unwrap();
+        let home = temp.path().join("home");
+        drop(create_directory(&home).unwrap());
+        let sentinel = home.join("synthetic-content");
+        drop(create_file(&sentinel).unwrap());
+        let name = wide(&sentinel).unwrap();
+        // SAFETY: exclusive synthetic-content handle makes any content open incompatible.
+        let h = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+                0,
+                null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+                null_mut(),
+            )
+        };
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        // SAFETY: successful open transfers ownership.
+        let held = unsafe { File::from_raw_handle(h) };
+        assert_eq!(inspect_home(&home).unwrap(), DirStatus::Ok);
+        drop(held);
     }
     #[test]
     fn w01_opened_verifier_checks_actual_handle_without_reopening_name() {
