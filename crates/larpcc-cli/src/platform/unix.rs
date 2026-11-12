@@ -81,13 +81,30 @@ fn open(path: &Path, kind: ObjectKind, write: bool) -> Result<File, Error> {
     options.open(path).map_err(|e| io_error("open", path, e))
 }
 pub fn inspect(path: &Path, kind: ObjectKind) -> Result<Option<CheckedObject>, Error> {
+    inspect_with(path, kind, || open(path, kind, false))
+}
+fn inspect_with(
+    path: &Path,
+    kind: ObjectKind,
+    open_object: impl FnOnce() -> Result<File, Error>,
+) -> Result<Option<CheckedObject>, Error> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(io_error("inspect", path, e)),
     };
     managed(path, &meta, kind)?;
-    let checked = verify_opened(open(path, kind, false)?, path, kind)?;
+    let file = match open_object() {
+        Ok(file) => file,
+        // A cooperating writer can rename an optional temp after safe metadata inspection.
+        Err(Error::Io {
+            action: "open",
+            source,
+            ..
+        }) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let checked = verify_opened(file, path, kind)?;
     if identity(&meta) != checked.identity {
         return Err(unsafe_path(path, "filesystem identity cannot be verified"));
     }
@@ -436,9 +453,56 @@ pub fn execve(
     Err(launch(source))
 }
 
-#[cfg(all(test, feature = "synthetic-launch"))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disappearing_safe_temp_is_missing_but_unsafe_observation_and_other_errors_refuse() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = std::env::var_os("LARPCC_TEST_PARENT")
+            .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
+        let temporary = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .unwrap();
+        let path = temporary.path().join("registry.json.tmp");
+        drop(create_file(&path).unwrap());
+        let result = inspect_with(&path, ObjectKind::File, || {
+            fs::rename(&path, temporary.path().join("registry.json")).unwrap();
+            open(&path, ObjectKind::File, false)
+        })
+        .unwrap();
+        assert!(result.is_none());
+        drop(create_file(&path).unwrap());
+        let result = inspect_with(&path, ObjectKind::File, || {
+            Err(io_error(
+                "open",
+                &path,
+                io::ErrorKind::PermissionDenied.into(),
+            ))
+        });
+        assert!(
+            matches!(result,Err(Error::Io {source,..}) if source.kind()==io::ErrorKind::PermissionDenied)
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let opened = std::cell::Cell::new(false);
+        let result = inspect_with(&path, ObjectKind::File, || {
+            opened.set(true);
+            fs::remove_file(&path).unwrap();
+            open(&path, ObjectKind::File, false)
+        });
+        assert!(matches!(result, Err(Error::ManagedMode { .. })));
+        assert!(!opened.get());
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(temporary.path().join("registry.json"), &path).unwrap();
+        assert!(matches!(
+            inspect_with(&path, ObjectKind::File, || panic!(
+                "unsafe symlink must refuse before open"
+            )),
+            Err(Error::Unsafe { .. })
+        ));
+    }
+    #[cfg(feature = "synthetic-launch")]
     #[test]
     fn nul_is_rejected_before_signal_changes_or_execution() {
         let error = execve(

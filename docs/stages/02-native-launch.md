@@ -625,15 +625,19 @@ ABI. Report actual S SHA and commands; scratch builds do not count. Lead verifie
 creation. Windows is `stage/2-windows` from exact S, core `stage/2-core` from M2, each in own
 visible worktree/thread arranged by lead. This artifact launches neither.
 
-Core opens draft PR-core to main; Windows rebases onto core's completed green head then PR-win to
-stage/2-core. Integrated head is J2 (avoid confusion with stage-1 H2). File owners fix findings,
-refresh dependent branch/evidence. Contract changes stop affected work, go to lead with exact
-proposed diff/reason, and are committed by core with matching plan update after approval; Windows
-rebases. Lead merges core with merge commit, retargets Windows PR to main, then merges it with merge
-commit; final main tree must equal accepted J2. Existing human identity/coauthors preserved, no AI
-signatures; workers never merge. Any integration change needs final-head tests/review. README
-updated last, only implemented behavior and measured limits; no research prose or future support
-claims.
+Core opens a normal PR-core to main; Windows opens a normal PR-win to stage/2-core.
+The lead coordinates ordinary snapshot merges from core into Windows, preserving both histories;
+there is no requirement for temporary core-only Windows stubs to qualify before integration.
+Integrated head is J2 (distinct from stage-1 H2). File owners fix findings and refresh dependent
+evidence. Contract changes stop affected work, go to the lead with precise diff/reason, and are
+committed by core with matching approved plan updates; the lead coordinates the next snapshot merge.
+After final integrated J2 passes the applicable native matrix and independent QA/OCR across both
+scopes, the lead merges PR-win into stage/2-core first, verifies that merged tree equals accepted
+J2 and required PR-core checks, then merges PR-core into main. Final main tree must equal J2.
+Temporary Windows stubs never land on main; component failures never bypass the integrated gates.
+Existing human identity/coauthors are preserved without AI signatures. Workers never merge or enable
+auto-merge. Any integration change requires final-head tests/review. README is updated last and
+contains only implemented behavior and measured limits, with no research or future support claims.
 
 ## 10. Acceptance cases and evidence
 
