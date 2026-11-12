@@ -38,6 +38,21 @@ enum RootAction {
 #[derive(Subcommand)]
 enum CcAction {
     #[command(
+        about = "Manage native provider bindings",
+        arg_required_else_help = true,
+        disable_help_subcommand = true
+    )]
+    Provider {
+        #[command(subcommand)]
+        command: ProviderAction,
+    },
+    #[command(about = "Launch a profile (qualification pending; disabled in this build)")]
+    Run {
+        name: ProfileName,
+        #[arg(last = true)]
+        args: Vec<std::ffi::OsString>,
+    },
+    #[command(
         about = "Manage profile records (no login, no provider launch)",
         arg_required_else_help = true,
         disable_help_subcommand = true
@@ -46,6 +61,20 @@ enum CcAction {
         #[command(subcommand)]
         command: ProfileAction,
     },
+}
+
+#[derive(Subcommand)]
+enum ProviderAction {
+    #[command(about = "Bind an absolute native executable")]
+    Bind {
+        #[arg(value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
+        provider: Provider,
+        executable: std::path::PathBuf,
+        #[arg(long)]
+        replace: bool,
+    },
+    #[command(about = "List provider bindings")]
+    List,
 }
 
 #[derive(Subcommand)]
@@ -100,9 +129,28 @@ pub fn run() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let RootAction::Cc {
-        command: CcAction::Profile { command },
-    } = cli.command;
+    let RootAction::Cc { command } = cli.command;
+    let command = match command {
+        CcAction::Run { .. } => return operational_error(Error::QualificationPending),
+        CcAction::Provider { command } => {
+            return match Registry::locate().and_then(|r| match command {
+                ProviderAction::List => r.bindings().map(|_| String::new()),
+                ProviderAction::Bind {
+                    provider,
+                    executable,
+                    replace,
+                } => r.bind(provider, executable, replace).map(|_| String::new()),
+            }) {
+                Ok(output) => write_output(
+                    output.as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
+        CcAction::Profile { command } => command,
+    };
     let registry = match Registry::locate() {
         Ok(registry) => registry,
         Err(error) => return operational_error(error),
@@ -114,7 +162,7 @@ pub fn run() -> ExitCode {
                 let _ = writeln!(
                     io::stderr().lock(),
                     "error: refusing to forget profile {name} without --yes\nhint: the registry entry would be removed; the state directory {} is kept and this version cannot attach it to a new profile",
-                    entry.state_dir.display()
+                    crate::registry::display::path(&entry.state_dir)
                 );
                 ExitCode::from(2)
             }

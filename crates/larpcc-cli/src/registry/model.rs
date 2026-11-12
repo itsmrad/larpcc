@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Seed surface; removed when all shared callers land.
 use super::NameError;
 use serde::{Deserialize, Serialize};
 use std::{fmt, path::PathBuf, str::FromStr};
@@ -109,4 +110,31 @@ pub struct ProfileEntry {
     pub profile: Profile,
     pub state_dir: PathBuf,
     pub status: DirStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Binding {
+    pub provider: Provider,
+    pub executable: PathBuf,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BindingState {
+    Unbound,
+    Ok(Binding),
+    Invalid(Binding, String),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BindOutcome {
+    Bound,
+    Unchanged,
+    Replaced { old: PathBuf },
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaunchTarget {
+    pub profile: Profile,
+    pub state_dir: PathBuf,
+    pub stored_executable: PathBuf,
+    pub resolved_executable: PathBuf,
+    pub identity: crate::platform::FileIdentity,
 }

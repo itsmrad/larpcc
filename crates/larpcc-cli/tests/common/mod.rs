@@ -12,7 +12,7 @@ pub struct Fixture {
 }
 impl Fixture {
     pub fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let root = temp.path().join("managed");
         for dir in ["home", "xdg", "local", "app", "claude", "codex"] {
             let path = temp.path().join(dir);
@@ -34,7 +34,9 @@ impl Fixture {
     }
     pub fn command(&self, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_larp"));
-        cmd.args(args).env("LARPCC_HOME", &self.root);
+        cmd.env_clear().args(args).env("LARPCC_HOME", &self.root);
+        #[cfg(windows)]
+        cmd.env("SystemRoot", r"C:\Windows");
         for (var, dir) in [
             ("HOME", "home"),
             ("XDG_DATA_HOME", "xdg"),

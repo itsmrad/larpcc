@@ -8,6 +8,10 @@ fn help_fixtures_and_missing_subcommands() {
         (vec![], "larp"),
         (vec!["cc"], "cc"),
         (vec!["cc", "profile"], "profile"),
+        (vec!["cc", "provider"], "provider"),
+        (vec!["cc", "provider", "bind"], "bind"),
+        (vec!["cc", "provider", "list"], "providers"),
+        (vec!["cc", "run"], "run"),
         (vec!["cc", "profile", "add"], "add"),
         (vec!["cc", "profile", "list"], "list"),
         (vec!["cc", "profile", "show"], "show"),
@@ -22,7 +26,7 @@ fn help_fixtures_and_missing_subcommands() {
         .replace("\r\n", "\n");
         let help = f.run(&[args.as_slice(), &["--help"]].concat(), 0);
         assert_eq!(stdout(&help), expected);
-        if args.len() < 3 {
+        if args.len() < 3 && args != ["cc", "run"] {
             assert_eq!(stderr(&f.run(&args, 2)), expected);
         }
     }
@@ -36,7 +40,7 @@ fn version_and_usage_errors_do_not_create_root() {
         assert_eq!(stdout(&f.run(&[flag], 0)), "larp 0.1.0\n");
     }
     for args in [
-        vec!["cc", "run", "x"],
+        vec!["cc", "run"],
         vec!["cc", "login", "x"],
         vec!["cc", "status", "x"],
         vec!["cc", "logout", "x"],

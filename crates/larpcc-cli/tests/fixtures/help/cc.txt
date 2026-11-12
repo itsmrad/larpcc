@@ -3,7 +3,9 @@ Manage Claude Code and Codex profiles
 Usage: larp cc <COMMAND>
 
 Commands:
-  profile  Manage profile records (no login, no provider launch)
+  provider  Manage native provider bindings
+  run       Launch a profile (qualification pending; disabled in this build)
+  profile   Manage profile records (no login, no provider launch)
 
 Options:
   -h, --help  Print help

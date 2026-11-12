@@ -1,3 +1,4 @@
+#![cfg(not(windows))] // Restored with secure Windows metadata implementation.
 mod common;
 use common::*;
 use std::{

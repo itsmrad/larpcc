@@ -421,6 +421,7 @@ New error messages/hints (all stderr `error:` then optional `hint:`, final newli
 
 | Variant | Message | Hint / exit |
 |---|---|---|
+| ManagedMode {path,mode,directory} | `unsafe data path <p>: has mode <mode:04o>; group and other access must be removed` | `run: chmod <700 for directory, 600 for file> <p>` / 1 |
 | QualificationPending | `provider launch is disabled pending stage 3 qualification` | `binding and profile metadata commands remain available` / 1 |
 | AlreadyBound {provider, old} | `refusing to rebind <provider> without --replace` | `currently bound to <old>` / 2 |
 | Unbound {provider} | `no executable bound for <provider>` | `run 'larp cc provider bind <provider> <ABSOLUTE_PATH>'` / 1 |
@@ -431,6 +432,13 @@ New error messages/hints (all stderr `error:` then optional `hint:`, final newli
 | Launch {path,source} | `cannot launch <p>: <escaped IO source>` | `check the native executable and its access permissions` / 1 |
 | Console {action,source} | `cannot <fixed console action>: <escaped IO source>` | none / 1 |
 | Wait {source} | `cannot wait for provider: <escaped IO source>` | `the direct child may require manual cleanup` / 1 |
+
+Approved pre-seed API amendment: `Error::ManagedMode { path: PathBuf, mode: u32,
+directory: bool }` carries the observed Unix permission/special bits (`metadata.mode() & 0o7777`)
+and directory type captured from already validated inspection metadata. Type/owner/mode precedence
+is unchanged. Display and hints are pure and escape paths; neither filesystem queries nor filename
+or human-reason inference selects the chmod mode. `Unsafe` remains for other reasons. Captured
+file/directory hints remain correct after removal, including a root named `registry.json`.
 
 No Unsupported/in-session-sign-in hint. Existing Error strings retain M1 semantics, except
 NewerSchema says supports version 2, path escaping and safety additions here. New Unsafe reasons:

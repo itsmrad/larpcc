@@ -96,6 +96,18 @@ pub(super) fn reason(meta: &fs::Metadata, dir: bool) -> Option<String> {
 pub(super) fn inspect(path: &Path, dir: bool) -> Result<Option<fs::Metadata>, Error> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
+            #[cfg(unix)]
+            if !meta.file_type().is_symlink()
+                && (if dir { meta.is_dir() } else { meta.is_file() })
+                && meta.uid() == euid()
+                && meta.mode() & 0o077 != 0
+            {
+                return Err(Error::ManagedMode {
+                    path: path.into(),
+                    mode: meta.mode() & 0o7777,
+                    directory: meta.is_dir(),
+                });
+            }
             if let Some(reason) = reason(&meta, dir) {
                 return Err(Error::Unsafe {
                     path: path.into(),

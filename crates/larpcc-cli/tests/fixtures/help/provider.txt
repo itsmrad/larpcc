@@ -1,0 +1,10 @@
+Manage native provider bindings
+
+Usage: larp cc provider <COMMAND>
+
+Commands:
+  bind  Bind an absolute native executable
+  list  List provider bindings
+
+Options:
+  -h, --help  Print help

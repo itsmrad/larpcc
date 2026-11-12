@@ -15,7 +15,7 @@ pub fn added(entry: &ProfileEntry) -> String {
         entry.profile.name,
         entry.profile.provider,
         entry.profile.id,
-        entry.state_dir.display()
+        crate::registry::display::path(&entry.state_dir)
     )
 }
 pub fn renamed(from: &ProfileName, entry: &ProfileEntry) -> String {
@@ -23,7 +23,7 @@ pub fn renamed(from: &ProfileName, entry: &ProfileEntry) -> String {
         "Renamed profile {from} to {} (id {}).\nState directory unchanged: {}\n",
         entry.profile.name,
         entry.profile.id,
-        entry.state_dir.display()
+        crate::registry::display::path(&entry.state_dir)
     )
 }
 pub fn forgotten(entry: &ProfileEntry) -> String {
@@ -31,7 +31,7 @@ pub fn forgotten(entry: &ProfileEntry) -> String {
         "Forgot profile {} (id {}).\nState directory kept: {}\n",
         entry.profile.name,
         entry.profile.id,
-        entry.state_dir.display()
+        crate::registry::display::path(&entry.state_dir)
     )
 }
 pub fn show(entry: &ProfileEntry) -> String {
@@ -44,7 +44,7 @@ pub fn show(entry: &ProfileEntry) -> String {
         entry.profile.name,
         entry.profile.provider,
         entry.profile.id,
-        entry.state_dir.display()
+        crate::registry::display::path(&entry.state_dir)
     )
 }
 pub fn list(mut entries: Vec<ProfileEntry>) -> String {

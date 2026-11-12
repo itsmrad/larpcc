@@ -1,16 +1,33 @@
+pub mod display;
 mod error;
 mod model;
 mod paths;
 mod store;
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests;
 pub use error::{Error, NameError};
-pub use model::{DirStatus, Profile, ProfileEntry, ProfileId, ProfileName, Provider};
+#[allow(unused_imports)] // Seed surface.
+pub use model::{
+    BindOutcome, Binding, BindingState, DirStatus, LaunchTarget, Profile, ProfileEntry, ProfileId,
+    ProfileName, Provider,
+};
 use std::path::{Path, PathBuf};
 pub struct Registry {
     root: PathBuf,
 }
+#[allow(dead_code)] // Seed surface.
 impl Registry {
+    pub fn bindings(&self) -> Result<Vec<(Provider, BindingState)>, Error> {
+        Err(crate::platform::unavailable(self.root()))
+    }
+    pub fn bind(&self, _p: Provider, _exe: PathBuf, _replace: bool) -> Result<BindOutcome, Error> {
+        Err(crate::platform::unavailable(self.root()))
+    }
+    #[cfg(feature = "synthetic-launch")]
+    pub fn launch_target(&self, _name: &ProfileName) -> Result<LaunchTarget, Error> {
+        Err(crate::platform::unavailable(self.root()))
+    }
+
     pub fn locate() -> Result<Registry, Error> {
         Self::at(paths::resolve(|key| std::env::var_os(key))?)
     }

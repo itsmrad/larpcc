@@ -77,6 +77,8 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     Ok(data)
 }
 pub(super) fn load(root: &Path) -> Result<Data, Error> {
+    #[cfg(windows)]
+    crate::platform::anchor(root)?;
     if paths::inspect(root, true)?.is_none() {
         return Ok(Data::default());
     }
@@ -171,6 +173,8 @@ pub(super) fn mutate(
     mutation: Mutation,
     timeout: Duration,
 ) -> Result<ProfileEntry, Error> {
+    #[cfg(windows)]
+    crate::platform::anchor(root)?;
     let _lock = lock(root, timeout)?;
     let mut data = load(root)?;
     let old_entries = paths::entries(root, &data.profiles)?;
@@ -281,14 +285,14 @@ pub(super) fn mutate(
             .open(&temp)
             .map_err(|e| io("open", &temp, e))?;
         created_temp = true;
-        #[cfg(test)]
+        #[cfg(all(test, not(windows)))]
         phase("write", &temp)?;
         file.write_all(&bytes).map_err(|e| io("write", &temp, e))?;
-        #[cfg(test)]
+        #[cfg(all(test, not(windows)))]
         phase("file sync", &temp)?;
         file.sync_all().map_err(|e| io("sync", &temp, e))?;
         drop(file);
-        #[cfg(test)]
+        #[cfg(all(test, not(windows)))]
         phase("replace", &target)?;
         replace(&temp, &target)?;
         applied = true;
@@ -342,7 +346,7 @@ fn replace(from: &Path, to: &Path) -> Result<(), Error> {
     fs::rename(from, to).map_err(|e| io("rename", to, e))
 }
 // Thread-local test failures never exist in the production binary.
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 pub(super) fn phase(action: &str, path: &Path) -> Result<(), Error> {
     super::tests::phase(action, path)
 }

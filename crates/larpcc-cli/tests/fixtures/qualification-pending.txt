@@ -1,0 +1,2 @@
+error: provider launch is disabled pending stage 3 qualification
+hint: binding and profile metadata commands remain available

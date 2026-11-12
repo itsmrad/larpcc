@@ -36,7 +36,7 @@ fn name(s: &str) -> ProfileName {
     ProfileName::parse(s).unwrap()
 }
 fn fixture() -> (tempfile::TempDir, Registry) {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let r = Registry::at(temp.path().join("root")).unwrap();
     (temp, r)
 }
@@ -339,12 +339,15 @@ fn r11_unsafe_paths() {
         assert!(
             matches!(
                 r.add(name("b"), Provider::Claude),
-                Err(Error::Unsafe { .. })
+                Err(Error::Unsafe { .. } | Error::ManagedMode { .. })
             ),
             "{target}/{kind}"
         );
         if read_fails {
-            assert!(matches!(r.list(), Err(Error::Unsafe { .. })));
+            assert!(matches!(
+                r.list(),
+                Err(Error::Unsafe { .. } | Error::ManagedMode { .. })
+            ));
         }
         assert_eq!(before, snapshot(t.path()));
     }
@@ -405,7 +408,7 @@ fn r13_foreign() {
     assert!(r.list().unwrap().is_empty());
     assert!(matches!(
         r.add(name("a"), Provider::Claude),
-        Err(Error::Unsafe { .. })
+        Err(Error::Unsafe { .. } | Error::ManagedMode { .. })
     ));
     assert_eq!(before, snapshot(r.root()));
 }
@@ -592,9 +595,10 @@ fn r20_errors() {
             Some("set LARPCC_HOME to an absolute path"),
         ),
         (
-            Error::Unsafe {
+            Error::ManagedMode {
                 path: p.clone(),
-                reason: "has mode 0644; group and other access must be removed".into(),
+                mode: 0o644,
+                directory: false,
             },
             "unsafe data path /root/registry.json: has mode 0644; group and other access must be removed",
             Some("run: chmod 600 /root/registry.json"),
@@ -857,7 +861,10 @@ fn root_symlink_suffixes_and_mode_hint() {
     symlink(r.root(), &link).unwrap();
     for suffix in ["/", "/."] {
         let candidate = Registry::at(PathBuf::from(format!("{}{suffix}", link.display()))).unwrap();
-        assert!(matches!(candidate.list(), Err(Error::Unsafe { .. })));
+        assert!(matches!(
+            candidate.list(),
+            Err(Error::Unsafe { .. } | Error::ManagedMode { .. })
+        ));
     }
     let root = t.path().join("registry.json");
     paths::mkdir(&root).unwrap();
@@ -908,4 +915,40 @@ fn extra_error_hints_and_missing_parent_guidance() {
         e.hint().as_deref(),
         Some("fix or move it, or set LARPCC_HOME to another directory")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn captured_mode_hints_survive_removal() {
+    let (t, _) = fixture();
+    for directory in [true, false] {
+        let path = t.path().join(if directory { "directory" } else { "file" });
+        if directory {
+            fs::create_dir(&path).unwrap();
+        } else {
+            fs::write(&path, b"").unwrap();
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o754)).unwrap();
+        let error = paths::inspect(&path, directory).unwrap_err();
+        if directory {
+            fs::remove_dir(&path).unwrap();
+        } else {
+            fs::remove_file(&path).unwrap();
+        }
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "unsafe data path {}: has mode 0754; group and other access must be removed",
+                path.display()
+            )
+        );
+        assert_eq!(
+            error.hint(),
+            Some(format!(
+                "run: chmod {} {}",
+                if directory { "700" } else { "600" },
+                path.display()
+            ))
+        );
+    }
 }

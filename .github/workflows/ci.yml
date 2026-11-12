@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, stage/1-registry]
+    branches: [main, stage/2-core]
   push:
     branches: [main]
 
@@ -15,6 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+    timeout-minutes: 20
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -22,12 +23,18 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+      - if: runner.os == 'macOS'
+        run: cc -Wall -Werror crates/larpcc-cli/tests/support/macos_acl_abi.c -o acl-abi && ./acl-abi
       - if: runner.os == 'Linux'
         run: cargo +stable fmt --all -- --check
       - run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo +stable test --workspace --locked
+      - run: cargo +stable build --release --bin larp --locked
+      - run: cargo +stable clippy --workspace --all-targets --features synthetic-launch --target-dir target-synthetic --locked -- -D warnings
+      - run: cargo +stable test --workspace --features synthetic-launch --target-dir target-synthetic --locked
 
   msrv:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,3 +43,4 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install 1.89 --profile minimal
       - run: cargo +1.89 test --workspace --locked
+      - run: cargo +1.89 test --workspace --features synthetic-launch --target-dir target-synthetic --locked

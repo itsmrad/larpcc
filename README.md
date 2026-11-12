@@ -5,8 +5,8 @@ Larp CC manages named Claude Code and Codex profile records and empty state dire
 Requires Rust 1.89 or newer. Build or install from this checkout:
 
 ```sh
-cargo build --workspace --release --locked
-cargo install --path crates/larpcc-cli --locked
+cargo build --release --locked --bin larp
+cargo install --path crates/larpcc-cli --locked --bin larp
 larp --version
 larp cc profile --help
 ```
@@ -42,9 +42,9 @@ The data root is non-empty `LARPCC_HOME`, otherwise:
 
 The root must be absolute with no `..` component, and its immediate parent must already exist. The root contains `registry.json`, `registry.lock`, and `profiles/<id>` directories; writes may temporarily create `registry.json.tmp`. Profile names never become paths.
 
-On Unix, Larp checks ownership and rejects group/other access; it creates directories with mode 0700 and metadata files with mode 0600. Windows checks file types and rejects symbolic links and junctions, but uses inherited ACLs: directory privacy and ownership are **not verified** on Windows.
+On Unix, Larp checks ownership and rejects group/other access; it creates directories with mode 0700 and metadata files with mode 0600. Windows metadata commands currently refuse with `platform safety validation is unavailable` before reading or creating metadata.
 
-Use a local filesystem. Advisory locks coordinate Larp writers, but do not constrain other programs; NFS/SMB locking is unsupported. Larp detects static unsafe paths, but cannot defend against another process running as the same user swapping files between checks and use. On WSL, use a Linux path; roots under `/mnt/c` usually fail Unix mode checks. Atomic replacement and Unix directory sync provide durability only on filesystems that honor them. Windows has process-crash recovery but no power-loss durability guarantee.
+Use a local filesystem. Advisory locks coordinate Larp writers, but do not constrain other programs; NFS/SMB locking is unsupported. Larp detects static unsafe paths, but cannot defend against another process running as the same user swapping files between checks and use. On WSL, use a Linux path; roots under `/mnt/c` usually fail Unix mode checks. Atomic replacement and Unix directory sync provide durability only on filesystems that honor them. No Windows filesystem safety support is advertised.
 
 Checks (all tests use synthetic temporary data):
 
@@ -58,3 +58,5 @@ cargo +1.89 test --workspace --locked
 CI runs tests and clippy on native Linux, macOS and Windows runners, plus Rust 1.89 tests on Linux. After dependencies have been fetched, these Cargo build/check commands also accept `--offline`.
 
 Larp CC is an independent project. It is not affiliated with Anthropic or OpenAI.
+
+`larp cc run NAME -- ARGS` always refuses before root lookup or process creation, pending stage 3 qualification. Binding commands are declared but refuse while platform validation is unavailable. The `synthetic-launch` feature declares separate test helpers; they are excluded from ordinary build/install commands.
