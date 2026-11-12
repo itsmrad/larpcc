@@ -55,6 +55,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo test --workspace --features synthetic-launch --target-dir /absolute/private/build-parent/synthetic-target --locked
+cargo test --bin larpcc-synthetic --features synthetic-launch --target-dir /absolute/private/build-parent/synthetic-target --locked
 cargo +1.89 test --workspace --locked
 ```
 
