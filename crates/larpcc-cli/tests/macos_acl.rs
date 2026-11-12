@@ -54,3 +54,30 @@ fn extended_allow_acl_refuses_each_managed_class_without_content_changes() {
         );
     }
 }
+
+#[test]
+fn extended_deny_is_allowed_and_empty_acl_absence_remains_usable() {
+    let fixture = Fixture::new();
+    fixture.profile(&["add", "work", "--provider", "claude"], 0);
+    let root = &fixture.root;
+    assert!(
+        Command::new("/bin/chmod")
+            .env_clear()
+            .args(["+a", "everyone deny delete"])
+            .arg(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    fixture.profile(&["list"], 0);
+    assert!(
+        Command::new("/bin/chmod")
+            .env_clear()
+            .arg("-N")
+            .arg(root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    fixture.profile(&["show", "work"], 0);
+}
