@@ -214,11 +214,11 @@ fn entry() {
         other => panic!("unknown synthetic mode {other}"),
     }
 }
-fn fixture() -> tempfile::TempDir {
+fn fixture() -> fixture_private::PrivateTempDir {
     let parent = std::env::var_os("LARPCC_TEST_PARENT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    tempfile::tempdir_in(parent).unwrap()
+    fixture_private::tempdir(&parent).unwrap()
 }
 #[test]
 fn w04_ctrl_c_and_break_deliver_exactly_once_without_forwarding() {

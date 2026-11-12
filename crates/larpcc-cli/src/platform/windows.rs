@@ -879,11 +879,11 @@ mod tests {
             Err("has an empty access control list")
         );
     }
-    fn fixture() -> tempfile::TempDir {
+    fn fixture() -> fixture_private::PrivateTempDir {
         let parent = std::env::var_os("LARPCC_TEST_PARENT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-        tempfile::tempdir_in(parent).unwrap()
+        fixture_private::tempdir(&parent).unwrap()
     }
     // Fixtures receive descriptors only at creation; no ACL writes, even in tests.
     fn directory_with(path: &Path, sddl: &str) {
@@ -945,6 +945,7 @@ mod tests {
         );
         assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
         drop(object);
+        fixture_private::create_file(&root.join("helper-sentinel"), b"synthetic private").unwrap();
         let path = root.join("metadata");
         let mut file = create_file(&path).unwrap();
         file.file.write_all(b"synthetic unchanged").unwrap();
@@ -1060,6 +1061,92 @@ mod tests {
         assert!(create_directory(&hostile).is_err());
         assert!(inspect(&hostile, ObjectKind::Directory).is_err());
     }
+    #[cfg(feature = "synthetic-launch")]
+    #[test]
+    fn w01_w03_managed_set_refuses_before_launch_and_preserves_synthetic_contents() {
+        use crate::registry::{ProfileName, Provider, Registry};
+        for class in [
+            "root",
+            "profiles",
+            "registry.json",
+            "registry.lock",
+            "registry.json.tmp",
+            "selected",
+            "other",
+        ] {
+            let temp = fixture();
+            let root = temp.path().join("managed");
+            let registry = Registry::at(root.clone()).unwrap();
+            let selected = ProfileName::parse("selected").unwrap();
+            let other = ProfileName::parse("other").unwrap();
+            let a = registry.add(selected.clone(), Provider::Claude).unwrap();
+            let b = registry.add(other, Provider::Codex).unwrap();
+            let sentinel = b.state_dir.join("synthetic-sentinel");
+            std::fs::write(&sentinel, b"invented provider contents; never consumed").unwrap();
+            let (path, directory) = match class {
+                "root" => (root.clone(), true),
+                "profiles" => (root.join("profiles"), true),
+                "selected" => (a.state_dir, true),
+                "other" => (b.state_dir, true),
+                name => (root.join(name), false),
+            };
+            let saved = temp.path().join("saved");
+            let existed = path.exists();
+            if existed {
+                std::fs::rename(&path, &saved).unwrap();
+            }
+            let user = sid_string(&user_sid(&path).unwrap());
+            let sddl = format!("D:P(A;;FA;;;{user})(A;;FR;;;WD)");
+            if directory {
+                directory_with(&path, &sddl);
+            } else {
+                let sd = descriptor(&sddl, &path).unwrap();
+                let sa = SECURITY_ATTRIBUTES {
+                    nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+                    lpSecurityDescriptor: sd.0,
+                    bInheritHandle: 0,
+                };
+                let name = wide(&path).unwrap();
+                // SAFETY: exclusive creation of synthetic unsafe metadata fixture only.
+                let h = unsafe {
+                    CreateFileW(
+                        name.as_ptr(),
+                        FILE_GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        &sa,
+                        CREATE_NEW,
+                        FILE_FLAG_OPEN_REPARSE_POINT,
+                        null_mut(),
+                    )
+                };
+                assert_ne!(h, INVALID_HANDLE_VALUE);
+                // SAFETY: successful creation transfers ownership, no existing contents changed.
+                drop(unsafe { File::from_raw_handle(h) });
+            }
+            let bad = open(
+                &path,
+                READ_CONTROL,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            )
+            .unwrap()
+            .unwrap();
+            let before_acl = snapshot_security(&bad);
+            assert!(
+                matches!(registry.launch_target(&selected), Err(Error::Unsafe { .. })),
+                "class={class}"
+            );
+            assert_eq!(snapshot_security(&bad), before_acl, "class={class}");
+            let actual_sentinel = if existed && sentinel.starts_with(&path) {
+                saved.join(sentinel.strip_prefix(&path).unwrap())
+            } else {
+                sentinel
+            };
+            assert_eq!(
+                std::fs::read(actual_sentinel).unwrap(),
+                b"invented provider contents; never consumed"
+            );
+        }
+    }
     #[test]
     fn w01_opened_verifier_checks_actual_handle_without_reopening_name() {
         let temp = fixture();
@@ -1163,3 +1250,7 @@ mod tests {
 #[cfg(all(test, feature = "synthetic-launch"))]
 #[path = "../../tests/fixtures/windows/lifecycle.rs"]
 mod lifecycle;
+
+#[cfg(test)]
+#[path = "../../tests/fixtures/windows/private.rs"]
+mod fixture_private;
