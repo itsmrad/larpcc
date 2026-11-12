@@ -36,3 +36,44 @@ mod macos;
 #[cfg(all(test, windows))]
 #[path = "../../tests/fixtures/windows/private.rs"]
 pub(crate) mod fixture_private;
+
+// Internal only: a namespace change is distinct from every validation or I/O failure.
+#[derive(Debug)]
+pub(crate) enum AcquisitionError {
+    Changed,
+    Failed(Error),
+}
+impl From<Error> for AcquisitionError {
+    fn from(error: Error) -> Self {
+        Self::Failed(error)
+    }
+}
+impl AcquisitionError {
+    fn diagnostic(self, path: &Path) -> Error {
+        match self {
+            Self::Failed(error) => error,
+            Self::Changed => Error::Unsafe {
+                path: path.into(),
+                reason: "filesystem identity cannot be verified".into(),
+            },
+        }
+    }
+}
+// Call only for the replaceable registry.json / registry.json.tmp namespace.
+pub(crate) fn acquire_replaceable<T>(
+    path: &Path,
+    mut acquire: impl FnMut() -> Result<T, AcquisitionError>,
+) -> Result<T, Error> {
+    for _ in 0..32 {
+        match acquire() {
+            Ok(object) => return Ok(object),
+            Err(AcquisitionError::Changed) => (),
+            Err(AcquisitionError::Failed(error)) => return Err(error),
+        }
+    }
+    Err(AcquisitionError::Changed.diagnostic(path))
+}
+#[cfg(windows)]
+pub(crate) fn inspect_replaceable(path: &Path) -> Result<Option<CheckedObject>, AcquisitionError> {
+    inspect(path, ObjectKind::File).map_err(Into::into)
+}

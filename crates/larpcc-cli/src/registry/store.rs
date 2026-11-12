@@ -99,6 +99,9 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     Ok(data)
 }
 pub(super) fn load(root: &Path) -> Result<Data, Error> {
+    load_with(root, |_| {})
+}
+pub(super) fn load_with(root: &Path, mut before_open: impl FnMut(&Path)) -> Result<Data, Error> {
     let _ancestors = crate::platform::anchor(root)?.ancestors;
     let _fixed = fixed(root)?;
     if paths::inspect(root, true)?.is_none() {
@@ -106,30 +109,35 @@ pub(super) fn load(root: &Path) -> Result<Data, Error> {
     }
     paths::inspect(&root.join("profiles"), true)?;
     let path = root.join("registry.json");
-    let Some(meta) = paths::inspect(&path, false)? else {
+    let checked = crate::platform::acquire_replaceable(&path, || {
+        let Some(inspected) = crate::platform::inspect_replaceable(&path)? else {
+            return Ok(None);
+        };
+        let meta = inspected
+            .file
+            .metadata()
+            .map_err(|e| io("inspect", &path, e))?;
+        if meta.len() > LIMIT as u64 {
+            return Err(Error::Corrupt {
+                path: path.clone(),
+                reason: "exceeds 1 MiB".into(),
+            }
+            .into());
+        }
+        before_open(&path);
+        let opened = paths::read_options()
+            .open(&path)
+            .map_err(|e| io("open", &path, e))?;
+        let checked =
+            crate::platform::verify_opened(opened, &path, crate::platform::ObjectKind::File)?;
+        if checked.identity != inspected.identity {
+            return Err(crate::platform::AcquisitionError::Changed);
+        }
+        Ok(Some(checked))
+    })?;
+    let Some(checked) = checked else {
         return Ok(Data::default());
     };
-    if meta.len() > LIMIT as u64 {
-        return Err(Error::Corrupt {
-            path,
-            reason: "exceeds 1 MiB".into(),
-        });
-    }
-    let inspected = crate::platform::inspect(&path, crate::platform::ObjectKind::File)?
-        .ok_or_else(|| Error::Unsafe {
-            path: path.clone(),
-            reason: "filesystem identity cannot be verified".into(),
-        })?;
-    let opened = paths::read_options()
-        .open(&path)
-        .map_err(|e| io("open", &path, e))?;
-    let checked = crate::platform::verify_opened(opened, &path, crate::platform::ObjectKind::File)?;
-    if checked.identity != inspected.identity {
-        return Err(Error::Unsafe {
-            path: path.clone(),
-            reason: "filesystem identity cannot be verified".into(),
-        });
-    }
     let file = checked.file;
     let bytes = bounded(file).map_err(|e| io("read", &path, e))?;
     parse(&path, &bytes)
@@ -406,7 +414,14 @@ pub(super) fn fixed(root: &Path) -> Result<Vec<crate::platform::CheckedObject>, 
     // The leaf is a syntactic sentinel only; anchor inspects its existing parents, never profile 1.
     held.extend(crate::platform::anchor(&root.join("profiles").join("1"))?.ancestors);
     for name in ["registry.json", "registry.lock", "registry.json.tmp"] {
-        inspect(&root.join(name), ObjectKind::File)?;
+        let path = root.join(name);
+        if name == "registry.lock" {
+            inspect(&path, ObjectKind::File)?;
+        } else {
+            crate::platform::acquire_replaceable(&path, || {
+                crate::platform::inspect_replaceable(&path)
+            })?;
+        }
     }
     Ok(held)
 }

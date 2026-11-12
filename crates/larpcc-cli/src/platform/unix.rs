@@ -81,17 +81,22 @@ fn open(path: &Path, kind: ObjectKind, write: bool) -> Result<File, Error> {
     options.open(path).map_err(|e| io_error("open", path, e))
 }
 pub fn inspect(path: &Path, kind: ObjectKind) -> Result<Option<CheckedObject>, Error> {
-    inspect_with(path, kind, || open(path, kind, false))
+    inspect_with(path, kind, || open(path, kind, false)).map_err(|error| error.diagnostic(path))
+}
+pub(crate) fn inspect_replaceable(path: &Path) -> Result<Option<CheckedObject>, AcquisitionError> {
+    inspect_with(path, ObjectKind::File, || {
+        open(path, ObjectKind::File, false)
+    })
 }
 fn inspect_with(
     path: &Path,
     kind: ObjectKind,
     open_object: impl FnOnce() -> Result<File, Error>,
-) -> Result<Option<CheckedObject>, Error> {
+) -> Result<Option<CheckedObject>, AcquisitionError> {
     let meta = match fs::symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(io_error("inspect", path, e)),
+        Err(e) => return Err(io_error("inspect", path, e).into()),
     };
     managed(path, &meta, kind)?;
     let file = match open_object() {
@@ -102,11 +107,11 @@ fn inspect_with(
             source,
             ..
         }) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     let checked = verify_opened(file, path, kind)?;
     if identity(&meta) != checked.identity {
-        return Err(unsafe_path(path, "filesystem identity cannot be verified"));
+        return Err(AcquisitionError::Changed);
     }
     Ok(Some(checked))
 }
@@ -486,7 +491,7 @@ mod tests {
             ))
         });
         assert!(
-            matches!(result,Err(Error::Io {source,..}) if source.kind()==io::ErrorKind::PermissionDenied)
+            matches!(result,Err(AcquisitionError::Failed(Error::Io {source,..})) if source.kind()==io::ErrorKind::PermissionDenied)
         );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         let opened = std::cell::Cell::new(false);
@@ -495,7 +500,10 @@ mod tests {
             fs::remove_file(&path).unwrap();
             open(&path, ObjectKind::File, false)
         });
-        assert!(matches!(result, Err(Error::ManagedMode { .. })));
+        assert!(matches!(
+            result,
+            Err(AcquisitionError::Failed(Error::ManagedMode { .. }))
+        ));
         assert!(!opened.get());
         fs::remove_file(&path).unwrap();
         std::os::unix::fs::symlink(temporary.path().join("registry.json"), &path).unwrap();
@@ -503,8 +511,65 @@ mod tests {
             inspect_with(&path, ObjectKind::File, || panic!(
                 "unsafe symlink must refuse before open"
             )),
-            Err(Error::Unsafe { .. })
+            Err(AcquisitionError::Failed(Error::Unsafe { .. }))
         ));
+    }
+    #[test]
+    fn replaceable_inspection_retries_only_validated_identity_changes() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = std::env::var_os("LARPCC_TEST_PARENT")
+            .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
+        let temporary = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .unwrap();
+        for name in ["registry.json", "registry.json.tmp"] {
+            let path = temporary.path().join(name);
+            drop(create_file(&path).unwrap());
+            let replacement = temporary.path().join("replacement");
+            let mut calls = 0;
+            let object = acquire_replaceable(&path, || {
+                inspect_with(&path, ObjectKind::File, || {
+                    calls += 1;
+                    if calls == 1 {
+                        drop(create_file(&replacement).unwrap());
+                        fs::rename(&replacement, &path).unwrap();
+                    }
+                    open(&path, ObjectKind::File, false)
+                })
+            })
+            .unwrap()
+            .unwrap();
+            assert_eq!(calls, 2);
+            assert_eq!(
+                object.identity,
+                identity(&fs::symlink_metadata(&path).unwrap())
+            );
+            // The same transition is still an immediate refusal for ordinary inspection.
+            let error = inspect_with(&path, ObjectKind::File, || {
+                drop(create_file(&replacement).unwrap());
+                fs::rename(&replacement, &path).unwrap();
+                open(&path, ObjectKind::File, false)
+            })
+            .err()
+            .unwrap()
+            .diagnostic(&path);
+            assert!(matches!(error, Error::Unsafe { .. }));
+            let mut calls = 0;
+            let error = acquire_replaceable(&path, || {
+                inspect_with(&path, ObjectKind::File, || {
+                    calls += 1;
+                    drop(create_file(&replacement).unwrap());
+                    fs::set_permissions(&replacement, fs::Permissions::from_mode(0o644)).unwrap();
+                    fs::rename(&replacement, &path).unwrap();
+                    open(&path, ObjectKind::File, false)
+                })
+            })
+            .err()
+            .unwrap();
+            assert_eq!(calls, 1);
+            assert!(matches!(error, Error::ManagedMode { .. }));
+        }
     }
     #[cfg(feature = "synthetic-launch")]
     #[test]
