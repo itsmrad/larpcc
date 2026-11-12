@@ -577,6 +577,7 @@ fn ordinal_units(a: &[u16], b: &[u16]) -> io::Result<bool> {
         _ => Err(io::Error::last_os_error()),
     }
 }
+// Windows extension matching is ordinal case-insensitive; exact UTF-16 avoids lossy conversion.
 fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> io::Result<bool> {
     ordinal_units(
         &a.encode_wide().collect::<Vec<_>>(),
