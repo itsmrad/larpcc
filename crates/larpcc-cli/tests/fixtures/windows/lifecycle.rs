@@ -36,7 +36,15 @@ fn bounded(mut child: Child) -> Output {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if child.try_wait().unwrap().is_some() {
-            return child.wait_with_output().unwrap();
+            let output = child.wait_with_output().unwrap();
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                assert!(
+                    stdout.contains(ENTRY) && stdout.contains("test result: ok. 1 passed"),
+                    "synthetic entry must actually execute: {output:?}"
+                );
+            }
+            return output;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -151,6 +159,7 @@ fn entry() {
         }
         "faults" => {
             FAULT.with(|f| f.set(1));
+            let removals = REMOVALS.with(|n| n.get());
             assert!(matches!(
                 spawn_wait(&plan("sleep", &root)),
                 Err(Error::Console {
@@ -158,12 +167,23 @@ fn entry() {
                     ..
                 })
             ));
+            assert_eq!(REMOVALS.with(|n| n.get()), removals);
+            assert!(!HANDLER_INSTALLED.with(|h| h.get()));
             assert!(!root.join("pid").exists());
-            FAULT.with(|f| f.set(0));
-            let mut missing = plan("exit", &root);
-            missing.executable = root.join("missing.exe");
-            assert!(matches!(spawn_wait(&missing), Err(Error::Launch { .. })));
+            for fault in [0, 6] {
+                FAULT.with(|f| f.set(fault));
+                let before = REMOVALS.with(|n| n.get());
+                let mut missing = plan("exit", &root);
+                missing.executable = root.join("missing.exe");
+                match spawn_wait(&missing) {
+                    Err(Error::Launch { source, .. }) => assert_eq!(source.raw_os_error(), Some(2)),
+                    other => panic!("spawn error must remain primary: {other:?}"),
+                }
+                assert_eq!(REMOVALS.with(|n| n.get()), before + 1);
+                assert!(!HANDLER_INSTALLED.with(|h| h.get()));
+            }
             FAULT.with(|f| f.set(2));
+            let before = REMOVALS.with(|n| n.get());
             assert!(matches!(
                 spawn_wait(&plan("exit", &root)),
                 Err(Error::Console {
@@ -171,49 +191,57 @@ fn entry() {
                     ..
                 })
             ));
-            FAULT.with(|f| f.set(3));
-            assert!(matches!(
-                spawn_wait(&plan("sleep", &root)),
-                Err(Error::Wait { .. })
-            ));
-            let pid = FAILED_CHILD.with(|p| p.get());
-            assert_ne!(pid, 0);
-            // SAFETY: query only the direct child ID recorded by the failed wait seam; never terminate by PID.
-            let h = unsafe {
-                windows_sys::Win32::System::Threading::OpenProcess(
-                    windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
-                    0,
-                    pid,
-                )
-            };
-            if !h.is_null() {
-                // SAFETY: successful OpenProcess transfers ownership.
-                let h = unsafe { OwnedHandle::from_raw_handle(h) };
-                let mut code = 0;
-                // SAFETY: live process handle and valid status output.
-                assert_ne!(
-                    unsafe {
-                        windows_sys::Win32::System::Threading::GetExitCodeProcess(
-                            h.as_raw_handle(),
-                            &mut code,
-                        )
-                    },
-                    0
-                );
-                assert_ne!(code, 259, "failed-wait cleanup left direct child running");
-            }
-            FAULT.with(|f| f.set(4));
-            match spawn_wait(&plan("sleep", &root)) {
-                Err(Error::Wait {
-                    source,
-                    cleanup_failed: true,
-                }) => assert_eq!(source.to_string(), "injected wait failure"),
-                other => panic!("cleanup failure must preserve original wait error: {other:?}"),
+            assert_eq!(REMOVALS.with(|n| n.get()), before + 1);
+            assert!(!HANDLER_INSTALLED.with(|h| h.get()));
+            for fault in [3, 4, 5] {
+                FAULT.with(|f| f.set(fault));
+                let before = REMOVALS.with(|n| n.get());
+                match spawn_wait(&plan("sleep", &root)) {
+                    Err(Error::Wait {
+                        source,
+                        cleanup_failed,
+                    }) => {
+                        assert_eq!(
+                            source.raw_os_error(),
+                            Some(6),
+                            "original native wait error must be retained"
+                        );
+                        assert_eq!(cleanup_failed, fault == 4);
+                    }
+                    other => panic!("wait error must remain primary: {other:?}"),
+                }
+                assert_eq!(REMOVALS.with(|n| n.get()), before + 1);
+                assert!(!HANDLER_INSTALLED.with(|h| h.get()));
+                let pid = FAILED_CHILD.with(|p| p.get());
+                assert_ne!(pid, 0);
+                // SAFETY: query only the known failed-wait child, never terminate by PID.
+                let raw = unsafe {
+                    windows_sys::Win32::System::Threading::OpenProcess(
+                        windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
+                        0,
+                        pid,
+                    )
+                };
+                if !raw.is_null() {
+                    // SAFETY: successful API transfers a query handle.
+                    let h = unsafe { OwnedHandle::from_raw_handle(raw) };
+                    let mut code = 0;
+                    // SAFETY: live query handle and valid output buffer.
+                    assert_ne!(
+                        unsafe {
+                            windows_sys::Win32::System::Threading::GetExitCodeProcess(
+                                h.as_raw_handle(),
+                                &mut code,
+                            )
+                        },
+                        0
+                    );
+                    assert_ne!(code, 259, "failed-wait cleanup left direct child running");
+                }
             }
             FAULT.with(|f| f.set(0));
-            // Remove handler left deliberately registered by failed unregistration seam.
-            assert!(set_handler(false));
         }
+
         "status" => {
             for code in [0, 1, 2, 42, 255, 256, 0xc000013a, u32::MAX] {
                 std::fs::write(root.join("code"), code.to_string()).unwrap();

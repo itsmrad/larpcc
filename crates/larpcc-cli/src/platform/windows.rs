@@ -688,28 +688,51 @@ unsafe extern "system" fn console_handler(event: u32) -> i32 {
 #[cfg(all(test, feature = "synthetic-launch"))]
 thread_local! {
     static FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    static REMOVALS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static HANDLER_INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAILED_CHILD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 #[cfg(feature = "synthetic-launch")]
 fn set_handler(add: bool) -> bool {
     #[cfg(test)]
-    if FAULT.with(|f| f.get() == if add { 1 } else { 2 }) {
-        return false;
+    {
+        if !add {
+            REMOVALS.with(|n| n.set(n.get() + 1));
+        }
+        if add && FAULT.with(|f| f.get() == 1) {
+            return false;
+        }
     }
     // SAFETY: static handler remains valid throughout the process lifetime.
-    unsafe {
+    let success = unsafe {
         windows_sys::Win32::System::Console::SetConsoleCtrlHandler(
             Some(console_handler),
             i32::from(add),
         ) != 0
+    };
+    #[cfg(test)]
+    {
+        if success {
+            HANDLER_INSTALLED.with(|h| h.set(add));
+        }
+        // Inject failure after real removal so test processes leave no real handler installed.
+        if !add && FAULT.with(|f| matches!(f.get(), 2 | 5 | 6)) {
+            // SAFETY: thread-local deterministic error for the injected failed API result.
+            unsafe {
+                SetLastError(6);
+            }
+            return false;
+        }
     }
+    success
 }
+
 #[cfg(feature = "synthetic-launch")]
 fn wait_child(child: &mut std::process::Child) -> io::Result<std::process::ExitStatus> {
     #[cfg(test)]
-    if FAULT.with(|f| matches!(f.get(), 3 | 4)) {
+    if FAULT.with(|f| matches!(f.get(), 3 | 4 | 5)) {
         FAILED_CHILD.with(|p| p.set(child.id()));
-        return Err(io::Error::other("injected wait failure"));
+        return Err(io::Error::from_raw_os_error(6));
     }
     child.wait()
 }
@@ -915,6 +938,13 @@ mod tests {
     // Fixtures receive descriptors only at creation; no ACL writes, even in tests.
     fn directory_with(path: &Path, sddl: &str) {
         let sd = descriptor(sddl, path).unwrap();
+        if sddl == "D:NO_ACCESS_CONTROL" {
+            // SAFETY: modify only the new in-memory descriptor before object creation.
+            assert_ne!(
+                unsafe { SetSecurityDescriptorControl(sd.0, SE_DACL_PROTECTED, SE_DACL_PROTECTED) },
+                0
+            );
+        }
         let sa = SECURITY_ATTRIBUTES {
             nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: sd.0,
@@ -955,8 +985,8 @@ mod tests {
             0
         );
         eprintln!(
-            "W01 actual TokenIsElevated={}; non-elevated acceptance requires 0",
-            elevation.TokenIsElevated
+            "W01 actual TokenIsElevated={}; non-elevated acceptance requires false",
+            elevation.TokenIsElevated != 0
         );
     }
     #[test]
@@ -998,7 +1028,7 @@ mod tests {
         let temp = fixture();
         let user = sid_string(&user_sid(temp.path()).unwrap());
         for (i, sddl) in [
-            format!("D:(A;;FA;;;{user})"),
+            format!("D:AI(A;;FA;;;{user})"),
             format!("D:P(A;;FA;;;{user})(A;;FR;;;WD)"),
             "D:P".into(),
             "D:NO_ACCESS_CONTROL".into(),
@@ -1007,15 +1037,48 @@ mod tests {
         .enumerate()
         {
             let path = temp.path().join(format!("unsafe-{i}"));
-            directory_with(&path, sddl);
-            let file = open(&path, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE)
-                .unwrap()
-                .unwrap();
-            let before = snapshot_security(&file);
-            assert!(inspect(&path, ObjectKind::Directory).is_err(), "{sddl}");
-            assert_eq!(snapshot_security(&file), before);
-            drop(file);
+            if i == 0 {
+                // No explicit descriptor: obtain the native unprotected inherited ACL fixture.
+                std::fs::create_dir(&path).unwrap();
+            } else {
+                directory_with(&path, sddl);
+            }
+            let before = snapshot_named_security(&path);
+            assert!(
+                inspect(&path, ObjectKind::Directory).is_err(),
+                "fixture class {i}"
+            );
+            assert_eq!(snapshot_named_security(&path), before);
             std::fs::remove_dir(&path).unwrap();
+        }
+    }
+    fn snapshot_named_security(path: &Path) -> Vec<u8> {
+        let name = wide(path).unwrap();
+        let mut raw = null_mut();
+        // SAFETY: known newly-created synthetic path; security query only, no content or ACL writes.
+        assert_eq!(
+            unsafe {
+                GetNamedSecurityInfoW(
+                    name.as_ptr(),
+                    SE_FILE_OBJECT,
+                    OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    &mut raw,
+                )
+            },
+            0
+        );
+        let sd = Local(raw);
+        // SAFETY: API returned a complete descriptor allocation; copy before owner drops.
+        unsafe {
+            std::slice::from_raw_parts(
+                sd.0.cast::<u8>(),
+                GetSecurityDescriptorLength(sd.0) as usize,
+            )
+            .to_vec()
         }
     }
     fn snapshot_security(file: &File) -> Vec<u8> {
@@ -1181,7 +1244,7 @@ mod tests {
         let temp = fixture();
         let user = sid_string(&user_sid(temp.path()).unwrap());
         let read_only = temp.path().join("read-control");
-        directory_with(&read_only, &format!("D:P(A;;0x20080;;;{user})"));
+        directory_with(&read_only, &format!("D:P(A;;0x120080;;;{user})"));
         assert!(
             inspect(&read_only, ObjectKind::Directory)
                 .unwrap()
@@ -1239,23 +1302,24 @@ mod tests {
             expected
         );
         drop(newer);
-        let name = wide(&path).unwrap();
-        // SAFETY: existing fixture only, noninheritable exclusive open to provoke sharing failure.
+        let name = wide(&root).unwrap();
+        drop(_parents);
+        // SAFETY: own synthetic directory, data-category directory open with exclusive sharing.
         let h = unsafe {
             CreateFileW(
                 name.as_ptr(),
-                READ_CONTROL | FILE_READ_ATTRIBUTES,
+                READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
                 0,
                 null(),
                 OPEN_EXISTING,
-                FILE_FLAG_OPEN_REPARSE_POINT,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
                 null_mut(),
             )
         };
         assert_ne!(h, INVALID_HANDLE_VALUE);
         // SAFETY: successful exclusive open transfers handle ownership.
         let exclusive = unsafe { File::from_raw_handle(h) };
-        assert!(inspect(&path, ObjectKind::File).is_err());
+        assert!(anchor(&path).is_err());
         drop(exclusive);
         assert!(inspect(&path, ObjectKind::File).unwrap().is_some());
     }
