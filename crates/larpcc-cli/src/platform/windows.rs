@@ -444,6 +444,10 @@ pub fn inspect(path: &Path, kind: ObjectKind) -> Result<Option<CheckedObject>, E
     .map(|f| verify(f, path, kind, Policy::Managed))
     .transpose()
 }
+// Caller pins verified parents and compares the returned identity before data access.
+pub fn verify_opened(file: File, path: &Path, kind: ObjectKind) -> Result<CheckedObject, Error> {
+    verify(file, path, kind, Policy::Managed)
+}
 pub fn inspect_home(path: &Path) -> Result<DirStatus, Error> {
     Ok(match inspect(path, ObjectKind::Directory) {
         Ok(Some(_)) => DirStatus::Ok,
@@ -531,14 +535,20 @@ fn resolved(file: &File, path: &Path) -> Result<PathBuf, Error> {
     drive_root(&result)?;
     Ok(result)
 }
-fn inside(path: &Path, root: &Path) -> bool {
+fn inside(path: &Path, root: &Path) -> Option<bool> {
     // Compare components, not string prefixes. Ordinal Unicode folding is done by Windows.
     let mut p = path.components();
-    root.components().all(|r| {
-        p.next()
-            .is_some_and(|c| ordinal_equal(c.as_os_str(), r.as_os_str()))
-    })
+    for r in root.components() {
+        let Some(c) = p.next() else {
+            return Some(false);
+        };
+        if !ordinal_equal(c.as_os_str(), r.as_os_str())? {
+            return Some(false);
+        }
+    }
+    Some(true)
 }
+
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn CompareStringOrdinal(
@@ -549,14 +559,18 @@ unsafe extern "system" {
         ignore_case: i32,
     ) -> i32;
 }
-fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> bool {
+fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> Option<bool> {
     let a: Vec<_> = a.encode_wide().collect();
     let b: Vec<_> = b.encode_wide().collect();
     let (Ok(an), Ok(bn)) = (i32::try_from(a.len()), i32::try_from(b.len())) else {
-        return false;
+        return None;
     };
     // SAFETY: exact counted UTF-16 buffers; Windows ordinal comparison preserves native spelling.
-    unsafe { CompareStringOrdinal(a.as_ptr(), an, b.as_ptr(), bn, 1) == 2 }
+    match unsafe { CompareStringOrdinal(a.as_ptr(), an, b.as_ptr(), bn, 1) } {
+        1 | 3 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
 }
 
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
@@ -601,13 +615,13 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
                 }
             }
         };
-    if inside(&target, &canonical_root) {
+    if inside(&target, &canonical_root).unwrap_or(true) {
         return Err(unsafe_path(path, "is inside the Larp CC data directory"));
     }
     for p in [path, target.as_path()] {
         if !p
             .extension()
-            .is_some_and(|x| ordinal_equal(x, std::ffi::OsStr::new("exe")))
+            .is_some_and(|x| ordinal_equal(x, std::ffi::OsStr::new("exe")) == Some(true))
         {
             return Err(unsafe_path(path, "must end in .exe"));
         }
@@ -1031,6 +1045,11 @@ mod tests {
         directory_with(&safe, &format!("D:P(A;;FA;;;{user})"));
         assert!(anchor(&safe.join("leaf")).is_ok());
         drop(create_file(&safe.join("new")).unwrap());
+        let executable_path = safe.join("native.exe");
+        let mut native = create_file(&executable_path).unwrap();
+        native.file.write_all(b"MZxx").unwrap();
+        drop(native);
+        assert!(executable(&executable_path, &safe.join("data")).is_ok());
         let hostile = parent.join("hostile");
         directory_with(&hostile, &format!("D:P(A;;FA;;;{user})(A;;WD;;;WD)"));
         assert!(anchor(&hostile.join("leaf")).is_err());
@@ -1038,12 +1057,54 @@ mod tests {
         assert!(inspect(&hostile, ObjectKind::Directory).is_err());
     }
     #[test]
+    fn w06_executable_magic_identity_hardlink_self_and_ancestry() {
+        let temp = fixture();
+        let selected = temp.path().join("native");
+        drop(create_directory(&selected).unwrap());
+        let data = selected.join("data");
+        drop(create_directory(&data).unwrap());
+        let path = selected.join("native.exe");
+        let mut created = create_file(&path).unwrap();
+        created
+            .file
+            .write_all(b"MZxxsynthetic header only; never executed")
+            .unwrap();
+        let expected = created.identity.clone();
+        drop(created);
+        let (resolved, id) = executable(&path, &data).unwrap();
+        assert_eq!(expected, id);
+        assert!(resolved.is_absolute());
+        assert!(executable(&path, &selected).is_err());
+        let alias = selected.join("self.exe");
+        std::fs::hard_link(std::env::current_exe().unwrap(), &alias).unwrap();
+        assert!(
+            matches!(executable(&alias, &data), Err(Error::Unsafe { reason, .. }) if reason == "is Larp CC itself")
+        );
+        let before = std::fs::read(&path).unwrap();
+        let old = inspect(&path, ObjectKind::File).unwrap().unwrap();
+        let newer = selected.join("new.exe");
+        drop(create_file(&newer).unwrap());
+        std::fs::rename(&newer, &path).unwrap();
+        assert_ne!(
+            old.identity,
+            inspect(&path, ObjectKind::File).unwrap().unwrap().identity
+        );
+        assert!(executable(&path, &data).is_err());
+        assert!(before.starts_with(b"MZ"));
+    }
+    #[test]
     fn w06_ordinal_component_boundaries_and_native_surrogates() {
-        assert!(inside(Path::new(r"C:\DATA\child"), Path::new(r"c:\data")));
-        assert!(!inside(Path::new(r"C:\database"), Path::new(r"C:\data")));
+        assert_eq!(
+            inside(Path::new(r"C:\DATA\child"), Path::new(r"c:\data")),
+            Some(true)
+        );
+        assert_eq!(
+            inside(Path::new(r"C:\database"), Path::new(r"C:\data")),
+            Some(false)
+        );
         let a = OsString::from_wide(&[0xd800]);
         let b = OsString::from_wide(&[0xd801]);
-        assert!(!ordinal_equal(&a, &b));
+        assert_eq!(ordinal_equal(&a, &b), Some(false));
         assert!(wide(Path::new(&OsString::from_wide(&[0x43, 0, 0x44]))).is_err());
     }
 }
