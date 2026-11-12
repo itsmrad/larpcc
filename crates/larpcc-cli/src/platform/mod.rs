@@ -1,5 +1,3 @@
-// Windows implementation still belongs to its separate owner; remove this seed-only allowance at integration.
-#![cfg_attr(windows, allow(dead_code, unused_imports))]
 use crate::registry::{DirStatus, Error};
 use std::{
     fs::File,
