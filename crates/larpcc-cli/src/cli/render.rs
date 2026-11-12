@@ -85,6 +85,47 @@ pub fn list(mut entries: Vec<ProfileEntry>) -> String {
     output
 }
 
+pub fn bound(
+    provider: crate::registry::Provider,
+    path: &std::path::Path,
+    outcome: crate::registry::BindOutcome,
+) -> String {
+    use crate::registry::{BindOutcome, display::path as display};
+    match outcome {
+        BindOutcome::Bound => format!("Bound {provider} to {}.\n", display(path)),
+        BindOutcome::Unchanged => format!("{provider} is already bound to {}.\n", display(path)),
+        BindOutcome::Replaced { old } => format!(
+            "Rebound {provider} from {} to {}.\n",
+            display(&old),
+            display(path)
+        ),
+    }
+}
+pub fn bindings(
+    entries: Vec<(crate::registry::Provider, crate::registry::BindingState)>,
+) -> String {
+    use crate::registry::{BindingState, display::path};
+    let mut rows = vec![[
+        "PROVIDER".to_owned(),
+        "STATE".to_owned(),
+        "EXECUTABLE".to_owned(),
+    ]];
+    rows.extend(entries.into_iter().map(|(p, s)| match s {
+        BindingState::Unbound => [p.to_string(), "unbound".into(), "-".into()],
+        BindingState::Ok(b) => [p.to_string(), "ok".into(), path(&b.executable)],
+        BindingState::Invalid(b, r) => {
+            [p.to_string(), format!("invalid: {r}"), path(&b.executable)]
+        }
+    }));
+    let w0 = rows.iter().map(|r| r[0].len()).max().unwrap_or(0);
+    let w1 = rows.iter().map(|r| r[1].len()).max().unwrap_or(0);
+    let mut result = String::new();
+    for r in rows {
+        let _ = writeln!(result, "{:<w0$}  {:<w1$}  {}", r[0], r[1], r[2]);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -19,6 +19,8 @@ pub(super) struct Data {
     pub revision: u64,
     pub next_id: u64,
     pub profiles: Vec<Profile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<super::Binding>,
 }
 impl Default for Data {
     fn default() -> Self {
@@ -27,6 +29,7 @@ impl Default for Data {
             revision: 0,
             next_id: 1,
             profiles: Vec::new(),
+            bindings: Vec::new(),
         }
     }
 }
@@ -48,20 +51,39 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     }
     // Probe only the version first, so future schemas can contain future fields.
     let probe: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|e| corrupt(e.to_string()))?;
+        serde_json::from_slice(bytes).map_err(|_| corrupt("invalid registry encoding".into()))?;
     let version = probe
         .get("version")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| corrupt("missing or invalid version".into()))?;
-    if version > 1 {
+    if version > 2 {
         return Err(Error::NewerSchema {
             path: path.into(),
             found: version,
         });
     }
-    let data: Data = serde_json::from_slice(bytes).map_err(|e| corrupt(e.to_string()))?;
-    if data.version != 1 || data.next_id == 0 {
+    let data: Data =
+        serde_json::from_slice(bytes).map_err(|_| corrupt("invalid registry encoding".into()))?;
+    if !matches!(data.version, 1 | 2) || data.next_id == 0 {
         return Err(corrupt("invalid version or next_id".into()));
+    }
+    if (version == 2 && probe.get("bindings").is_none())
+        || (version == 1 && probe.get("bindings").is_some())
+    {
+        return Err(corrupt("invalid bindings field".into()));
+    }
+    let mut previous_provider = None;
+    for binding in &data.bindings {
+        let index = Provider::ALL
+            .iter()
+            .position(|p| *p == binding.provider)
+            .unwrap_or(0);
+        if previous_provider.is_some_and(|previous| previous >= index)
+            || crate::provider::lexical(&binding.executable).is_err()
+        {
+            return Err(corrupt("invalid or unsorted bindings".into()));
+        }
+        previous_provider = Some(index);
     }
     let mut names = HashSet::new();
     let mut previous = 0;
@@ -77,8 +99,8 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     Ok(data)
 }
 pub(super) fn load(root: &Path) -> Result<Data, Error> {
-    #[cfg(windows)]
-    crate::platform::anchor(root)?;
+    let _ancestors = crate::platform::anchor(root)?.ancestors;
+    let _fixed = fixed(root)?;
     if paths::inspect(root, true)?.is_none() {
         return Ok(Data::default());
     }
@@ -93,13 +115,50 @@ pub(super) fn load(root: &Path) -> Result<Data, Error> {
             reason: "exceeds 1 MiB".into(),
         });
     }
-    let file = File::open(&path).map_err(|e| io("open", &path, e))?;
+    let inspected = crate::platform::inspect(&path, crate::platform::ObjectKind::File)?
+        .ok_or_else(|| Error::Unsafe {
+            path: path.clone(),
+            reason: "filesystem identity cannot be verified".into(),
+        })?;
+    let opened = paths::read_options()
+        .open(&path)
+        .map_err(|e| io("open", &path, e))?;
+    let checked = crate::platform::verify_opened(opened, &path, crate::platform::ObjectKind::File)?;
+    if checked.identity != inspected.identity {
+        return Err(Error::Unsafe {
+            path: path.clone(),
+            reason: "filesystem identity cannot be verified".into(),
+        });
+    }
+    let file = checked.file;
     let bytes = bounded(file).map_err(|e| io("read", &path, e))?;
     parse(&path, &bytes)
 }
 pub(super) fn serialize(data: &Data) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
-    serde_json::to_writer_pretty(&mut bytes, data).map_err(|e| {
+    let result = if data.version == 2 {
+        #[derive(Serialize)]
+        struct V2<'a> {
+            version: u64,
+            revision: u64,
+            next_id: u64,
+            profiles: &'a [Profile],
+            bindings: &'a [super::Binding],
+        }
+        serde_json::to_writer_pretty(
+            &mut bytes,
+            &V2 {
+                version: 2,
+                revision: data.revision,
+                next_id: data.next_id,
+                profiles: &data.profiles,
+                bindings: &data.bindings,
+            },
+        )
+    } else {
+        serde_json::to_writer_pretty(&mut bytes, data)
+    };
+    result.map_err(|e| {
         io(
             "write",
             Path::new("registry.json"),
@@ -116,13 +175,18 @@ pub(super) fn capacity(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
         Ok(bytes)
     }
 }
-fn lock(root: &Path, timeout: Duration) -> Result<File, Error> {
+fn lock(
+    root: &Path,
+    timeout: Duration,
+) -> Result<(File, Vec<crate::platform::CheckedObject>), Error> {
+    let _fixed = fixed(root)?;
     if paths::inspect(root, true)?.is_none()
         && paths::mkdir(root)?
         && let Some(parent) = root.parent()
     {
         paths::sync(parent)?;
     }
+    let held = fixed(root)?;
     let mut known = false;
     let mut nonempty = false;
     for entry in fs::read_dir(root).map_err(|e| io("read", root, e))? {
@@ -140,19 +204,33 @@ fn lock(root: &Path, timeout: Duration) -> Result<File, Error> {
         });
     }
     let path = root.join("registry.lock");
-    match paths::options().create_new(true).open(&path) {
-        Ok(_) => (),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
-        Err(e) => return Err(io("open", &path, e)),
-    }
-    paths::inspect(&path, false)?;
-    let file = paths::options()
-        .open(&path)
-        .map_err(|e| io("open", &path, e))?;
+    let file = match crate::platform::create_file(&path) {
+        Ok(object) => object.file,
+        Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+            let inspected = crate::platform::inspect(&path, crate::platform::ObjectKind::File)?
+                .ok_or_else(|| Error::Unsafe {
+                    path: path.clone(),
+                    reason: "filesystem identity cannot be verified".into(),
+                })?;
+            let opened = paths::options()
+                .open(&path)
+                .map_err(|e| io("open", &path, e))?;
+            let checked =
+                crate::platform::verify_opened(opened, &path, crate::platform::ObjectKind::File)?;
+            if checked.identity != inspected.identity {
+                return Err(Error::Unsafe {
+                    path: path.clone(),
+                    reason: "filesystem identity cannot be verified".into(),
+                });
+            }
+            checked.file
+        }
+        Err(e) => return Err(e),
+    };
     let start = Instant::now();
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(file),
+            Ok(()) => return Ok((file, held)),
             Err(std::fs::TryLockError::WouldBlock) => {
                 if start.elapsed() >= timeout {
                     return Err(Error::Busy { path });
@@ -173,9 +251,9 @@ pub(super) fn mutate(
     mutation: Mutation,
     timeout: Duration,
 ) -> Result<ProfileEntry, Error> {
-    #[cfg(windows)]
-    crate::platform::anchor(root)?;
+    let _ancestors = crate::platform::anchor(root)?.ancestors;
     let _lock = lock(root, timeout)?;
+    let _fixed = fixed(root)?;
     let mut data = load(root)?;
     let old_entries = paths::entries(root, &data.profiles)?;
     let (mut selected, add) = match mutation {
@@ -213,12 +291,13 @@ pub(super) fn mutate(
             (data.profiles.remove(index), false)
         }
     };
+    data.version = 2;
     data.revision = data.revision.checked_add(1).ok_or(Error::Exhausted)?;
     let parent = root.join("profiles");
     let mut created_home = None;
+    let mut _profiles_handle = None;
     let mut created_temp = false;
     let temp = root.join("registry.json.tmp");
-    let target = root.join("registry.json");
     let mut applied = false;
     let operation = (|| {
         let bytes = if add {
@@ -248,63 +327,28 @@ pub(super) fn mutate(
                 if paths::mkdir(&parent)? {
                     paths::sync(root)?;
                 }
-                paths::inspect(&parent, true)?;
+                _profiles_handle =
+                    crate::platform::inspect(&parent, crate::platform::ObjectKind::Directory)?;
                 // Unlike parent creation, an existing candidate is always an orphan.
-                #[cfg(unix)]
-                let mut builder = fs::DirBuilder::new();
-                #[cfg(not(unix))]
-                let builder = fs::DirBuilder::new();
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::DirBuilderExt;
-                    builder.mode(0o700);
-                }
-                match builder.create(&home) {
-                    Ok(()) => {
+                match crate::platform::create_directory(&home) {
+                    Ok(_) => {
                         created_home = Some(home);
                         paths::sync(&parent)?;
                         data.profiles.push(selected.clone());
                         break bytes;
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(Error::Io { source: e, .. })
+                        if e.kind() == std::io::ErrorKind::AlreadyExists =>
+                    {
                         selected.id = ProfileId::new(successor);
                     }
-                    Err(e) => return Err(io("create directory", &home, e)),
+                    Err(e) => return Err(e),
                 }
             }
         } else {
             serialize(&data)?
         };
-        match fs::remove_file(&temp) {
-            Ok(()) => (),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(e) => return Err(io("remove", &temp, e)),
-        }
-        let mut file = paths::options()
-            .create_new(true)
-            .open(&temp)
-            .map_err(|e| io("open", &temp, e))?;
-        created_temp = true;
-        #[cfg(all(test, not(windows)))]
-        phase("write", &temp)?;
-        file.write_all(&bytes).map_err(|e| io("write", &temp, e))?;
-        #[cfg(all(test, not(windows)))]
-        phase("file sync", &temp)?;
-        file.sync_all().map_err(|e| io("sync", &temp, e))?;
-        drop(file);
-        #[cfg(all(test, not(windows)))]
-        phase("replace", &target)?;
-        replace(&temp, &target)?;
-        applied = true;
-        paths::sync(root).map_err(|e| {
-            io(
-                "sync",
-                root,
-                std::io::Error::other(format!(
-                    "the change was applied but may not be durable: {e}"
-                )),
-            )
-        })?;
+        persist(root, &bytes, &mut applied, &mut created_temp)?;
         Ok(())
     })();
     if operation.is_err() && !applied {
@@ -349,4 +393,106 @@ fn replace(from: &Path, to: &Path) -> Result<(), Error> {
 #[cfg(all(test, not(windows)))]
 pub(super) fn phase(action: &str, path: &Path) -> Result<(), Error> {
     super::tests::phase(action, path)
+}
+
+// Retain parent handles; data handles are released before atomic replacement.
+pub(super) fn fixed(root: &Path) -> Result<Vec<crate::platform::CheckedObject>, Error> {
+    use crate::platform::{ObjectKind, inspect};
+    let mut held = Vec::new();
+    for path in [root.to_path_buf(), root.join("profiles")] {
+        if let Some(object) = inspect(&path, ObjectKind::Directory)? {
+            held.push(object);
+        }
+    }
+    for name in ["registry.json", "registry.lock", "registry.json.tmp"] {
+        inspect(&root.join(name), ObjectKind::File)?;
+    }
+    Ok(held)
+}
+fn persist(
+    root: &Path,
+    bytes: &[u8],
+    applied: &mut bool,
+    created_temp: &mut bool,
+) -> Result<(), Error> {
+    let temp = root.join("registry.json.tmp");
+    let target = root.join("registry.json");
+    match fs::remove_file(&temp) {
+        Ok(()) => (),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(io("remove", &temp, e)),
+    }
+    let mut file = crate::platform::create_file(&temp)?.file;
+    *created_temp = true;
+    #[cfg(all(test, not(windows)))]
+    phase("write", &temp)?;
+    file.write_all(bytes).map_err(|e| io("write", &temp, e))?;
+    #[cfg(all(test, not(windows)))]
+    phase("file sync", &temp)?;
+    file.sync_all().map_err(|e| io("sync", &temp, e))?;
+    drop(file);
+    #[cfg(all(test, not(windows)))]
+    phase("replace", &target)?;
+    replace(&temp, &target)?;
+    *applied = true;
+    paths::sync(root).map_err(|e| {
+        io(
+            "sync",
+            root,
+            std::io::Error::other(format!(
+                "the change was applied but may not be durable: {e}"
+            )),
+        )
+    })?;
+    Ok(())
+}
+pub(super) fn bind(
+    root: &Path,
+    provider: Provider,
+    executable: std::path::PathBuf,
+    replace_existing: bool,
+) -> Result<super::BindOutcome, Error> {
+    crate::provider::input(provider, &executable, root)?;
+    let _ancestors = crate::platform::anchor(root)?.ancestors;
+    let _lock = lock(root, Duration::from_secs(10))?;
+    let _fixed = fixed(root)?;
+    let mut data = load(root)?;
+    let old = data
+        .bindings
+        .iter()
+        .find(|b| b.provider == provider)
+        .map(|b| b.executable.clone());
+    if let Some(old) = &old {
+        if old == &executable {
+            return Ok(super::BindOutcome::Unchanged);
+        }
+        if !replace_existing {
+            return Err(Error::AlreadyBound {
+                provider,
+                old: old.clone(),
+            });
+        }
+    }
+    crate::provider::validate(provider, &executable, root)?;
+    data.version = 2;
+    data.revision = data.revision.checked_add(1).ok_or(Error::Exhausted)?;
+    data.bindings.retain(|b| b.provider != provider);
+    data.bindings.push(super::Binding {
+        provider,
+        executable,
+    });
+    data.bindings
+        .sort_by_key(|b| Provider::ALL.iter().position(|p| *p == b.provider));
+    let bytes = serialize(&data)?;
+    let mut applied = false;
+    let mut created = false;
+    let result = persist(root, &bytes, &mut applied, &mut created);
+    if result.is_err() && !applied && created {
+        let _ = fs::remove_file(root.join("registry.json.tmp"));
+    }
+    result?;
+    Ok(match old {
+        Some(old) => super::BindOutcome::Replaced { old },
+        None => super::BindOutcome::Bound,
+    })
 }

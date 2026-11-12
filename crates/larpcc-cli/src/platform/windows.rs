@@ -21,3 +21,13 @@ pub fn executable(path: &Path, _root: &Path) -> Result<(PathBuf, FileIdentity), 
 pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
     Err(unavailable(&plan.executable))
 }
+
+// Temporary shared-API refusal approved by lead; Windows owner supplies its real body.
+pub fn verify_opened(_file: File, path: &Path, _kind: ObjectKind) -> Result<CheckedObject, Error> {
+    Err(unavailable(path))
+}
+
+// Temporary shared-API refusal approved by lead; Windows owner supplies native ordinal comparison.
+pub fn contains_path(path: &Path, _root: &Path) -> Result<bool, Error> {
+    Err(unavailable(path))
+}

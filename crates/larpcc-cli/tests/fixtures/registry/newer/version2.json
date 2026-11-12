@@ -1,1 +1,1 @@
-{"version": 2, "revision": 1, "next_id": 2, "profiles": [{"id": 1, "name": "work", "provider": "claude"}], "new_field": "future"}
+{"version": 3, "revision": 1, "next_id": 2, "profiles": [{"id": 1, "name": "work", "provider": "claude"}], "new_field": "future"}

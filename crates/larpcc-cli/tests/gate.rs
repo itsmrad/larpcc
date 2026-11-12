@@ -22,3 +22,23 @@ fn ordinary_run_refuses_before_root_or_environment_inspection() {
     }
     assert!(!f.root.exists());
 }
+
+#[test]
+fn ordinary_run_ignores_corrupt_registry_and_runtime_markers() {
+    let f = Fixture::new();
+    f.install_registry(b"corrupt synthetic registry");
+    let before = std::fs::read(f.root.join("registry.json")).unwrap();
+    for name in ["claude", "codex"] {
+        let mut command = f.command(&["cc", "run", name, "--", "prompt"]);
+        command
+            .env("LARPCC_SYNTHETIC", "1")
+            .env("LARPCC_FAKE_MODE", "exit");
+        let out = capture(command).unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            stderr(&out),
+            include_str!("fixtures/qualification-pending.txt").replace("\r\n", "\n")
+        );
+    }
+    assert_eq!(std::fs::read(f.root.join("registry.json")).unwrap(), before);
+}
