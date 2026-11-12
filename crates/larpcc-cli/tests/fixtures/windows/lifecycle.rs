@@ -182,6 +182,19 @@ fn entry() {
                 assert_eq!(REMOVALS.with(|n| n.get()), before + 1);
                 assert!(!HANDLER_INSTALLED.with(|h| h.get()));
             }
+            FAULT.with(|f| f.set(0));
+            let mut nul = plan("sleep", &root);
+            nul.argv.push(OsString::from_wide(&[0x61, 0, 0x62]));
+            let before = REMOVALS.with(|n| n.get());
+            match spawn_wait(&nul) {
+                Err(Error::Launch { source, .. }) => {
+                    assert_eq!(source.kind(), io::ErrorKind::InvalidInput)
+                }
+                other => panic!("NUL must fail before child creation: {other:?}"),
+            }
+            assert_eq!(REMOVALS.with(|n| n.get()), before + 1);
+            assert!(!HANDLER_INSTALLED.with(|h| h.get()));
+            assert!(!root.join("pid").exists());
             FAULT.with(|f| f.set(2));
             let before = REMOVALS.with(|n| n.get());
             assert!(matches!(
