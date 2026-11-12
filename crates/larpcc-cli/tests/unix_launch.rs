@@ -333,3 +333,20 @@ fn unrelated_provider_home_and_parent_values_remain_unchanged() {
         hex(f.temp.path().join("home").as_os_str())
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_invalid_utf8_argument_is_preserved() {
+    use std::os::unix::ffi::OsStringExt;
+    let f = setup();
+    let record = f.temp.path().join("raw-argv");
+    let raw = std::ffi::OsString::from_vec(vec![0xff, 0xfe, b' ', b'\\']);
+    let mut command = driver(&f, "claudea", &["prompt"]);
+    command.arg(raw).env("LARPCC_FAKE_RECORD", &record);
+    assert!(capture(command).unwrap().status.success());
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
+    assert_eq!(
+        value["args"].as_array().unwrap().last().unwrap(),
+        "fffe205c"
+    );
+}
