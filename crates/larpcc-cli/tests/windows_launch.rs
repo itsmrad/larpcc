@@ -4,15 +4,23 @@ use common::*;
 use std::{
     ffi::{OsStr, OsString},
     fs,
-    io::Write,
+    io::{self, Write},
     os::windows::{
         ffi::{OsStrExt, OsStringExt},
+        io::{AsRawHandle, FromRawHandle, OwnedHandle},
         process::CommandExt,
     },
     path::Path,
     process::{Command, Stdio},
+    time::{Duration, Instant},
 };
-use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::{
+    Foundation::FILETIME,
+    System::Threading::{
+        CREATE_NO_WINDOW, GetExitCodeProcess, GetProcessTimes, OpenProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
+    },
+};
 fn hex(value: &OsStr) -> String {
     value.encode_wide().map(|u| format!("{u:04x}")).collect()
 }
@@ -188,6 +196,171 @@ fn p02_p04_provisional_conflicts_refuse_without_child_or_registry_changes() {
         assert_eq!(out.status.code(), Some(1));
         assert!(out.stdout.is_empty());
         assert!(!record.exists());
+    }
+    assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), before);
+}
+
+// Retain one identity-checked handle: never terminate a possibly reused recorded PID.
+struct Grandchild(OwnedHandle);
+impl Grandchild {
+    fn open(record: &serde_json::Value) -> Self {
+        let pid = u32::try_from(record["pid"].as_u64().unwrap()).unwrap();
+        assert_ne!(pid, 0);
+        // SAFETY: open only the synthetic record's PID, no inheritance or privilege changes.
+        let raw = unsafe {
+            OpenProcess(
+                PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                pid,
+            )
+        };
+        assert!(
+            !raw.is_null(),
+            "grandchild cleanup handle unavailable: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: successful open transfers ownership; all later operations reuse this handle.
+        let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let mut created = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut exited, mut kernel, mut user) = (created, created, created);
+        // SAFETY: live query handle and valid FILETIME output buffers.
+        assert_ne!(
+            unsafe {
+                GetProcessTimes(
+                    handle.as_raw_handle(),
+                    &mut created,
+                    &mut exited,
+                    &mut kernel,
+                    &mut user,
+                )
+            },
+            0,
+            "grandchild identity query failed; refusing termination"
+        );
+        assert_eq!(
+            record["windows_creation_time"].as_u64(),
+            Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime)),
+            "grandchild creation identity mismatch; refusing termination"
+        );
+        Self(handle)
+    }
+    fn status(&self) -> io::Result<u32> {
+        let mut code = 0;
+        // SAFETY: retained identity-checked process handle and valid output pointer.
+        if unsafe { GetExitCodeProcess(self.0.as_raw_handle(), &mut code) } == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(code)
+        }
+    }
+}
+impl Drop for Grandchild {
+    fn drop(&mut self) {
+        let ok = match self.status() {
+            Ok(259) => {
+                // SAFETY: terminate only our retained, creation-time-verified synthetic process.
+                let killed = unsafe { TerminateProcess(self.0.as_raw_handle(), 1) } != 0;
+                let end = Instant::now() + Duration::from_secs(2);
+                while matches!(self.status(), Ok(259)) && Instant::now() < end {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                killed && matches!(self.status(), Ok(code) if code != 259)
+            }
+            Ok(_) => true,
+            Err(_) => false, // Query failure never authorizes termination.
+        };
+        if !ok {
+            eprintln!("grandchild cleanup gate failed; no unverified termination");
+            // Preserve the original failed assertion while reporting cleanup failure.
+            assert!(std::thread::panicking(), "grandchild cleanup gate failed");
+        }
+    }
+}
+
+#[test]
+fn l07_bounded_grandchild_inherits_exact_selected_home() {
+    let f = setup();
+    let before = fs::read(f.root.join("registry.json")).unwrap();
+    for (name, selected, id) in [
+        ("claudea", "CLAUDE_CONFIG_DIR", "1"),
+        ("codexb", "CODEX_HOME", "4"),
+    ] {
+        let record = f.temp.path().join(format!("descendant-{name}"));
+        let child_record = record.with_extension("grandchild");
+        let done = child_record.with_extension("grandchild.done");
+        let mut command = driver(&f, name);
+        command
+            .arg("prompt")
+            .env("LARPCC_FAKE_MODE", "grandchild")
+            .env("LARPCC_FAKE_RECORD", &record);
+        let started = Instant::now();
+        let out = capture(command).unwrap();
+        let driver_elapsed = started.elapsed();
+        let grandchild = loop {
+            match fs::read(&child_record) {
+                Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    Ok(record) => break record,
+                    Err(error) if error.is_eof() => (),
+                    Err(error) => panic!("invalid synthetic grandchild record: {error}"),
+                },
+                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                Err(error) => panic!("cannot read synthetic grandchild record: {error}"),
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "grandchild record deadline; cleanup identity unavailable"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let child = Grandchild::open(&grandchild);
+        let end = started + Duration::from_secs(5);
+        while (!done.exists() || child.status().unwrap() == 259) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            done.exists() && started.elapsed() < Duration::from_secs(5),
+            "bounded grandchild did not complete within five seconds"
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(out.stdout.is_empty());
+        assert!(out.stderr.is_empty());
+        assert!(
+            driver_elapsed < Duration::from_secs(2),
+            "launcher lingered after direct child exit"
+        );
+        assert_eq!(fs::read(&done).unwrap(), b"synthetic helper completed\n");
+        let read =
+            |path| serde_json::from_slice::<serde_json::Value>(&fs::read(path).unwrap()).unwrap();
+        let parent = read(&record);
+        assert_eq!(
+            child.status().unwrap(),
+            0,
+            "grandchild must exit itself successfully"
+        );
+        assert_ne!(parent["pid"], grandchild["pid"]);
+        assert_eq!(
+            parent[selected],
+            hex(f.root.join("profiles").join(id).as_os_str())
+        );
+        assert_eq!(grandchild[selected], parent[selected]);
+        for key in [
+            "CLAUDE_CONFIG_DIR",
+            "CODEX_HOME",
+            "HOME",
+            "USERPROFILE",
+            "XDG_DATA_HOME",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PWD",
+        ] {
+            assert_eq!(
+                grandchild[key], parent[key],
+                "grandchild environment key {key}"
+            );
+        }
     }
     assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), before);
 }
