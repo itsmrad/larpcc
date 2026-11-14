@@ -204,7 +204,7 @@ Every new bind, provider-list row, and synthetic run validates again in this ord
 
 Stored path is kept for future self-update lookup and printed in bindings. `LaunchTarget` carries
 both stored and resolved path plus validated identity. Execute the **resolved** path, never the
-stored symlink spelling. Unix explicitly sets argv0 to stored path using `CommandExt::arg0`; Windows
+stored symlink spelling. Unix explicitly supplies stored path as argv0 to `execve`; Windows
 argv0 follows std's resolved executable command-line construction, no stored-argv0 promise. Unix
 permits symlinked installation paths only after validating every link's containing ancestry, chain
 and final ancestry (bounded 40 hops; loop/error refuses); symlink owner euid/root and parent
@@ -283,10 +283,16 @@ Larp access remains an operational error. No general effective-access evaluator 
 Reparse flag/type is checked on every component, not merely the final leaf.
 
 Walk components in order using full paths from that verified anchor. Open
-each existing directory with `CreateFileW(OPEN_EXISTING, READ_CONTROL | FILE_READ_ATTRIBUTES,
+each existing directory with `CreateFileW(OPEN_EXISTING, READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY,
 FILE_SHARE_READ | FILE_SHARE_WRITE, ... BACKUP_SEMANTICS | OPEN_REPARSE_POINT)`, non-inheritable,
 **no FILE_SHARE_DELETE**, then query actual opened type, tag, owner, ACL and identity; retain those
-handles until the relevant transaction/validation ends. A retained preceding ancestor cannot be
+handles until the relevant transaction/validation ends. The added FILE_LIST_DIRECTORY access applies only to ancestor PIN opens, with no enumeration or
+content reads; metadata inspection remains READ_CONTROL/access-only. Shared store::fixed retains
+actual anchor guards (not just metadata inspect handles) through reads/transactions, including
+newly created profiles parents. A syntactic `root/profiles/1` anchor excludes its leaf and never
+queries profile 1; it retains existing root when profiles is missing. Native scope tests must
+prove these held guards prevent root/profiles rename through the real scoped call sites.
+A retained preceding ancestor cannot be
 renamed/deleted through a compatible Windows open. Sharing conflict, unsupported queries, any
 reparse tag, unresolved namespace, or foreign-write control refuses before registry
 consumption/creation. Check next component only after anchoring its parent. Do not rely on a name
@@ -299,7 +305,14 @@ identity/type/security before reading. Read a single handle's complete old/new r
 mutation retain ancestor/root/profiles/lock handles without delete-sharing; registry/temp data
 handles can be closed before replacement. Never retain a no-delete registry handle across rename.
 Namespace control comes from retained safe parents, not the advisory lock. Identity mismatch during
-opening aborts. Windows rename sharing retries remain bounded as M1. Tests must verify no-delete
+opening aborts that acquisition without reading bytes. Lead-approved concurrency correction:
+only managed replaceable `registry.json` and optional `registry.json.tmp` acquisitions may retry
+an internally typed namespace identity change, at most 32 fresh attempts per acquisition. Every
+attempt repeats type/owner/mode/ACL/volume/no-follow and opened-handle identity checks under retained
+safe parents. Exhaustion retains `filesystem identity cannot be verified`. Unsafe observations,
+permissions, other I/O, parse and size errors never retry. Directory pins, locks, homes and
+provider executables retain immediate identity-mismatch refusal. Optional temp disappearance
+retains its existing missing-object semantics; no bytes are consumed before a matching validation. Windows rename sharing retries remain bounded as M1. Tests must verify no-delete
 ancestor behavior and registry replacement compatibility; unavailable semantics on a
 runner/filesystem fail the corresponding gate, not inferred safe.
 
@@ -311,25 +324,47 @@ cross-platform inode-pinning layer. Same-user/privileged TOCTOU remains the M1 l
 
 Managed dirs retain euid ownership and mode &0077 ==0; files same owner/mode rule and regular type.
 Linux mode mask is the managed-object POSIX access-ACL gate; no chmod repair. macOS additionally
-refuses **any extended allow ACE** on managed objects, not only foreign write. Native private FFI
-stays in macos.rs: `acl_t`/`acl_entry_t` opaque pointers; `acl_type_t` and `acl_tag_t` represented
-as `libc::c_int` for the C-enum ABI, `acl_get_link_np(*const c_char, acl_type_t)->acl_t`,
-`acl_get_entry(acl_t,c_int,*mut acl_entry_t)->c_int`, `acl_get_tag_type(acl_entry_t,*mut
-acl_tag_t)->c_int`, `acl_free(*mut c_void)->c_int`. Use Darwin constants ACL_TYPE_EXTENDED=0x100,
-ACL_EXTENDED_ALLOW=1, ACL_EXTENDED_DENY=2, ACL_FIRST_ENTRY=0, ACL_NEXT_ENTRY=-1 (not Linux values).
-Check those enum sizes/constants against the target SDK in seed validation. `acl_get_entry` returns
-0 for an entry; exhaustion is -1/EINVAL in Apple's implementation, not Linux's 0 return convention;
-validate ACL before iteration, reject unknown tag or unexpected error. Null acquisition accepts only
-a documented no-ACL absence result confirmed by native fixture, never generic
-EINVAL/access/unsupported errors; if that cannot be distinguished, refuse and correct the contract
-before enabling the platform. RAII frees each returned allocation once on every branch. Native SDK
-ABI/constant validation and ACL fixtures are required before macOS acceptance. Static ABI/iterator
-references: [Apple ACL
-header](https://raw.githubusercontent.com/apple-oss-distributions/Libc/main/include/sys/acl.h) and
-[entry
-implementation](https://raw.githubusercontent.com/apple-oss-distributions/Libc/main/posix1e/acl_entry.c),
-read 2026-11-11; native SDK confirmation remains required. No automatic ACL repair; hint `remove the
-extended ACL manually after reviewing it`. No shell command constructed by Larp.
+refuses **any extended allow ACE** on managed objects and executable ancestry/targets. Query errors,
+unknown tags and unsupported volumes refuse; no principal/permission parser or repair is added.
+
+Approved, native-proven acquisition amendment: path-based ancestor checks open a no-follow,
+nonblocking, CLOEXEC handle and compare identity/type/owner/mode snapshots. Provided-handle checks
+never reopen the diagnostic path. Require `fpathconf(fd, _PC_EXTENDED_SECURITY_NP)` == 1. Acquire
+an opaque filesec allocation with `filesec_init`, then require successful
+`fstatx_np(fd, *mut libc::stat, filesec)` and matching descriptor identity/type/owner/mode. Only a
+successful `filesec_query_property(filesec, FILESEC_ACL=5, *mut c_int)` reporting zero means no ACL.
+When present, `filesec_get_property` must return an ACL copy; null/error/sentinel results refuse.
+No errno, including ENOENT or EINVAL, is interpreted as acquisition success or absence. The
+wrapper `acl_get_fd_np` hides whether ENOENT came from the object query or absent property and
+is therefore not used for production acquisition.
+
+All FFI remains private in macos.rs: filesec_t/acl_t/acl_entry_t opaque pointers;
+filesec_init()->filesec_t, filesec_free(filesec_t)->void,
+filesec_query_property(filesec_t,c_int,*mut c_int)->c_int,
+filesec_get_property(filesec_t,c_int,*mut c_void)->c_int,
+fstatx_np(c_int,*mut libc::stat,filesec_t)->c_int; ACL validation/entry/tag/free retain c_int ABI.
+The x86_64 `fstatx_np$INODE64` link name follows Darwin's __DARWIN_INODE64 header macro; arm64
+uses the unsuffixed name. The x86 branch is source-only until native/link qualified.
+Darwin constants remain ACL_TYPE_EXTENDED=0x100, ACL_EXTENDED_ALLOW=1, ACL_EXTENDED_DENY=2,
+ACL_FIRST_ENTRY=0, ACL_NEXT_ENTRY=-1, plus FILESEC_ACL=5 and _PC_EXTENDED_SECURITY_NP=13.
+Validate each allocated ACL before iteration. acl_get_entry returns 0 for an entry and
+-1/EINVAL for exhaustion of a validated ACL with known cursor; any other result/tag/error refuses.
+
+Allocation ownership is independently grounded in pinned
+[Apple filesec.c](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/gen/filesec.c):
+filesec_free frees the filesec and its internal raw security buffer. The FILESEC_ACL getter
+uses acl_copy_int_native to allocate an independent ACL copy; the caller frees that copy with
+acl_free. Rust keeps separate OwnedFileSec/OwnedAcl RAII owners, each freed exactly once on every
+return path. Borrowed entries never outlive their ACL. No raw security pointer escapes this module.
+[Apple statx_np.c](https://github.com/apple-oss-distributions/Libc/blob/71bbe350ab79eef58113991d817ccc6165061a64/sys/statx_np.c)
+distinguishes successful object queries and KAUTH_FILESEC_NOACL; acquisition failures remain failures.
+
+Exact core42644d4 native C probe [run43190333433/job131087719574](https://github.com/itsmrad/larpcc/actions/runs/43190333433/job/131087719574)
+passed on macOS26.7.2 arm64: SDK sizes/constants/signatures, supported valid descriptor absence
+separately from missing path/invalid fd, real empty/allow/deny ACLs and iterator exhaustion.
+That C result is not Rust/native platform acceptance or leak proof; native Rust checks and
+independent QA/OCR remain required. Reject-only hint: `remove the extended ACL manually after reviewing it`.
+No shell command is constructed by Larp.
 
 ### 5.3 Windows trust, verify-only existing objects, secure new objects
 
@@ -421,6 +456,7 @@ New error messages/hints (all stderr `error:` then optional `hint:`, final newli
 
 | Variant | Message | Hint / exit |
 |---|---|---|
+| ManagedMode {path,mode,directory} | `unsafe data path <p>: has mode <mode:04o>; group and other access must be removed` | `run: chmod <700 for directory, 600 for file> <p>` / 1 |
 | QualificationPending | `provider launch is disabled pending stage 3 qualification` | `binding and profile metadata commands remain available` / 1 |
 | AlreadyBound {provider, old} | `refusing to rebind <provider> without --replace` | `currently bound to <old>` / 2 |
 | Unbound {provider} | `no executable bound for <provider>` | `run 'larp cc provider bind <provider> <ABSOLUTE_PATH>'` / 1 |
@@ -430,7 +466,14 @@ New error messages/hints (all stderr `error:` then optional `hint:`, final newli
 | ArgConflict {label} | `unsupported launch argument: <fixed label>` | `the argument form has not been admitted by the launch policy` / 1 |
 | Launch {path,source} | `cannot launch <p>: <escaped IO source>` | `check the native executable and its access permissions` / 1 |
 | Console {action,source} | `cannot <fixed console action>: <escaped IO source>` | none / 1 |
-| Wait {source} | `cannot wait for provider: <escaped IO source>` | `the direct child may require manual cleanup` / 1 |
+| Wait {source,cleanup_failed} | `cannot wait for provider: <escaped IO source>` | `the direct child may require manual cleanup`; when cleanup_failed, append `; cleanup failed; the direct child may still be running` / 1 |
+
+Approved pre-seed API amendment: `Error::ManagedMode { path: PathBuf, mode: u32,
+directory: bool }` carries the observed Unix permission/special bits (`metadata.mode() & 0o7777`)
+and directory type captured from already validated inspection metadata. Type/owner/mode precedence
+is unchanged. Display and hints are pure and escape paths; neither filesystem queries nor filename
+or human-reason inference selects the chmod mode. `Unsafe` remains for other reasons. Captured
+file/directory hints remain correct after removal, including a root named `registry.json`.
 
 No Unsupported/in-session-sign-in hint. Existing Error strings retain M1 semantics, except
 NewerSchema says supports version 2, path escaping and safety additions here. New Unsafe reasons:
@@ -447,14 +490,20 @@ seed acceptance.
 
 ## 7. Native execution and platform ABI
 
-Unix uses `std::os::unix::process::CommandExt::{arg0,exec}`, no shell and no resident Larp
-supervisor. stdin/out/err inherited, no cwd setter. Registry locks and inspection descriptors are
-dropped before exec; other private descriptors CLOEXEC. Exec returning is Launch error. Do not
-assert blanket std signal-mask/disposition resets: native fake reports the actual inherited mask and
-dispositions (including SIGPIPE) against a direct native launch on each Unix runner. Freeze/document
-measured expectations; caught-handler reset versus ignored dispositions must follow the selected
-API/OS behavior. Terminal/session/process-group inheritance is measured, not synthesized. No shell
-fallback for ENOEXEC.
+Approved implementation amendment: Unix uses a private `platform/unix.rs` helper calling
+`libc::execve` on the validated resolved absolute path, with stored-path argv0 and exact native
+OsString bytes. Owned CString argv/environment vectors and live null-terminated pointer arrays
+are built and validated before signal changes; embedded NUL is a Launch error. The environment
+inherits all unrelated variables and applies only the selected home delta, without process-global
+environment mutation. No PATH lookup, execvp, shell fallback or resident Larp supervisor is used.
+This replaces the prescribed CommandExt API because pinned Rust 1.89 uses execvp (including
+ENOEXEC shell fallback) and temporarily assigns environ. The supported std direct-launch SIGPIPE
+default is matched explicitly; mask and other dispositions remain inherited. Capture errno
+immediately on exec failure and restore the captured SIGPIPE disposition where it changed.
+Native signal, PID, PTY/job-control, failed-exec environment/signal preservation and harmless
+ENOEXEC marker regressions are required. CWD/session/group and stdin/out/err remain inherited;
+all registry locks/inspection descriptors are dropped before replacement. No identity-pinned
+execution claim is added.
 
 Windows builds `Command` with resolved executable and OsString args, inherited stdio/console, no
 shell or new process group in production. Arg fidelity is promised only for tested CRT-compatible
@@ -466,7 +515,7 @@ children. Handler registration failure aborts without child. Spawn failure unreg
 returns Launch. On successful spawn wait for direct child; on normal completion unregister then exit
 with full u32 status. Unregister failure yields Console error rather than success (child already
 exited). On wait failure attempt `Child::kill`, then bounded polling/reap for 2 seconds, unregister,
-return original Wait error; append fixed cleanup-failed hint if still live. Do not silently report 0
+return the original Wait source in `Error::Wait { source, cleanup_failed }`; set cleanup_failed when bounded cleanup cannot confirm termination/reap (live or unknown), even if kill/reap/unregister also fails. Never wrap or parse source text for cleanup state. The false hint is unchanged; true appends the fixed cleanup-failed suffix. Do not silently report 0
 or discard Child on that path. No job/tree kill: only the known direct child is cleanup target.
 No-console operation registers handler if supported; API failure refuses rather than ignoring it.
 Close/Logoff/Shutdown are delegated to Windows default handler behavior; actual window closure
@@ -474,7 +523,7 @@ remains unverified without its separate native test. Killing Larp may leave a ch
 tree-cleanup promise. A provider daemon is not a Larp supervisor.
 
 Dependencies: existing std/clap/serde/json/libc/tempfile retained; exact target-only `windows-sys
-=0.61.2` with `Win32_Foundation`, `Win32_Security`, `Win32_Security_Authorization`,
+=0.61.2` with `Win32_Foundation`, **`Win32_Globalization`** (approved native ordinal containment), `Win32_Security`, `Win32_Security_Authorization`,
 `Win32_Storage_FileSystem`, `Win32_System_Console`, `Win32_System_Threading`,
 **`Win32_System_SystemServices`**; test ConPTY uses `Win32_System_Pipes`. No additional framework.
 Static ABI inventory and provenance are in `windows-security-api-evidence.md` (archive SHA256
@@ -538,14 +587,33 @@ pub struct CheckedObject { pub file: std::fs::File, pub identity: FileIdentity }
 pub struct AnchoredPath { pub ancestors: Vec<CheckedObject> }
 pub fn anchor(path: &Path) -> Result<AnchoredPath, Error>; // existing parent chain
 pub fn inspect(path: &Path, kind: ObjectKind) -> Result<Option<CheckedObject>, Error>;
+pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error>; // pure native component containment
+pub fn verify_opened(file: std::fs::File, path: &Path, kind: ObjectKind)
+    -> Result<CheckedObject, Error>; // validates provided handle, never reopens diagnostic path
 pub fn inspect_home(path: &Path) -> Result<DirStatus, Error>;
 pub fn create_file(path: &Path) -> Result<CheckedObject, Error>; // create-new protected
 pub fn create_directory(path: &Path) -> Result<CheckedObject, Error>; // nonrecursive
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error>;
+// launch/windows.rs, full synthetic-driver launch module only
 #[cfg(windows)] pub fn spawn_wait(plan: &LaunchPlan) -> Result<u32, Error>;
 ```
 
 Derive Clone/Debug/PartialEq/Eq on identity and suitable data structs, not file handles.
+Approved containment amendment: `contains_path` is crate-private and pure. Unix uses native
+Path::starts_with. Windows compares exact encode_wide components with maintained windows-sys
+CompareStringOrdinal, ignore-case true, without lossy strings, normalization or Unicode casing.
+Lengths are checked before i32 conversion; zero API results are errors. Component boundaries,
+prefixes and unpaired surrogates are preserved. The existing before-IO lexical-containment
+precedence and resolved containment are unchanged; no clap validator is added.
+
+Approved opened-handle amendment: `verify_opened` derives type/security/owner/identity from the
+provided File without reopening the diagnostic path or reading contents. macOS uses the descriptor filesec/fstatx acquisition and explicit ACL-presence query in §5.2;
+no acquisition wrapper errno is treated as absence. Callers retain verified
+parents and compare its returned identity against the inspected object before data reads/use.
+Metadata inspection remains READ_CONTROL-only on Windows; actual data/lock opens are nontruncating,
+use required access and are verified separately. Registry handles allow atomic replacement and are
+closed before rename; no-follow and no-delete parent retention are unchanged.
+
 AnchoredPath owns handles and is held by caller for the entire scoped operation; no raw HANDLE/SID
 escape. `anchor(path)` anchors parents, not leaf; `inspect` checks leaf on opened handle. On Unix
 same shape uses File handles but does not imply openat/identity-pinned execution. `inspect_home`
@@ -553,8 +621,9 @@ maps missing to Missing and security inability to Unsafe; it never inspects cont
 sequencing uses these primitives, existing registry list of profiles, and deterministic iteration;
 do not create a generic tree/ACL framework. `platform/mod.rs` selects unix.rs under cfg(unix),
 windows.rs under cfg(windows), with macos.rs supplemental only on macOS. Reexports are cfg-gated;
-Windows symbols never leak to Unix builds. launch module is synthetic-feature gated; spawn_wait is
-additionally Windows gated.
+Windows symbols never leak to Unix builds. The full launch module belongs only to the synthetic
+driver. Its Windows runtime submodule owns spawn_wait and the console/wait helpers; the ordinary
+CLI does not compile those helpers, including when synthetic-launch or all features are enabled.
 
 Call sites requiring coordinated edits: `Registry::{list,get,bindings,launch_target}` and store load
 validate fixed metadata before read; `paths::entries` uses inspect_home and identity duplicate
@@ -569,9 +638,10 @@ read-only safe-registry status collection from launch whole-tree rejection.
 Two branches suffice. Core owns all shared code under
 `crates/larpcc-cli/src/{registry,provider,launch,cli}/**`, main.rs, platform/{mod,unix,macos}.rs,
 manifests/lock, non-Windows tests/support drivers/shared fixtures, CI, README. Windows owns only
-`crates/larpcc-cli/src/platform/windows.rs`, `crates/larpcc-cli/tests/windows_*.rs`,
+`crates/larpcc-cli/src/platform/windows.rs`, `crates/larpcc-cli/src/launch/windows.rs`,
+`crates/larpcc-cli/tests/windows_*.rs`,
 `crates/larpcc-cli/tests/fixtures/windows/**`. Lead owns plan changes. No concurrent edits to shared
-files; Windows requests a shared change from core and waits/rebases.
+files; Windows requests a shared change from core and waits for a lead-directed snapshot merge.
 
 Seed S, first core commit from M2, includes manifests/features, concrete platform surface, fixed
 errors/fixtures, driver/fake support declarations, ordinary refusal wired **for real**, and
@@ -592,15 +662,19 @@ ABI. Report actual S SHA and commands; scratch builds do not count. Lead verifie
 creation. Windows is `stage/2-windows` from exact S, core `stage/2-core` from M2, each in own
 visible worktree/thread arranged by lead. This artifact launches neither.
 
-Core opens draft PR-core to main; Windows rebases onto core's completed green head then PR-win to
-stage/2-core. Integrated head is J2 (avoid confusion with stage-1 H2). File owners fix findings,
-refresh dependent branch/evidence. Contract changes stop affected work, go to lead with exact
-proposed diff/reason, and are committed by core with matching plan update after approval; Windows
-rebases. Lead merges core with merge commit, retargets Windows PR to main, then merges it with merge
-commit; final main tree must equal accepted J2. Existing human identity/coauthors preserved, no AI
-signatures; workers never merge. Any integration change needs final-head tests/review. README
-updated last, only implemented behavior and measured limits; no research prose or future support
-claims.
+Core opens a normal PR-core to main; Windows opens a normal PR-win to stage/2-core.
+The lead coordinates ordinary snapshot merges from core into Windows, preserving both histories;
+there is no requirement for temporary core-only Windows stubs to qualify before integration.
+Integrated head is J2 (distinct from stage-1 H2). File owners fix findings and refresh dependent
+evidence. Contract changes stop affected work, go to the lead with precise diff/reason, and are
+committed by core with matching approved plan updates; the lead coordinates the next snapshot merge.
+After final integrated J2 passes the applicable native matrix and independent QA/OCR across both
+scopes, the lead merges PR-win into stage/2-core first, verifies that merged tree equals accepted
+J2 and required PR-core checks, then merges PR-core into main. Final main tree must equal J2.
+Temporary Windows stubs never land on main; component failures never bypass the integrated gates.
+Existing human identity/coauthors are preserved without AI signatures. Workers never merge or enable
+auto-merge. Any integration change requires final-head tests/review. README is updated last and
+contains only implemented behavior and measured limits, with no research or future support claims.
 
 ## 10. Acceptance cases and evidence
 

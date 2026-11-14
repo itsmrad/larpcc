@@ -1,7 +1,51 @@
-use super::ProfileName;
+use super::{DirStatus, ProfileName, Provider};
 use std::{fmt, io, path::PathBuf};
 #[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "The shared catalog includes synthetic-only and OS-specific errors, never reachable from ordinary run."
+)]
 pub enum Error {
+    ManagedMode {
+        path: PathBuf,
+        mode: u32,
+        directory: bool,
+    },
+    QualificationPending,
+    AlreadyBound {
+        provider: Provider,
+        old: PathBuf,
+    },
+    Unbound {
+        provider: Provider,
+    },
+    InvalidExecutable {
+        provider: Provider,
+        path: PathBuf,
+        reason: String,
+    },
+    HomeUnavailable {
+        name: ProfileName,
+        status: DirStatus,
+    },
+    EnvConflict {
+        names: Vec<String>,
+    },
+    ArgConflict {
+        label: &'static str,
+    },
+    Launch {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Console {
+        action: &'static str,
+        source: io::Error,
+    },
+    Wait {
+        source: io::Error,
+        cleanup_failed: bool,
+    },
     NoDataDir,
     InvalidRoot {
         path: PathBuf,
@@ -39,27 +83,82 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ManagedMode { path, mode, .. } => write!(
+                f,
+                "unsafe data path {}: has mode {mode:04o}; group and other access must be removed",
+                crate::registry::display::path(path)
+            ),
+            Self::QualificationPending => {
+                f.write_str("provider launch is disabled pending stage 3 qualification")
+            }
+            Self::AlreadyBound { provider, .. } => {
+                write!(f, "refusing to rebind {provider} without --replace")
+            }
+            Self::Unbound { provider } => write!(f, "no executable bound for {provider}"),
+            Self::InvalidExecutable {
+                provider,
+                path,
+                reason,
+            } => write!(
+                f,
+                "invalid {provider} executable {}: {reason}",
+                crate::registry::display::path(path)
+            ),
+            Self::HomeUnavailable { name, status } => write!(
+                f,
+                "state directory for profile {name} is {}",
+                match status {
+                    DirStatus::Missing => "missing".into(),
+                    DirStatus::Unsafe(r) => format!("unsafe: {r}"),
+                    DirStatus::Ok => "ok".into(),
+                }
+            ),
+            Self::EnvConflict { names } => {
+                write!(f, "conflicting environment variables: {}", names.join(", "))
+            }
+            Self::ArgConflict { label } => write!(f, "unsupported launch argument: {label}"),
+            Self::Launch { path, source } => {
+                write!(
+                    f,
+                    "cannot launch {}: {source}",
+                    crate::registry::display::path(path)
+                )
+            }
+            Self::Console { action, source } => write!(f, "cannot {action}: {source}"),
+            Self::Wait { source, .. } => write!(f, "cannot wait for provider: {source}"),
             Self::NoDataDir => f.write_str("cannot determine the data directory"),
             Self::InvalidRoot { path, reason } => {
-                write!(f, "invalid data directory {}: {reason}", path.display())
+                write!(
+                    f,
+                    "invalid data directory {}: {reason}",
+                    crate::registry::display::path(path)
+                )
             }
             Self::Unsafe { path, reason } => {
-                write!(f, "unsafe data path {}: {reason}", path.display())
+                write!(
+                    f,
+                    "unsafe data path {}: {reason}",
+                    crate::registry::display::path(path)
+                )
             }
             Self::Corrupt { path, reason } => {
-                write!(f, "registry {} is invalid: {reason}", path.display())
+                write!(
+                    f,
+                    "registry {} is invalid: {reason}",
+                    crate::registry::display::path(path)
+                )
             }
             Self::NewerSchema { path, found } => write!(
                 f,
-                "registry {} uses schema version {found}; this Larp CC supports version 1",
-                path.display()
+                "registry {} uses schema version {found}; this Larp CC supports version 2",
+                crate::registry::display::path(path)
             ),
             Self::NotFound { name } => write!(f, "no profile named {name}"),
             Self::NameTaken { name } => write!(f, "a profile named {name} already exists"),
             Self::Busy { path } => write!(
                 f,
                 "registry is locked by another Larp CC process ({})",
-                path.display()
+                crate::registry::display::path(path)
             ),
             Self::TooLarge => f.write_str("prospective registry exceeds 1 MiB"),
             Self::Exhausted => f.write_str("registry counters are exhausted"),
@@ -67,7 +166,11 @@ impl fmt::Display for Error {
                 action,
                 path,
                 source,
-            } => write!(f, "cannot {action} {}: {source}", path.display()),
+            } => write!(
+                f,
+                "cannot {action} {}: {source}",
+                crate::registry::display::path(path)
+            ),
         }
     }
 }
@@ -75,18 +178,45 @@ impl std::error::Error for Error {}
 impl Error {
     pub fn hint(&self) -> Option<String> {
         Some(match self {
+            Self::QualificationPending => {
+                "binding and profile metadata commands remain available".into()
+            }
+            Self::AlreadyBound { old, .. } => {
+                format!("currently bound to {}", crate::registry::display::path(old))
+            }
+            Self::Unbound { provider } => {
+                format!("run 'larp cc provider bind {provider} <ABSOLUTE_PATH>'")
+            }
+            Self::InvalidExecutable { .. } => {
+                "bind a supported absolute native executable path".into()
+            }
+            Self::HomeUnavailable { name, .. } => format!(
+                "inspect it with 'larp cc profile show {name}'; Larp CC will not recreate it"
+            ),
+            Self::EnvConflict { .. } => "remove these overrides before launch".into(),
+            Self::ArgConflict { .. } => {
+                "the argument form has not been admitted by the launch policy".into()
+            }
+            Self::Launch { .. } => "check the native executable and its access permissions".into(),
+            Self::Wait {cleanup_failed,..} => if *cleanup_failed {"the direct child may require manual cleanup; cleanup failed; the direct child may still be running"} else {"the direct child may require manual cleanup"}.into(),
             Self::NoDataDir | Self::InvalidRoot { .. } => {
                 "set LARPCC_HOME to an absolute path".into()
             }
-            Self::Unsafe { path, reason } if reason.starts_with("has mode ") => format!(
+            Self::ManagedMode {
+                path, directory, ..
+            } => format!(
                 "run: chmod {} {}",
-                if !path.is_dir() { "600" } else { "700" },
-                path.display()
+                if *directory { "700" } else { "600" },
+                crate::registry::display::path(path)
             ),
+            Self::Unsafe { reason, .. } if reason == "has an extended ACL that grants access" => "remove the extended ACL manually after reviewing it".into(),
+            #[cfg(windows)]
+            Self::Unsafe { .. } => "use a private data root under trusted parents; review existing permissions manually; Larp CC will not repair or copy provider state".into(),
+            #[cfg(not(windows))]
             Self::Unsafe { .. } => "fix or move it, or set LARPCC_HOME to another directory".into(),
             Self::Corrupt { path, .. } => format!(
                 "Larp CC did not modify it; move it aside to start an empty registry (state directories under {} are not touched)",
-                path.parent()?.join("profiles").display()
+                crate::registry::display::path(&path.parent()?.join("profiles"))
             ),
             Self::NewerSchema { .. } => "upgrade Larp CC; the file was not modified".into(),
             Self::NotFound { .. } => "run 'larp cc profile list'".into(),
@@ -129,3 +259,77 @@ impl fmt::Display for NameError {
     }
 }
 impl std::error::Error for NameError {}
+
+#[cfg(test)]
+mod stage2_fixtures {
+    use super::*;
+    #[test]
+    fn fixed_launch_errors_do_not_echo_supplied_values() {
+        let cases = [
+            (
+                Error::QualificationPending,
+                "provider launch is disabled pending stage 3 qualification",
+                Some("binding and profile metadata commands remain available"),
+            ),
+            (
+                Error::AlreadyBound {
+                    provider: Provider::Codex,
+                    old: "/native/codex".into(),
+                },
+                "refusing to rebind codex without --replace",
+                Some("currently bound to /native/codex"),
+            ),
+            (
+                Error::Unbound {
+                    provider: Provider::Claude,
+                },
+                "no executable bound for claude",
+                Some("run 'larp cc provider bind claude <ABSOLUTE_PATH>'"),
+            ),
+            (
+                Error::EnvConflict {
+                    names: vec!["CODEX_HOME".into()],
+                },
+                "conflicting environment variables: CODEX_HOME",
+                Some("remove these overrides before launch"),
+            ),
+            (
+                Error::ArgConflict {
+                    label: "argument syntax",
+                },
+                "unsupported launch argument: argument syntax",
+                Some("the argument form has not been admitted by the launch policy"),
+            ),
+        ];
+        for (error, message, hint) in cases {
+            assert_eq!(error.to_string(), message);
+            assert_eq!(error.hint().as_deref(), hint);
+        }
+    }
+}
+
+#[cfg(test)]
+mod wait_fixtures {
+    use super::*;
+    #[test]
+    fn wait_source_and_cleanup_state_have_independent_rendering() {
+        for cleanup_failed in [false, true] {
+            let error = Error::Wait {
+                source: io::Error::other("synthetic wait failure"),
+                cleanup_failed,
+            };
+            assert_eq!(
+                error.to_string(),
+                "cannot wait for provider: synthetic wait failure"
+            );
+            assert_eq!(
+                error.hint().unwrap(),
+                if cleanup_failed {
+                    "the direct child may require manual cleanup; cleanup failed; the direct child may still be running"
+                } else {
+                    "the direct child may require manual cleanup"
+                }
+            );
+        }
+    }
+}

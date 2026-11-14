@@ -1,3 +1,4 @@
+pub mod display;
 mod error;
 mod model;
 mod paths;
@@ -5,12 +6,101 @@ mod store;
 #[cfg(test)]
 mod tests;
 pub use error::{Error, NameError};
-pub use model::{DirStatus, Profile, ProfileEntry, ProfileId, ProfileName, Provider};
+#[cfg(feature = "synthetic-launch")]
+pub use model::LaunchTarget;
+pub use model::{
+    BindOutcome, Binding, BindingState, DirStatus, Profile, ProfileEntry, ProfileId, ProfileName,
+    Provider,
+};
 use std::path::{Path, PathBuf};
 pub struct Registry {
     root: PathBuf,
 }
 impl Registry {
+    pub fn bindings(&self) -> Result<Vec<(Provider, BindingState)>, Error> {
+        let _ancestors = crate::platform::anchor(self.root())?.ancestors;
+        let _fixed = store::fixed(self.root())?;
+        let data = store::load(self.root())?;
+        Ok(Provider::ALL
+            .into_iter()
+            .map(|provider| {
+                let state = match data.bindings.iter().find(|b| b.provider == provider) {
+                    None => BindingState::Unbound,
+                    Some(binding) => {
+                        match crate::provider::validate(provider, &binding.executable, self.root())
+                        {
+                            Ok(_) => BindingState::Ok(binding.clone()),
+                            Err(
+                                Error::InvalidExecutable { reason, .. }
+                                | Error::Unsafe { reason, .. },
+                            ) => BindingState::Invalid(binding.clone(), reason),
+                            Err(_) => BindingState::Invalid(
+                                binding.clone(),
+                                "cannot resolve a trusted executable path".into(),
+                            ),
+                        }
+                    }
+                };
+                (provider, state)
+            })
+            .collect())
+    }
+    pub fn bind(&self, p: Provider, exe: PathBuf, replace: bool) -> Result<BindOutcome, Error> {
+        store::bind(self.root(), p, exe, replace)
+    }
+    #[cfg(feature = "synthetic-launch")]
+    #[allow(
+        dead_code,
+        reason = "Called only by the separate synthetic driver; ordinary dispatch stays closed."
+    )]
+    pub fn launch_target(&self, name: &ProfileName) -> Result<LaunchTarget, Error> {
+        let _ancestors = crate::platform::anchor(self.root())?.ancestors;
+        let _ancestors = crate::platform::anchor(self.root())?.ancestors;
+        let _fixed = store::fixed(self.root())?;
+        let data = store::load(self.root())?;
+        let profile = data
+            .profiles
+            .iter()
+            .find(|p| &p.name == name)
+            .cloned()
+            .ok_or_else(|| Error::NotFound { name: name.clone() })?;
+        let entries = paths::entries(self.root(), &data.profiles)?;
+        for entry in &entries {
+            if let DirStatus::Unsafe(reason) = &entry.status {
+                return Err(Error::Unsafe {
+                    path: entry.state_dir.clone(),
+                    reason: reason.clone(),
+                });
+            }
+        }
+        let state_dir = self.root().join("profiles").join(profile.id.to_string());
+        if !entries
+            .iter()
+            .any(|e| e.profile.id == profile.id && e.status == DirStatus::Ok)
+        {
+            return Err(Error::HomeUnavailable {
+                name: name.clone(),
+                status: DirStatus::Missing,
+            });
+        }
+        let binding = data
+            .bindings
+            .iter()
+            .find(|b| b.provider == profile.provider)
+            .ok_or(Error::Unbound {
+                provider: profile.provider,
+            })?;
+        let (resolved_executable, identity) =
+            crate::provider::validate(profile.provider, &binding.executable, self.root())?;
+        Ok(LaunchTarget {
+            profile,
+            state_dir,
+            stored_executable: binding.executable.clone(),
+            resolved_executable,
+            identity,
+        })
+    }
+
     pub fn locate() -> Result<Registry, Error> {
         Self::at(paths::resolve(|key| std::env::var_os(key))?)
     }
@@ -25,6 +115,8 @@ impl Registry {
         &self.root
     }
     pub fn list(&self) -> Result<Vec<ProfileEntry>, Error> {
+        let _ancestors = crate::platform::anchor(self.root())?.ancestors;
+        let _fixed = store::fixed(self.root())?;
         let data = store::load(self.root())?;
         let mut entries = paths::entries(&self.root, &data.profiles)?;
         entries.sort_by(|a, b| a.profile.name.cmp(&b.profile.name));

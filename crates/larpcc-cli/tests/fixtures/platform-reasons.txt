@@ -1,0 +1,12 @@
+has an extended ACL that grants access
+owner is not a trusted managed-path owner
+has no access control list
+has an empty access control list
+has an unprotected access control list
+grants access to other users
+contains an unsupported access control entry
+access control cannot be verified on this volume
+has a foreign-writable ancestor
+filesystem identity cannot be verified
+access control cannot be verified
+platform safety validation is unavailable

@@ -110,3 +110,35 @@ pub struct ProfileEntry {
     pub state_dir: PathBuf,
     pub status: DirStatus,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Binding {
+    pub provider: Provider,
+    pub executable: PathBuf,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BindingState {
+    Unbound,
+    Ok(Binding),
+    Invalid(Binding, String),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BindOutcome {
+    Bound,
+    Unchanged,
+    Replaced { old: PathBuf },
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "Launch target belongs to the separate synthetic driver."
+)]
+#[cfg(feature = "synthetic-launch")]
+pub struct LaunchTarget {
+    pub profile: Profile,
+    pub state_dir: PathBuf,
+    pub stored_executable: PathBuf,
+    pub resolved_executable: PathBuf,
+    pub identity: crate::platform::FileIdentity,
+}

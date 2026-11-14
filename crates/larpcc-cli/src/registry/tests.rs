@@ -35,10 +35,34 @@ pub(super) fn phase(action: &str, path: &Path) -> Result<(), Error> {
 fn name(s: &str) -> ProfileName {
     ProfileName::parse(s).unwrap()
 }
-fn fixture() -> (tempfile::TempDir, Registry) {
-    let temp = tempfile::tempdir().unwrap();
-    let r = Registry::at(temp.path().join("root")).unwrap();
-    (temp, r)
+#[cfg(windows)]
+use crate::platform::fixture_private as windows_private;
+#[cfg(windows)]
+type FixtureTemp = windows_private::PrivateTempDir;
+#[cfg(unix)]
+type FixtureTemp = tempfile::TempDir;
+fn fixture() -> (FixtureTemp, Registry) {
+    let parent = std::env::var_os("LARPCC_TEST_PARENT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    #[cfg(unix)]
+    let temp = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(parent)
+        .unwrap();
+    #[cfg(windows)]
+    let temp = windows_private::tempdir(&parent).unwrap();
+    let registry = Registry::at(temp.path().join("root")).unwrap();
+    (temp, registry)
+}
+fn fixture_file(path: &Path, bytes: &[u8]) {
+    #[cfg(unix)]
+    {
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(windows)]
+    windows_private::create_file(path, bytes).unwrap();
 }
 fn add(r: &Registry, s: &str) -> ProfileEntry {
     r.add(name(s), Provider::Claude).unwrap()
@@ -159,14 +183,14 @@ fn r04_invalid_unchanged() {
         format!("\u{feff}{valid}"),
         format!("{valid} trailing"),
         "[]".into(),
-        valid.replace("\"version\": 1,", ""),
-        valid.replace("\"version\": 1", "\"version\": 0"),
-        valid.replace("\"version\": 1", "\"version\": \"1\""),
-        valid.replace("\"version\": 1", "\"version\": 1.0"),
-        valid.replace("\"version\": 1", "\"version\": 1, \"extra\": 4"),
+        valid.replace("\"version\": 2,", ""),
+        valid.replace("\"version\": 2", "\"version\": 0"),
+        valid.replace("\"version\": 2", "\"version\": \"1\""),
+        valid.replace("\"version\": 2", "\"version\": 1.0"),
+        valid.replace("\"version\": 2", "\"version\": 1, \"extra\": 4"),
         valid.replace("\"id\": 1", "\"id\": 1, \"extra\": 4"),
         valid.replace("\"id\": 1", "\"id\": 1, \"id\": 1"),
-        valid.replace("\"version\": 1", "\"version\": 1, \"version\": 1"),
+        valid.replace("\"version\": 2", "\"version\": 1, \"version\": 1"),
         valid.replace("\"id\": 1", "\"id\": 0"),
         valid.replace("\"id\": 1", "\"id\": 2"),
         valid.replace("\"id\": 1", "\"id\": \"../x\""),
@@ -210,11 +234,11 @@ fn r04_invalid_unchanged() {
 fn r05_newer() {
     let (_t, r) = fixture();
     initialize(&r);
-    write(&r, r#"{"version":2,"future":true}"#);
+    write(&r, r#"{"version":3,"future":true}"#);
     let before = bytes(&r);
     assert!(matches!(
         r.add(name("x"), Provider::Codex),
-        Err(Error::NewerSchema { found: 2, .. })
+        Err(Error::NewerSchema { found: 3, .. })
     ));
     assert_eq!(before, bytes(&r));
 }
@@ -271,7 +295,7 @@ fn r09_orphan() {
     paths::mkdir(r.root()).unwrap();
     paths::mkdir(&r.root().join("profiles")).unwrap();
     paths::mkdir(&r.root().join("profiles/1")).unwrap();
-    fs::write(r.root().join("profiles/1/keep"), b"unchanged").unwrap();
+    fixture_file(&r.root().join("profiles/1/keep"), b"unchanged");
     let before = snapshot(&r.root().join("profiles/1"));
     assert_eq!(add(&r, "a").profile.id.get(), 2);
     assert_eq!(before, snapshot(&r.root().join("profiles/1")));
@@ -281,7 +305,7 @@ fn r10_stale_temp() {
     let (t, r) = fixture();
     initialize(&r);
     let temp = r.root().join("registry.json.tmp");
-    fs::write(&temp, b"garbage").unwrap();
+    fixture_file(&temp, b"garbage");
     add(&r, "b");
     assert!(!temp.exists());
     #[cfg(unix)]
@@ -289,9 +313,9 @@ fn r10_stale_temp() {
         let outside = t.path().join("outside");
         fs::write(&outside, b"unchanged").unwrap();
         symlink(&outside, &temp).unwrap();
-        add(&r, "c");
+        assert!(r.add(name("c"), Provider::Claude).is_err());
         assert_eq!(fs::read(outside).unwrap(), b"unchanged");
-        assert!(!temp.exists());
+        assert!(temp.is_symlink());
     }
     #[cfg(not(unix))]
     let _ = t;
@@ -305,7 +329,7 @@ fn r11_unsafe_paths() {
         ("", "mode", true),
         ("registry.json", "mode", true),
         ("registry.json", "symlink", true),
-        ("registry.lock", "symlink", false),
+        ("registry.lock", "symlink", true),
         ("profiles", "symlink", true),
         ("profiles", "mode", true),
     ] {
@@ -339,24 +363,34 @@ fn r11_unsafe_paths() {
         assert!(
             matches!(
                 r.add(name("b"), Provider::Claude),
-                Err(Error::Unsafe { .. })
+                Err(Error::Unsafe { .. } | Error::ManagedMode { .. })
             ),
             "{target}/{kind}"
         );
         if read_fails {
-            assert!(matches!(r.list(), Err(Error::Unsafe { .. })));
+            assert!(matches!(
+                r.list(),
+                Err(Error::Unsafe { .. } | Error::ManagedMode { .. })
+            ));
         }
         assert_eq!(before, snapshot(t.path()));
     }
 }
 #[test]
 fn r12_status() {
-    for kind in ["missing", "file", "mode", "symlink"] {
+    for kind in [
+        "missing",
+        "file",
+        #[cfg(unix)]
+        "mode",
+        #[cfg(unix)]
+        "symlink",
+    ] {
         let (t, r) = fixture();
         let e = add(&r, "a");
         fs::remove_dir(&e.state_dir).unwrap();
         match kind {
-            "file" => fs::write(&e.state_dir, b"file").unwrap(),
+            "file" => fixture_file(&e.state_dir, b"file"),
             #[cfg(unix)]
             "mode" => {
                 paths::mkdir(&e.state_dir).unwrap();
@@ -400,12 +434,12 @@ fn r12_status() {
 fn r13_foreign() {
     let (_t, r) = fixture();
     paths::mkdir(r.root()).unwrap();
-    fs::write(r.root().join("notes.txt"), b"keep").unwrap();
+    fixture_file(&r.root().join("notes.txt"), b"keep");
     let before = snapshot(r.root());
     assert!(r.list().unwrap().is_empty());
     assert!(matches!(
         r.add(name("a"), Provider::Claude),
-        Err(Error::Unsafe { .. })
+        Err(Error::Unsafe { .. } | Error::ManagedMode { .. })
     ));
     assert_eq!(before, snapshot(r.root()));
 }
@@ -514,7 +548,7 @@ fn r16_roots() {
 #[test]
 fn r17_non_utf8() {
     use std::os::unix::ffi::OsStringExt;
-    let t = tempfile::tempdir().unwrap();
+    let (t, _) = fixture();
     let r = Registry::at(
         t.path()
             .join(std::ffi::OsString::from_vec(b"root\xff".to_vec())),
@@ -592,9 +626,10 @@ fn r20_errors() {
             Some("set LARPCC_HOME to an absolute path"),
         ),
         (
-            Error::Unsafe {
+            Error::ManagedMode {
                 path: p.clone(),
-                reason: "has mode 0644; group and other access must be removed".into(),
+                mode: 0o644,
+                directory: false,
             },
             "unsafe data path /root/registry.json: has mode 0644; group and other access must be removed",
             Some("run: chmod 600 /root/registry.json"),
@@ -612,9 +647,9 @@ fn r20_errors() {
         (
             Error::NewerSchema {
                 path: p.clone(),
-                found: 2,
+                found: 3,
             },
-            "registry /root/registry.json uses schema version 2; this Larp CC supports version 1",
+            "registry /root/registry.json uses schema version 3; this Larp CC supports version 2",
             Some("upgrade Larp CC; the file was not modified"),
         ),
         (
@@ -857,7 +892,10 @@ fn root_symlink_suffixes_and_mode_hint() {
     symlink(r.root(), &link).unwrap();
     for suffix in ["/", "/."] {
         let candidate = Registry::at(PathBuf::from(format!("{}{suffix}", link.display()))).unwrap();
-        assert!(matches!(candidate.list(), Err(Error::Unsafe { .. })));
+        assert!(matches!(
+            candidate.list(),
+            Err(Error::Unsafe { .. } | Error::ManagedMode { .. })
+        ));
     }
     let root = t.path().join("registry.json");
     paths::mkdir(&root).unwrap();
@@ -906,6 +944,347 @@ fn extra_error_hints_and_missing_parent_guidance() {
     };
     assert_eq!(
         e.hint().as_deref(),
-        Some("fix or move it, or set LARPCC_HOME to another directory")
+        Some(if cfg!(windows) {
+            "use a private data root under trusted parents; review existing permissions manually; Larp CC will not repair or copy provider state"
+        } else {
+            "fix or move it, or set LARPCC_HOME to another directory"
+        })
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn captured_mode_hints_survive_removal() {
+    let (t, _) = fixture();
+    for directory in [true, false] {
+        let path = t.path().join(if directory { "directory" } else { "file" });
+        if directory {
+            fs::create_dir(&path).unwrap();
+        } else {
+            fs::write(&path, b"").unwrap();
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o754)).unwrap();
+        let error = paths::inspect(&path, directory).unwrap_err();
+        if directory {
+            fs::remove_dir(&path).unwrap();
+        } else {
+            fs::remove_file(&path).unwrap();
+        }
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "unsafe data path {}: has mode 0754; group and other access must be removed",
+                path.display()
+            )
+        );
+        assert_eq!(
+            error.hint(),
+            Some(format!(
+                "run: chmod {} {}",
+                if directory { "700" } else { "600" },
+                path.display()
+            ))
+        );
+    }
+}
+
+#[cfg(unix)]
+fn native_fixture(t: &tempfile::TempDir, name: &str) -> PathBuf {
+    let path = t.path().join(name);
+    #[cfg(target_os = "macos")]
+    let magic = [0xcf, 0xfa, 0xed, 0xfe];
+    #[cfg(not(target_os = "macos"))]
+    let magic = *b"\x7fELF";
+    fs::write(&path, magic).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    path
+}
+#[cfg(unix)]
+#[test]
+fn bindings_upgrade_noop_precedence_and_counters() {
+    let (t, r) = fixture();
+    initialize(&r);
+    let v1 = br#"{"version":1,"revision":0,"next_id":1,"profiles":[]}"#;
+    write(&r, v1);
+    assert!(r.list().unwrap().is_empty());
+    assert_eq!(bytes(&r), v1);
+    let first = native_fixture(&t, "native-a");
+    let second = native_fixture(&t, "native-b");
+    assert_eq!(
+        r.bind(Provider::Codex, first.clone(), false).unwrap(),
+        BindOutcome::Bound
+    );
+    let data = store::load(r.root()).unwrap();
+    assert_eq!(data.version, 2);
+    assert_eq!(data.revision, 1);
+    assert_eq!(data.next_id, 1);
+    let mut max: serde_json::Value = serde_json::from_slice(&bytes(&r)).unwrap();
+    max["revision"] = serde_json::json!(u64::MAX);
+    write(&r, serde_json::to_vec(&max).unwrap());
+    fs::remove_file(&first).unwrap();
+    let unchanged = bytes(&r);
+    assert_eq!(
+        r.bind(Provider::Codex, first.clone(), false).unwrap(),
+        BindOutcome::Unchanged
+    );
+    assert_eq!(bytes(&r), unchanged);
+    assert!(matches!(
+        r.bind(Provider::Codex, second.clone(), false),
+        Err(Error::AlreadyBound { .. })
+    ));
+    assert!(matches!(
+        r.bind(Provider::Codex, second, true),
+        Err(Error::Exhausted)
+    ));
+    assert_eq!(bytes(&r), unchanged);
+    assert!(matches!(
+        &r.bindings().unwrap()[1].1,
+        BindingState::Invalid(..)
+    ));
+}
+#[cfg(unix)]
+#[test]
+fn bindings_strict_v2_and_sorted_serialization() {
+    let (t, r) = fixture();
+    let executable = native_fixture(&t, "native");
+    r.bind(Provider::Codex, executable.clone(), false).unwrap();
+    r.bind(Provider::Claude, executable, false).unwrap();
+    let data = store::load(r.root()).unwrap();
+    assert_eq!(
+        data.bindings.iter().map(|b| b.provider).collect::<Vec<_>>(),
+        Provider::ALL
+    );
+    let good = String::from_utf8(bytes(&r)).unwrap();
+    let mut invalid = vec![
+        good.replace("\"bindings\"", "\"unknown\""),
+        good.replace("\"bindings\": [", "\"bindings\": [], \"bindings\": ["),
+    ];
+    let mut value: serde_json::Value = serde_json::from_str(&good).unwrap();
+    value["bindings"].as_array_mut().unwrap().reverse();
+    invalid.push(value.to_string());
+    for path in [
+        "relative",
+        "/bad/../x",
+        "/bad//x",
+        "/bad/./x",
+        "/bad/",
+        "/bad\0x",
+    ] {
+        let mut value: serde_json::Value = serde_json::from_str(&good).unwrap();
+        value["bindings"][0]["executable"] = path.into();
+        invalid.push(value.to_string());
+    }
+    for input in invalid {
+        write(&r, &input);
+        assert!(matches!(r.bindings(), Err(Error::Corrupt { .. })));
+        assert_eq!(bytes(&r), input.as_bytes());
+    }
+}
+#[cfg(unix)]
+#[test]
+fn all_fixed_metadata_refuses_unsafe_temp_and_lock_on_reads() {
+    let (t, r) = fixture();
+    initialize(&r);
+    for name in ["registry.lock", "registry.json.tmp"] {
+        let path = r.root().join(name);
+        let outside = t.path().join(format!("outside-{name}"));
+        fs::write(&outside, b"invented sentinel").unwrap();
+        let original = fs::read(&path).ok();
+        if path.exists() {
+            fs::remove_file(&path).unwrap();
+        }
+        symlink(&outside, &path).unwrap();
+        let before = bytes(&r);
+        assert!(r.list().is_err());
+        assert!(r.rename(&name_parse("initial"), name_parse("new")).is_err());
+        assert_eq!(bytes(&r), before);
+        assert_eq!(fs::read(&outside).unwrap(), b"invented sentinel");
+        assert!(path.is_symlink());
+        fs::remove_file(&path).unwrap();
+        if let Some(bytes) = original {
+            fs::write(&path, bytes).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+    fn name_parse(s: &str) -> ProfileName {
+        s.parse().unwrap()
+    }
+}
+#[cfg(unix)]
+#[test]
+fn binding_executable_native_type_links_containment_and_self_checks() {
+    let (t, r) = fixture();
+    let native = native_fixture(&t, "native");
+    r.bind(Provider::Claude, native.clone(), false).unwrap();
+    let link = t.path().join("link");
+    symlink(&native, &link).unwrap();
+    assert!(r.bind(Provider::Claude, link.clone(), true).is_ok());
+    let unsafe_parent = t.path().join("unsafe-parent");
+    fs::create_dir(&unsafe_parent).unwrap();
+    fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o777)).unwrap();
+    let unsafe_target = unsafe_parent.join("native");
+    fs::copy(&native, &unsafe_target).unwrap();
+    assert!(r.bind(Provider::Claude, unsafe_target, true).is_err());
+    assert!(
+        r.bind(Provider::Claude, std::env::current_exe().unwrap(), true)
+            .is_err()
+    );
+    let inside = r.root().join("native");
+    fs::copy(&native, &inside).unwrap();
+    assert!(r.bind(Provider::Claude, inside, true).is_err());
+    fs::write(&native, b"#!/bin/sh\n").unwrap();
+    assert!(
+        r.bindings()
+            .unwrap()
+            .iter()
+            .any(|(_, s)| matches!(s, BindingState::Invalid(..)))
+    );
+}
+
+#[test]
+fn exact_v2_first_mutation_bytes() {
+    let (_temporary, r) = fixture();
+    add(&r, "work");
+    let expected =
+        include_str!("../../tests/fixtures/registry/valid/v2.json").replace("\r\n", "\n");
+    assert_eq!(bytes(&r), expected.as_bytes());
+    assert_eq!(
+        store::serialize(&store::parse(Path::new("registry.json"), expected.as_bytes()).unwrap())
+            .unwrap(),
+        expected.as_bytes()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn provided_handle_is_verified_without_reopening_diagnostic_path() {
+    let (t, _) = fixture();
+    let path = t.path().join("original");
+    fs::write(&path, b"synthetic metadata").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let file = fs::File::open(&path).unwrap();
+    let original = file.metadata().unwrap();
+    fs::rename(&path, t.path().join("moved")).unwrap();
+    fs::write(&path, b"different unsafe file").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let checked =
+        crate::platform::verify_opened(file, &path, crate::platform::ObjectKind::File).unwrap();
+    assert_eq!(
+        checked.identity,
+        crate::platform::FileIdentity::Unix {
+            dev: original.dev(),
+            ino: original.ino()
+        }
+    );
+    let unsafe_file = fs::File::open(&path).unwrap();
+    assert!(matches!(
+        crate::platform::verify_opened(
+            unsafe_file,
+            &t.path().join("unused-diagnostic"),
+            crate::platform::ObjectKind::File
+        ),
+        Err(Error::ManagedMode {
+            mode: 0o644,
+            directory: false,
+            ..
+        })
+    ));
+}
+
+#[cfg(windows)]
+#[test]
+fn fixed_guards_pin_real_root_and_profiles_without_querying_sentinel_leaf() {
+    let (temporary, registry) = fixture();
+    initialize(&registry);
+    let home = registry.root().join("profiles/1");
+    fs::remove_dir(&home).unwrap();
+    fixture_file(&home, b"synthetic non-directory sentinel leaf");
+    let root = registry.root();
+    let profiles = root.join("profiles");
+    let moved_root = temporary.path().join("moved-root");
+    let moved_profiles = root.join("moved-profiles");
+    let held = store::fixed(root).unwrap();
+    assert!(matches!(
+        fs::rename(root, &moved_root).unwrap_err().raw_os_error(),
+        Some(5 | 32)
+    ));
+    assert!(matches!(
+        fs::rename(&profiles, &moved_profiles)
+            .unwrap_err()
+            .raw_os_error(),
+        Some(5 | 32)
+    ));
+    // The same operations must succeed after dropping only these guards, excluding static ACL denial.
+    drop(held);
+    fs::rename(&profiles, &moved_profiles).unwrap();
+    fs::rename(&moved_profiles, &profiles).unwrap();
+    fs::rename(root, &moved_root).unwrap();
+    fs::rename(&moved_root, root).unwrap();
+}
+
+#[test]
+fn atomic_replacement_reads_one_complete_validated_snapshot() {
+    let (_temp, registry) = fixture();
+    initialize(&registry);
+    let replacement = registry.root().join("replacement");
+    let mut data = store::load(registry.root()).unwrap();
+    data.revision += 1;
+    let expected = data.revision;
+    fixture_file(&replacement, &store::serialize(&data).unwrap());
+    let mut calls = 0;
+    let result = store::load_with(registry.root(), |path| {
+        calls += 1;
+        if calls == 1 {
+            fs::rename(&replacement, path).unwrap();
+        }
+    })
+    .unwrap();
+    assert_eq!(result.revision, expected);
+    assert_eq!(calls, 2);
+}
+#[test]
+fn atomic_replacement_churn_is_bounded_without_consuming_invalid_bytes() {
+    let (_temp, registry) = fixture();
+    initialize(&registry);
+    let replacement = registry.root().join("replacement");
+    let mut calls = 0;
+    let error = store::load_with(registry.root(), |path| {
+        calls += 1;
+        fixture_file(&replacement, b"invalid encoding must never be read");
+        fs::rename(&replacement, path).unwrap();
+    })
+    .err()
+    .unwrap();
+    assert_eq!(calls, 32);
+    assert!(
+        matches!(error, Error::Unsafe {reason,..} if reason == "filesystem identity cannot be verified")
+    );
+}
+#[cfg(unix)]
+#[test]
+fn atomic_unsafe_replacement_refuses_without_retry() {
+    for symlink_replacement in [false, true] {
+        let (_temp, registry) = fixture();
+        initialize(&registry);
+        let mut calls = 0;
+        let replacement = registry.root().join("replacement");
+        let error = store::load_with(registry.root(), |path| {
+            calls += 1;
+            if symlink_replacement {
+                symlink("missing", &replacement).unwrap();
+            } else {
+                fixture_file(&replacement, b"invalid encoding");
+                fs::set_permissions(&replacement, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            fs::rename(&replacement, path).unwrap();
+        })
+        .err()
+        .unwrap();
+        assert_eq!(calls, 1);
+        if symlink_replacement {
+            assert!(matches!(error, Error::Io { .. }));
+        } else {
+            assert!(matches!(error, Error::ManagedMode { mode: 0o644, .. }));
+        }
+    }
 }

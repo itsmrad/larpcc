@@ -1,0 +1,6 @@
+List provider bindings
+
+Usage: larp cc provider list
+
+Options:
+  -h, --help  Print help

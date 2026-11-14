@@ -1,8 +1,7 @@
 use super::{DirStatus, Error, Profile, ProfileEntry};
-#[cfg(unix)]
 use std::collections::HashMap;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     ffi::OsString,
     fs, io,
@@ -60,75 +59,38 @@ pub(super) fn validate(root: &Path) -> Result<(), Error> {
         reason: reason.into(),
     })
 }
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 pub(super) fn euid() -> u32 {
     // SAFETY: geteuid takes no arguments and has no memory safety preconditions.
     unsafe { libc::geteuid() }
 }
-pub(super) fn reason(meta: &fs::Metadata, dir: bool) -> Option<String> {
-    if meta.file_type().is_symlink() {
-        return Some("is a symbolic link or reparse point".into());
-    }
-    if dir && !meta.is_dir() {
-        return Some("is not a directory".into());
-    }
-    if !dir && !meta.is_file() {
-        return Some("is not a regular file".into());
-    }
-    #[cfg(unix)]
-    {
-        if meta.uid() != euid() {
-            return Some(format!(
-                "is owned by uid {}, expected {}",
-                meta.uid(),
-                euid()
-            ));
-        }
-        if meta.mode() & 0o077 != 0 {
-            return Some(format!(
-                "has mode {:04o}; group and other access must be removed",
-                meta.mode() & 0o7777
-            ));
-        }
-    }
-    None
-}
 pub(super) fn inspect(path: &Path, dir: bool) -> Result<Option<fs::Metadata>, Error> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if let Some(reason) = reason(&meta, dir) {
-                return Err(Error::Unsafe {
-                    path: path.into(),
-                    reason,
-                });
-            }
-            Ok(Some(meta))
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(io("inspect", path, e)),
-    }
+    let kind = if dir {
+        crate::platform::ObjectKind::Directory
+    } else {
+        crate::platform::ObjectKind::File
+    };
+    crate::platform::inspect(path, kind)?
+        .map(|o| o.file.metadata().map_err(|e| io("inspect", path, e)))
+        .transpose()
 }
 pub(super) fn mkdir(path: &Path) -> Result<bool, Error> {
-    #[cfg(unix)]
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(not(unix))]
-    let builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    builder.mode(0o700);
-    match builder.create(path) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+    match crate::platform::create_directory(path) {
+        Ok(_) => Ok(true),
+        Err(Error::Io { source, .. }) if source.kind() == io::ErrorKind::AlreadyExists => {
             inspect(path, true)?;
             Ok(false)
         }
-        Err(e) => Err(io("create directory", path, e)),
+        Err(e) => Err(e),
     }
 }
 pub(super) fn options() -> fs::OpenOptions {
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true);
     #[cfg(unix)]
-    options.mode(0o600);
+    options
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
     options
 }
 pub(super) fn sync(path: &Path) -> Result<(), Error> {
@@ -145,33 +107,19 @@ pub(super) fn sync(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 pub(super) fn entries(root: &Path, profiles: &[Profile]) -> Result<Vec<ProfileEntry>, Error> {
-    #[cfg(unix)]
     let mut identities = HashMap::new();
     let mut result = Vec::with_capacity(profiles.len());
     for profile in profiles {
         let state_dir = root.join("profiles").join(profile.id.to_string());
-        let status = match fs::symlink_metadata(&state_dir) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => DirStatus::Missing,
-            Err(e) => return Err(io("inspect", &state_dir, e)),
-            Ok(meta) => {
-                if let Some(reason) = reason(&meta, true) {
-                    DirStatus::Unsafe(reason)
-                } else {
-                    #[cfg(unix)]
-                    if let Some(reason) =
-                        duplicate(&mut identities, (meta.dev(), meta.ino()), profile.id.get())
-                    {
-                        result.push(ProfileEntry {
-                            profile: profile.clone(),
-                            state_dir,
-                            status: DirStatus::Unsafe(reason),
-                        });
-                        continue;
-                    }
-                    DirStatus::Ok
-                }
-            }
-        };
+        let mut status = crate::platform::inspect_home(&state_dir)?;
+        if status == DirStatus::Ok
+            && let Some(object) =
+                crate::platform::inspect(&state_dir, crate::platform::ObjectKind::Directory)?
+            && let Some(other) = identities.insert(object.identity, profile.id.get())
+        {
+            status =
+                DirStatus::Unsafe(format!("shares a filesystem identity with profile {other}"));
+        }
         result.push(ProfileEntry {
             profile: profile.clone(),
             state_dir,
@@ -180,7 +128,7 @@ pub(super) fn entries(root: &Path, profiles: &[Profile]) -> Result<Vec<ProfileEn
     }
     Ok(result)
 }
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 pub(super) fn duplicate(
     identities: &mut HashMap<(u64, u64), u64>,
     identity: (u64, u64),
@@ -192,4 +140,15 @@ pub(super) fn duplicate(
         identities.insert(identity, id);
         None
     }
+}
+
+pub(super) fn read_options() -> fs::OpenOptions {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+    }
+    options
 }

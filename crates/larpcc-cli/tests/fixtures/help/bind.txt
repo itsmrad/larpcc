@@ -1,0 +1,11 @@
+Bind an absolute native executable
+
+Usage: larp cc provider bind [OPTIONS] <PROVIDER> <EXECUTABLE>
+
+Arguments:
+  <PROVIDER>    [possible values: claude, codex]
+  <EXECUTABLE>  
+
+Options:
+      --replace  
+  -h, --help     Print help
