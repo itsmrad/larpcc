@@ -64,8 +64,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $text = $grandchildEvidence -join "`n"
           if ($text -notmatch 'test result: ok\. 1 passed; 0 failed;' -or $text -notmatch 'l07_bounded_grandchild_inherits_exact_selected_home') { throw 'missing exact native grandchild test execution' }
-          foreach ($profile in @('claudea', 'codexb')) {
-            if (-not $text.Contains("L07 $profile process timing:") -or -not $text.Contains("L07 $profile output collected_ms=")) { throw "missing native grandchild timing for $profile" }
+          foreach ($fixtureProfile in @('claudea', 'codexb')) {
+            if (-not $text.Contains("L07 $fixtureProfile process timing:") -or -not $text.Contains("L07 $fixtureProfile output collected_ms=")) { throw "missing native grandchild timing for $fixtureProfile" }
           }
 
   msrv:
