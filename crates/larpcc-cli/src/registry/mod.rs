@@ -72,15 +72,6 @@ impl Registry {
             return Err(Error::QualificationPending);
         }
         let entries = paths::entries(self.root(), &data.profiles)?;
-        let mut homes = Vec::new();
-        for entry in &entries {
-            if let Some(object) =
-                crate::platform::inspect(&entry.state_dir, crate::platform::ObjectKind::Directory)?
-            {
-                homes.push((entry.profile.id, object.identity.clone()));
-                held.push(object);
-            }
-        }
         for entry in &entries {
             if let DirStatus::Unsafe(reason) = &entry.status {
                 return Err(Error::Unsafe {
@@ -98,6 +89,15 @@ impl Registry {
                 name: name.clone(),
                 status: DirStatus::Missing,
             });
+        }
+        let mut homes = Vec::new();
+        for entry in &entries {
+            if let Some(object) =
+                crate::platform::inspect(&entry.state_dir, crate::platform::ObjectKind::Directory)?
+            {
+                homes.push((entry.profile.id, object.identity.clone()));
+                held.push(object);
+            }
         }
         let binding = data
             .bindings
@@ -125,7 +125,7 @@ impl Registry {
     pub(crate) fn admission_lock(
         &self,
     ) -> Result<(std::fs::File, Vec<crate::platform::CheckedObject>), Error> {
-        store::lock(self.root(), std::time::Duration::from_secs(10))
+        store::admission_lock(self.root())
     }
     pub fn locate() -> Result<Registry, Error> {
         Self::at(paths::resolve(|key| std::env::var_os(key))?)

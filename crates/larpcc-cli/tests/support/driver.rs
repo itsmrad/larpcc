@@ -99,6 +99,10 @@ fn main() -> std::process::ExitCode {
 // Nonpackaged invented-row input. Ordinary larp never compiles this parser or row.
 #[derive(Parser)]
 struct Invented {
+    #[arg(long, value_parser = ["setup", "wait", "cancel"])]
+    failure: Option<String>,
+    #[arg(long)]
+    observation: Option<std::path::PathBuf>,
     #[arg(value_parser = ["run", "login", "status", "logout"])]
     operation: String,
     name: registry::ProfileName,
@@ -145,12 +149,46 @@ fn stage3() -> std::process::ExitCode {
         interface: "invented",
         backend: "invented-no-network",
         policy_revision: 1,
-        argv: &[],
-        denied_env: &["LARPCC_SYNTHETIC_DENY_"],
+        argv: match op {
+            Operation::Run => &[],
+            Operation::Login => &["invented-login"],
+            Operation::Status => &["invented-status"],
+            Operation::Logout => &["invented-logout"],
+        },
+        denied_env: &["LARPCC_SYNTHETIC_DENY_*"],
         paths: &[],
         evidence: "synthetic fixture only",
     };
-    match admission::invoke(op, &input.name, input.args, input.yes, &[row]) {
+    #[cfg(unix)]
+    let before_signals = observe::observe().unwrap();
+    let before_env = std::env::vars_os().collect::<Vec<_>>();
+    if let Some(failure) = &input.failure {
+        #[cfg(unix)]
+        platform::synthetic_auth_fault(match failure.as_str() {
+            "setup" => 1,
+            "wait" => 2,
+            _ => 3,
+        });
+        #[cfg(windows)]
+        {
+            eprintln!("unsupported native failure seam: {failure}");
+            return 2.into();
+        }
+    }
+    let result = admission::invoke(op, &input.name, input.args, input.yes, &[row]);
+    if let Some(path) = &input.observation {
+        #[cfg(unix)]
+        let signals_unchanged = before_signals == observe::observe().unwrap();
+        #[cfg(windows)]
+        let signals_unchanged = true;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .unwrap();
+        serde_json::to_writer(file, &serde_json::json!({"signals_unchanged":signals_unchanged,"env_unchanged":before_env==std::env::vars_os().collect::<Vec<_>>()})).unwrap();
+    }
+    match result {
         Ok(code) => std::process::exit(code as i32),
         Err(error) => {
             eprintln!("error: {error}");

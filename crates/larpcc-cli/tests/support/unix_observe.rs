@@ -13,6 +13,7 @@ pub fn observe() -> io::Result<serde_json::Value> {
         libc::SIGHUP,
         libc::SIGQUIT,
         libc::SIGPIPE,
+        libc::SIGCHLD,
         libc::SIGTSTP,
     ] {
         // SAFETY: sigaction is initialized output storage, not interpreted before success.

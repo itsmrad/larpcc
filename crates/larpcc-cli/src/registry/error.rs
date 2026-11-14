@@ -287,6 +287,44 @@ impl std::error::Error for NameError {}
 mod stage2_fixtures {
     use super::*;
     #[test]
+    fn stage3_operation_error_literals() {
+        for (error, message, hint) in [
+            (
+                Error::ArtifactInvalid,
+                "provider installation qualification is invalid",
+                Some("use an already reviewed official artifact"),
+            ),
+            (
+                Error::NamespaceUnverified,
+                "profile subscription namespace cannot be qualified",
+                Some("review the supported backend and native policy conditions"),
+            ),
+            (
+                Error::AuthBusy,
+                "profile authentication operation is busy",
+                Some("quiesce the selected profile before retrying"),
+            ),
+            (
+                Error::AdmissionChanged,
+                "launch context changed during admission",
+                Some("retry after metadata changes have finished"),
+            ),
+            (
+                Error::ConfirmationRequired,
+                "authentication operation requires confirmation",
+                Some("use a terminal or explicitly pass --yes"),
+            ),
+            (
+                Error::ConfirmationDeclined,
+                "authentication operation cancelled",
+                None,
+            ),
+        ] {
+            assert_eq!(error.to_string(), message);
+            assert_eq!(error.hint().as_deref(), hint);
+        }
+    }
+    #[test]
     fn fixed_launch_errors_do_not_echo_supplied_values() {
         let cases = [
             (
