@@ -22,13 +22,6 @@ pub struct CheckedObject {
 pub struct AnchoredPath {
     pub ancestors: Vec<CheckedObject>,
 }
-#[cfg(windows)]
-pub fn unavailable(path: &Path) -> Error {
-    Error::Unsafe {
-        path: path.into(),
-        reason: "platform safety validation is unavailable".into(),
-    }
-}
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -39,6 +32,10 @@ mod windows;
 pub use windows::*;
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(all(test, windows))]
+#[path = "../../tests/fixtures/windows/private.rs"]
+pub(crate) mod fixture_private;
 
 // Internal only: a namespace change is distinct from every validation or I/O failure.
 #[derive(Debug)]

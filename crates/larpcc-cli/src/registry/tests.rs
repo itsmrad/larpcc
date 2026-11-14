@@ -36,8 +36,7 @@ fn name(s: &str) -> ProfileName {
     ProfileName::parse(s).unwrap()
 }
 #[cfg(windows)]
-#[path = "../../tests/fixtures/windows/private.rs"]
-mod windows_private;
+use crate::platform::fixture_private as windows_private;
 #[cfg(windows)]
 type FixtureTemp = windows_private::PrivateTempDir;
 #[cfg(unix)]

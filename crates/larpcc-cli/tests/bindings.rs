@@ -101,18 +101,21 @@ fn control_paths_are_escaped_and_lexical_failures_do_not_create_root() {
 #[test]
 fn self_hardlink_and_bounded_installation_link_chain() {
     let f = Fixture::new();
-    let own = f.temp.path().join("larp-copy");
+    // Reuse the built inode so the identity test never needs a writable executable copy.
+    let own = std::path::Path::new(env!("CARGO_BIN_EXE_larp"));
     let alias = f.temp.path().join("larp-hardlink");
-    fs::copy(env!("CARGO_BIN_EXE_larp"), &own).unwrap();
-    fs::set_permissions(&own, fs::Permissions::from_mode(0o700)).unwrap();
-    fs::hard_link(&own, &alias).unwrap();
+    fs::hard_link(own, &alias).unwrap();
     let out = capture(f.command_for(
-        &own,
+        own,
         &["cc", "provider", "bind", "claude", alias.to_str().unwrap()],
     ))
     .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("is Larp CC itself"));
+    assert!(
+        stderr(&out).contains("is Larp CC itself"),
+        "{}",
+        stderr(&out)
+    );
     assert!(!f.root.join("registry.json").exists());
     let native = f.temp.path().join("native");
     #[cfg(target_os = "macos")]

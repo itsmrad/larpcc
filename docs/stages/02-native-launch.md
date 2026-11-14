@@ -594,6 +594,7 @@ pub fn inspect_home(path: &Path) -> Result<DirStatus, Error>;
 pub fn create_file(path: &Path) -> Result<CheckedObject, Error>; // create-new protected
 pub fn create_directory(path: &Path) -> Result<CheckedObject, Error>; // nonrecursive
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error>;
+// launch/windows.rs, full synthetic-driver launch module only
 #[cfg(windows)] pub fn spawn_wait(plan: &LaunchPlan) -> Result<u32, Error>;
 ```
 
@@ -620,8 +621,9 @@ maps missing to Missing and security inability to Unsafe; it never inspects cont
 sequencing uses these primitives, existing registry list of profiles, and deterministic iteration;
 do not create a generic tree/ACL framework. `platform/mod.rs` selects unix.rs under cfg(unix),
 windows.rs under cfg(windows), with macos.rs supplemental only on macOS. Reexports are cfg-gated;
-Windows symbols never leak to Unix builds. launch module is synthetic-feature gated; spawn_wait is
-additionally Windows gated.
+Windows symbols never leak to Unix builds. The full launch module belongs only to the synthetic
+driver. Its Windows runtime submodule owns spawn_wait and the console/wait helpers; the ordinary
+CLI does not compile those helpers, including when synthetic-launch or all features are enabled.
 
 Call sites requiring coordinated edits: `Registry::{list,get,bindings,launch_target}` and store load
 validate fixed metadata before read; `paths::entries` uses inspect_home and identity duplicate
@@ -636,7 +638,8 @@ read-only safe-registry status collection from launch whole-tree rejection.
 Two branches suffice. Core owns all shared code under
 `crates/larpcc-cli/src/{registry,provider,launch,cli}/**`, main.rs, platform/{mod,unix,macos}.rs,
 manifests/lock, non-Windows tests/support drivers/shared fixtures, CI, README. Windows owns only
-`crates/larpcc-cli/src/platform/windows.rs`, `crates/larpcc-cli/tests/windows_*.rs`,
+`crates/larpcc-cli/src/platform/windows.rs`, `crates/larpcc-cli/src/launch/windows.rs`,
+`crates/larpcc-cli/tests/windows_*.rs`,
 `crates/larpcc-cli/tests/fixtures/windows/**`. Lead owns plan changes. No concurrent edits to shared
 files; Windows requests a shared change from core and waits for a lead-directed snapshot merge.
 

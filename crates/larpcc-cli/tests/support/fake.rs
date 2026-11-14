@@ -41,6 +41,34 @@ fn run() -> io::Result<u32> {
      "stdout_terminal":io::stdout().is_terminal(),
      "stderr_terminal":io::stderr().is_terminal(),
     });
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::FILETIME,
+            System::Threading::{GetCurrentProcess, GetProcessTimes},
+        };
+        let mut created = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut exited, mut kernel, mut user) = (created, created, created);
+        // SAFETY: current-process pseudo-handle and valid FILETIME output buffers.
+        if unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        record["windows_creation_time"] = serde_json::json!(
+            (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime)
+        );
+    }
     for key in [
         "CLAUDE_CONFIG_DIR",
         "CODEX_HOME",
@@ -76,6 +104,20 @@ fn run() -> io::Result<u32> {
         "sleep" => std::thread::sleep(std::time::Duration::from_secs(5)),
         "bounded-grandchild" => std::thread::sleep(std::time::Duration::from_secs(3)),
         "grandchild" => {
+            #[cfg(windows)]
+            if let Some(release) = std::env::var_os("LARPCC_FAKE_EXIT_RELEASE") {
+                // Let the test retain our identity-checked handle before we can exit.
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !std::path::Path::new(&release).exists() {
+                    if std::time::Instant::now() >= end {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "synthetic exit observation handshake",
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
             let mut command = std::process::Command::new(std::env::current_exe()?);
             command
                 .env_clear()
