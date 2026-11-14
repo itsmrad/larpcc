@@ -57,6 +57,16 @@ jobs:
       - run: cargo +stable clippy --workspace --all-targets --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked -- -D warnings
       - run: cargo +stable test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
       - run: cargo +stable test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
+      - if: runner.os == 'Windows'
+        name: Report bounded grandchild process timings
+        run: |
+          cargo +stable test --test windows_launch --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked l07_bounded_grandchild_inherits_exact_selected_home -- --exact --nocapture 2>&1 | Tee-Object -Variable grandchildEvidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $text = $grandchildEvidence -join "`n"
+          if ($text -notmatch 'test result: ok\. 1 passed; 0 failed;' -or $text -notmatch 'l07_bounded_grandchild_inherits_exact_selected_home') { throw 'missing exact native grandchild test execution' }
+          foreach ($profile in @('claudea', 'codexb')) {
+            if (-not $text.Contains("L07 $profile process timing:") -or -not $text.Contains("L07 $profile output collected_ms=")) { throw "missing native grandchild timing for $profile" }
+          }
 
   msrv:
     timeout-minutes: 20
