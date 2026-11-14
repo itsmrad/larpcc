@@ -466,7 +466,11 @@ pub(crate) fn dispatch(a: Admitted<'_>, _guard: Option<AuthGuard>) -> Result<u32
     }
     #[cfg(windows)]
     {
-        super::windows::spawn_wait(&a.plan)
+        if a.row.operation == Operation::Run {
+            super::windows::spawn_wait(&a.plan)
+        } else {
+            super::windows::auth_spawn_wait(&a.plan)
+        }
     }
 }
 
