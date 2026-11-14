@@ -25,12 +25,26 @@ if harness == 0:
     os.close(report_read)
     os.close(control_write)
     signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    start_read, start_write = os.pipe()
     child = os.fork()
     if child == 0:
+        os.close(start_write)
         os.setpgid(0, 0)
+        if os.environ.get("LARPCC_PTY_DELAY_FOREGROUND"):
+            os.write(report_write, b"gated")
+        if os.read(start_read, 2) != b"fg":
+            os._exit(6)
+        os.close(start_read)
         os.execve(sys.argv[1], sys.argv[1:], dict(os.environ))
+    os.close(start_read)
     os.setpgid(child, child)
+    if os.environ.get("LARPCC_PTY_DELAY_FOREGROUND"):
+        if os.read(control_read, 2) != b"go":
+            os._exit(7)
     os.tcsetpgrp(0, child)
+    # Entry must imply foreground installation, not merely that setpgid completed.
+    os.write(start_write, b"fg")
+    os.close(start_write)
     pid, status = os.waitpid(child, os.WUNTRACED)
     if not os.WIFSTOPPED(status) or os.WSTOPSIG(status) != signal.SIGTSTP:
         os._exit(3)
@@ -66,6 +80,10 @@ try:
             return value if value else False
         except (FileNotFoundError, json.JSONDecodeError):
             return False
+    if os.environ.get("LARPCC_PTY_DELAY_FOREGROUND"):
+        report(b"gated")
+        assert not record.exists(), "fake entered before foreground installation"
+        os.write(control_write, b"go")
     wait_for(ready)
     value = json.loads(record.read_text())
     assert all(value[key] for key in ("stdin_terminal", "stdout_terminal", "stderr_terminal"))
@@ -73,6 +91,7 @@ try:
         assert value["pid"] != value["unix"]["pgrp"]
     else:
         assert value["pid"] == value["unix"]["pgrp"]
+    assert os.tcgetpgrp(master) == value["unix"]["pgrp"]
     # Real terminal resize, suspend character, foreground continuation, then interrupt character.
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 41, 103, 0, 0))
     def resized():

@@ -246,8 +246,11 @@ fn parent_directed_term_hup_reap_and_preserve_signal_status() {
 #[test]
 fn auth_uses_real_foreground_pty_job_control_resize_and_interrupt() {
     let (f, digest) = setup();
-    for signal in ["INT", "QUIT"] {
-        let record = f.temp.path().join(format!("pty-record-{signal}"));
+    for (signal, delayed_foreground) in [("INT", false), ("QUIT", false), ("INT", true)] {
+        let record = f
+            .temp
+            .path()
+            .join(format!("pty-record-{signal}-{delayed_foreground}"));
         let mut cmd = command(&f, &digest, "status");
         let args = cmd.get_args().map(|v| v.to_owned()).collect::<Vec<_>>();
         let environment = cmd
@@ -271,6 +274,9 @@ fn auth_uses_real_foreground_pty_job_control_resize_and_interrupt() {
             .env("LARPCC_PTY_AUTH", "1")
             .env("LARPCC_FAKE_MODE", "wait-ctrl")
             .env("LARPCC_FAKE_RECORD", record);
+        if delayed_foreground {
+            cmd.env("LARPCC_PTY_DELAY_FOREGROUND", "1");
+        }
         let out = capture(cmd).unwrap();
         assert!(out.status.success(), "{} {}", stdout(&out), stderr(&out));
         assert!(stdout(&out).contains("real PTY"));
@@ -539,4 +545,43 @@ fn actual_row_argument_and_raw_environment_policy_preserves_unrelated_bytes() {
         .current_dir(f.temp.path());
     assert!(capture(cmd).unwrap().status.success());
     assert_eq!(entry(&record)["LARPCC_TEST_VALUE"], "fffe");
+}
+
+#[test]
+fn killed_fake_record_is_never_published_as_complete() {
+    use std::{
+        os::unix::process::ExitStatusExt,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let (f, _) = setup();
+    let record = f.temp.path().join("interrupted-record");
+    let pending = f.temp.path().join("interrupted-record.pending");
+    let mut cmd = f.command_for(&f.temp.path().join("native-fake"), &[]);
+    cmd.env("LARPCC_FAKE_MODE", "pause-record")
+        .env("LARPCC_FAKE_RECORD", &record)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    let pid = child.id();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && !fs::metadata(&pending).is_ok_and(|m| m.len() == 1) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let ready = fs::metadata(&pending).is_ok_and(|m| m.len() == 1);
+    let published_before_kill = record.exists();
+    let cleanup = Instant::now();
+    let killed = child.kill();
+    let out = wait_output(child).unwrap();
+    // Reap the known child before reporting any failed rendezvous assertion.
+    assert!(ready, "fake {pid} did not reach interrupted publication");
+    assert!(!published_before_kill);
+    killed.unwrap();
+    assert_eq!(out.status.signal(), Some(libc::SIGKILL));
+    assert!(
+        cleanup.elapsed() < Duration::from_secs(2),
+        "known fake {pid} cleanup exceeded two seconds"
+    );
+    assert!(!record.exists());
+    assert_eq!(fs::read(pending).unwrap(), b"{");
 }

@@ -14,7 +14,7 @@ fn ordinary_execution_remains_closed_even_with_synthetic_markers() {
         assert!(output.stdout.is_empty());
         assert_eq!(
             stderr(&output),
-            include_str!("fixtures/qualification-pending.txt")
+            include_str!("fixtures/qualification-pending.txt").replace("\r\n", "\n")
         );
     }
     assert!(!f.root.exists());

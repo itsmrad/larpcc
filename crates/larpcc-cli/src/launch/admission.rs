@@ -79,7 +79,8 @@ pub(crate) struct Admitted<'a> {
 }
 pub(crate) struct AuthGuard {
     file: File,
-    held: Vec<CheckedObject>,
+    // Own ancestry pins through direct-child reap, including newly created directories.
+    _held: Vec<CheckedObject>,
 }
 
 fn candidate(row: &ArtifactRow, op: Operation) -> bool {
@@ -410,7 +411,7 @@ pub(crate) fn acquire_auth_guard(root: &Path, id: ProfileId) -> Result<AuthGuard
     })?;
     Ok(AuthGuard {
         file: object.file,
-        held,
+        _held: held,
     })
 }
 fn revalidate_guard(root: &Path, id: ProfileId, guard: &AuthGuard) -> Result<(), Error> {
@@ -440,12 +441,7 @@ fn revalidate_guard(root: &Path, id: ProfileId, guard: &AuthGuard) -> Result<(),
     Ok(())
 }
 pub(crate) fn dispatch(a: Admitted<'_>, guard: Option<AuthGuard>) -> Result<u32, Error> {
-    // Retain verified path handles and the noninheritable guard through direct-child reap.
-    let _held = &a.snapshot.held;
-    if let Some(g) = &guard {
-        let _ = g.file.metadata();
-        let _ = &g.held;
-    }
+    // Admitted and AuthGuard own their path handles until the explicit drops after reap.
     eprintln!("{ROUTING_NOTICE}");
     if a.row.operation != Operation::Run {
         eprintln!("{AUTH_NOTICE}");
