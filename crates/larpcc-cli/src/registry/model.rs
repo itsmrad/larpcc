@@ -130,11 +130,6 @@ pub enum BindOutcome {
     Replaced { old: PathBuf },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "Launch target belongs to the separate synthetic driver."
-)]
-#[cfg(feature = "synthetic-launch")]
 pub struct LaunchTarget {
     pub profile: Profile,
     pub state_dir: PathBuf,

@@ -364,11 +364,6 @@ fn canonical_missing(path: &Path) -> Result<PathBuf, Error> {
     }
 }
 
-#[cfg(feature = "synthetic-launch")]
-#[allow(
-    dead_code,
-    reason = "Execution is used only by the separate synthetic driver."
-)]
 pub fn execve(
     path: &Path,
     argv0: &std::ffi::OsStr,
@@ -460,6 +455,385 @@ pub fn execve(
 
 pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error> {
     Ok(path.starts_with(root))
+}
+
+pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
+    let (resolved, expected) = executable(path, root)?;
+    let file = open(&resolved, ObjectKind::File, false)?;
+    let meta = file.metadata().map_err(|e| io_error("inspect", path, e))?;
+    trusted(&resolved, &meta)?;
+    acl_file(&file, path)?;
+    if !meta.is_file() || meta.mode() & 0o111 == 0 || identity(&meta) != expected {
+        return Err(Error::ArtifactInvalid);
+    }
+    Ok((file, expected))
+}
+
+pub(crate) fn open_auth_lock(path: &Path) -> Result<CheckedObject, Error> {
+    let checked = inspect(path, ObjectKind::File)?.ok_or(Error::AdmissionChanged)?;
+    single_link(&checked.file)?;
+    Ok(checked)
+}
+
+pub(crate) fn single_link(file: &File) -> Result<(), Error> {
+    if file
+        .metadata()
+        .map_err(|_| Error::NamespaceUnverified)?
+        .nlink()
+        != 1
+    {
+        return Err(Error::NamespaceUnverified);
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) enum AuthExit {
+    Code(u32),
+    Signal(i32),
+}
+
+#[cfg(feature = "synthetic-launch")]
+thread_local! { static AUTH_FAULT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+#[cfg(feature = "synthetic-launch")]
+#[allow(
+    dead_code,
+    reason = "Only the nonpackaged driver sets failure injection; ordinary all-features CLI has no entrypoint"
+)]
+pub(crate) fn synthetic_auth_fault(value: u8) {
+    AUTH_FAULT.with(|f| f.set(value));
+}
+fn auth_fault(value: u8) -> bool {
+    #[cfg(feature = "synthetic-launch")]
+    {
+        AUTH_FAULT.with(|f| f.get() == value)
+    }
+    #[cfg(not(feature = "synthetic-launch"))]
+    {
+        let _ = value;
+        false
+    }
+}
+
+// Handler state is process-local. The shipped CLI is single-threaded during dispatch.
+static AUTH_SIGNALS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+extern "C" fn auth_signal(signal: i32) {
+    let bit = match signal {
+        libc::SIGTERM => 1,
+        libc::SIGHUP => 2,
+        _ => 0,
+    };
+    AUTH_SIGNALS.fetch_or(bit, std::sync::atomic::Ordering::SeqCst);
+}
+struct AuthSignals(Vec<(i32, libc::sigaction)>);
+impl AuthSignals {
+    fn install() -> Result<Self, Error> {
+        AUTH_SIGNALS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut saved = Self(Vec::new());
+        for signal in [
+            libc::SIGINT,
+            libc::SIGQUIT,
+            libc::SIGTERM,
+            libc::SIGHUP,
+            libc::SIGCHLD,
+        ] {
+            // SAFETY: action storage is initialized before registration; handler only updates
+            // a lock-free atomic, and uses no allocation, locks or process APIs.
+            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+            action.sa_sigaction = auth_signal as *const () as usize;
+            // No SA_RESTART: waitpid must return EINTR for parent-directed cancellation.
+            let mut previous = action;
+            // SAFETY: valid signal numbers and writable initialized mask/action storage.
+            if unsafe { libc::sigemptyset(&mut action.sa_mask) } != 0
+                || unsafe { libc::sigaction(signal, &action, &mut previous) } != 0
+            {
+                return Err(Error::Console {
+                    action: "install authentication signal handling",
+                    source: io::Error::last_os_error(),
+                });
+            }
+            saved.0.push((signal, previous));
+            if auth_fault(1) {
+                return Err(Error::Console {
+                    action: "install authentication signal handling",
+                    source: io::Error::other("synthetic setup failure"),
+                });
+            }
+        }
+        Ok(saved)
+    }
+}
+impl Drop for AuthSignals {
+    fn drop(&mut self) {
+        for (signal, previous) in self.0.iter().rev() {
+            // SAFETY: these are the exact complete dispositions captured by install.
+            unsafe {
+                libc::sigaction(*signal, previous, std::ptr::null_mut());
+            }
+        }
+    }
+}
+struct AuthMask(libc::sigset_t);
+impl AuthMask {
+    fn block() -> io::Result<Self> {
+        // SAFETY: fully initialized writable mask storage; this single-threaded CLI
+        // changes only its own mask, after spawn so the child inherits the original.
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        let mut previous = blocked;
+        // SAFETY: valid signal numbers and writable sets.
+        let ok = unsafe {
+            libc::sigemptyset(&mut blocked) == 0
+                && libc::sigaddset(&mut blocked, libc::SIGCHLD) == 0
+                && libc::sigaddset(&mut blocked, libc::SIGTERM) == 0
+                && libc::sigaddset(&mut blocked, libc::SIGHUP) == 0
+                && libc::sigprocmask(libc::SIG_BLOCK, &blocked, &mut previous) == 0
+        };
+        if ok {
+            Ok(Self(previous))
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+    fn suspend(&self) {
+        let mut waiting = self.0;
+        // SAFETY: initialized captured mask; unblock SIGCHLD even if inherited blocked
+        // so child exit always wakes this supervisor. Restore the original on drop.
+        unsafe {
+            libc::sigdelset(&mut waiting, libc::SIGCHLD);
+            libc::sigsuspend(&waiting);
+        }
+    }
+}
+impl Drop for AuthMask {
+    fn drop(&mut self) {
+        // SAFETY: restore exactly the mask captured above, after direct-child reap.
+        unsafe {
+            libc::sigprocmask(libc::SIG_SETMASK, &self.0, std::ptr::null_mut());
+        }
+    }
+}
+fn cancel_reap(pid: libc::pid_t) {
+    // SAFETY: pid is the known unreaped direct child. Never kill an unknown tree.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    let mut status = 0;
+    loop {
+        // SAFETY: same known child, writable status; no other reaper.
+        if unsafe { libc::waitpid(pid, &mut status, 0) } == pid {
+            return;
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ECHILD) {
+            return;
+        }
+        // Retain the cooperative guard if the OS cannot establish reap yet.
+        if error.kind() != io::ErrorKind::Interrupted {
+            std::thread::yield_now();
+        }
+    }
+}
+fn pending_auth_signal() -> Option<i32> {
+    let pending = AUTH_SIGNALS.load(std::sync::atomic::Ordering::SeqCst);
+    if pending & 1 != 0 {
+        Some(libc::SIGTERM)
+    } else if pending & 2 != 0 {
+        Some(libc::SIGHUP)
+    } else {
+        None
+    }
+}
+struct AuthExec {
+    path: std::ffi::CString,
+    _argv: Vec<std::ffi::CString>,
+    _env: Vec<std::ffi::CString>,
+    argv: Vec<*const libc::c_char>,
+    env: Vec<*const libc::c_char>,
+}
+// SAFETY: every pointer refers to an immutable CString buffer owned by this struct;
+// moving it never moves those allocations. No mutation or pointer escape is exposed.
+unsafe impl Send for AuthExec {}
+// SAFETY: all storage is immutable after construction; exec only reads the buffers.
+unsafe impl Sync for AuthExec {}
+impl AuthExec {
+    fn prepare(plan: &crate::launch::LaunchPlan) -> Result<Self, Error> {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let invalid = || Error::Launch {
+            path: plan.executable.clone(),
+            source: io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "launch data contains a NUL character",
+            ),
+        };
+        let string = |value: &[u8]| CString::new(value).map_err(|_| invalid());
+        let path = string(plan.executable.as_os_str().as_bytes())?;
+        let mut args = vec![string(plan.argv0.as_bytes())?];
+        for arg in &plan.argv {
+            args.push(string(arg.as_bytes())?);
+        }
+        let mut inherited = std::env::vars_os().collect::<Vec<_>>();
+        for (key, value) in &plan.env_delta {
+            inherited.retain(|(k, _)| k != key);
+            inherited.push((key.clone(), value.clone()));
+        }
+        let mut environment = Vec::new();
+        for (key, value) in inherited {
+            if key.as_bytes().contains(&b'=') {
+                return Err(Error::Launch {
+                    path: plan.executable.clone(),
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid environment variable",
+                    ),
+                });
+            }
+            let mut bytes = key.as_bytes().to_vec();
+            bytes.push(b'=');
+            bytes.extend_from_slice(value.as_bytes());
+            environment.push(string(&bytes)?);
+        }
+        let mut argv = args.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
+        argv.push(std::ptr::null());
+        let mut env = environment.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
+        env.push(std::ptr::null());
+        Ok(Self {
+            path,
+            _argv: args,
+            _env: environment,
+            argv,
+            env,
+        })
+    }
+    fn execute(&self) -> io::Error {
+        // SAFETY: owned CStrings and null-terminated pointer arrays stay live for
+        // this call. Exact-path execve never searches PATH or falls back to a shell.
+        unsafe {
+            libc::execve(self.path.as_ptr(), self.argv.as_ptr(), self.env.as_ptr());
+        }
+        io::Error::last_os_error()
+    }
+}
+
+pub(crate) fn auth_spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<AuthExit, Error> {
+    use std::os::unix::process::CommandExt;
+    let prepared = AuthExec::prepare(plan)?;
+    let signals = AuthSignals::install()?;
+    if auth_fault(3) {
+        return Ok(AuthExit::Signal(libc::SIGTERM));
+    }
+    if let Some(signal) = pending_auth_signal() {
+        return Ok(AuthExit::Signal(signal));
+    }
+    let mut command = std::process::Command::new(&plan.executable);
+    if let Some(cwd) = &plan.cwd {
+        command.current_dir(cwd);
+    }
+    // Caught dispositions reset at exec; preserve dispositions that were originally
+    // ignored before the wrapper installed its handlers (including SIGCHLD).
+    let ignored = signals
+        .0
+        .iter()
+        .filter(|(_, action)| action.sa_sigaction == libc::SIG_IGN)
+        .map(|(signal, action)| (*signal, *action))
+        .collect::<Vec<_>>();
+    // SAFETY: the child hook only iterates storage prepared before fork and calls
+    // async-signal-safe sigaction/execve. Exec failure always returns Err, so std
+    // cannot use execvp's shell fallback. No allocation, locks or environment access.
+    unsafe {
+        command.pre_exec(move || {
+            for (signal, action) in &ignored {
+                if libc::sigaction(*signal, action, std::ptr::null_mut()) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Err(prepared.execute())
+        });
+    }
+    let child = command.spawn().map_err(|source| Error::Launch {
+        path: plan.executable.clone(),
+        source,
+    })?;
+    let pid = child.id() as libc::pid_t;
+    if auth_fault(2) {
+        cancel_reap(pid);
+        return Err(Error::Wait {
+            source: io::Error::other("synthetic wait failure"),
+            cleanup_failed: false,
+        });
+    }
+    let mask = match AuthMask::block() {
+        Ok(mask) => mask,
+        Err(source) => {
+            cancel_reap(pid);
+            return Err(Error::Wait {
+                source,
+                cleanup_failed: false,
+            });
+        }
+    };
+    let mut sent = 0;
+    let mut status = 0;
+    loop {
+        let pending = AUTH_SIGNALS.load(std::sync::atomic::Ordering::SeqCst);
+        for (bit, signal) in [(1, libc::SIGTERM), (2, libc::SIGHUP)] {
+            if pending & bit != 0 && sent & bit == 0 {
+                // SAFETY: pid is our known unreaped direct child. Never a group/tree kill.
+                unsafe {
+                    libc::kill(pid, signal);
+                }
+                sent |= bit;
+            }
+        }
+        // SAFETY: known direct child PID and writable status; no other thread reaps it.
+        let result = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if result == pid {
+            break;
+        }
+        if result == 0 {
+            mask.suspend();
+            continue;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        // A wait failure cannot release the auth guard while the child is alive.
+        cancel_reap(pid);
+        return Err(Error::Wait {
+            source,
+            cleanup_failed: false,
+        });
+    }
+    if libc::WIFEXITED(status) {
+        Ok(AuthExit::Code(libc::WEXITSTATUS(status) as u32))
+    } else {
+        Ok(AuthExit::Signal(libc::WTERMSIG(status)))
+    }
+}
+pub(crate) fn terminate_by_signal(signal: i32) -> Result<u32, Error> {
+    // Called only after the direct child is reaped and every auth guard is dropped.
+    // SAFETY: initialize default action and a single-signal mask before OS calls.
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = libc::SIG_DFL;
+    // SAFETY: valid initialized storage and a signal obtained from waitpid/our handlers.
+    let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    // SAFETY: valid masks/actions; unblocking permits the same native signal death.
+    let success = unsafe {
+        libc::sigemptyset(&mut action.sa_mask) == 0
+            && libc::sigaction(signal, &action, std::ptr::null_mut()) == 0
+            && libc::sigemptyset(&mut set) == 0
+            && libc::sigaddset(&mut set, signal) == 0
+            && libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut()) == 0
+            && libc::raise(signal) == 0
+    };
+    Err(Error::Console {
+        action: "propagate provider signal",
+        source: if success {
+            io::Error::other("signal did not terminate process")
+        } else {
+            io::Error::last_os_error()
+        },
+    })
 }
 
 #[cfg(test)]

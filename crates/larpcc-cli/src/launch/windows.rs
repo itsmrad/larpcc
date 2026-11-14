@@ -48,10 +48,21 @@ fn set_handler(add: bool) -> bool {
     success
 }
 
+fn kill_child(child: &mut std::process::Child) -> io::Result<()> {
+    #[cfg(test)]
+    if lifecycle::hold_cleanup() {
+        return Err(io::Error::other("injected kill failure"));
+    }
+    child.kill()
+}
 fn wait_child(child: &mut std::process::Child) -> io::Result<std::process::ExitStatus> {
     #[cfg(test)]
     if FAULT.with(|f| matches!(f.get(), 3..=5)) {
         FAILED_CHILD.with(|p| p.set(child.id()));
+        return Err(io::Error::from_raw_os_error(6));
+    }
+    #[cfg(test)]
+    if lifecycle::begin_auth_fault(child) {
         return Err(io::Error::from_raw_os_error(6));
     }
     child.wait()
@@ -61,9 +72,24 @@ fn poll_cleanup(child: &mut std::process::Child) -> io::Result<Option<std::proce
     if FAULT.with(|f| f.get() == 4) {
         return Err(io::Error::other("injected cleanup query failure"));
     }
-    child.try_wait()
+    #[cfg(test)]
+    if lifecycle::hold_cleanup() {
+        return lifecycle::held_poll();
+    }
+    let result = child.try_wait();
+    #[cfg(test)]
+    if matches!(result, Ok(Some(_))) {
+        lifecycle::record_reap();
+    }
+    result
 }
 pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
+    spawn_wait_inner(plan, false)
+}
+pub(crate) fn auth_spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
+    spawn_wait_inner(plan, true)
+}
+fn spawn_wait_inner(plan: &crate::launch::LaunchPlan, auth: bool) -> Result<u32, Error> {
     use std::{
         process::{Command, Stdio},
         time::{Duration, Instant},
@@ -99,7 +125,7 @@ pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
                     cleanup_failed: false,
                 }),
             Err(source) => {
-                let _ = child.kill();
+                let _ = kill_child(&mut child);
                 let deadline = Instant::now() + Duration::from_secs(2);
                 let mut reaped = false;
                 while Instant::now() < deadline {
@@ -109,8 +135,17 @@ pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
+                // Auth exclusion cannot end on unknown cleanup: retain Child and handler until reap.
+                while auth && !reaped {
+                    let _ = kill_child(&mut child);
+                    reaped = matches!(poll_cleanup(&mut child), Ok(Some(_)));
+                    if !reaped {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
                 Err(Error::Wait {
                     source,
+                    // Describes cleanup at return, not whether the first bounded attempt failed.
                     cleanup_failed: !reaped,
                 })
             }

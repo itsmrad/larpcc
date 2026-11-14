@@ -12,6 +12,13 @@ pub enum Error {
         directory: bool,
     },
     QualificationPending,
+    ArtifactInvalid,
+    NamespaceUnverified,
+    AuthBusy,
+    AdmissionChanged,
+    ConfirmationRequired,
+    ConfirmationDeclined,
+
     AlreadyBound {
         provider: Provider,
         old: PathBuf,
@@ -89,8 +96,18 @@ impl fmt::Display for Error {
                 crate::registry::display::path(path)
             ),
             Self::QualificationPending => {
-                f.write_str("provider launch is disabled pending stage 3 qualification")
+                f.write_str("provider operation is disabled for this combination")
             }
+            Self::ArtifactInvalid => f.write_str("provider installation qualification is invalid"),
+            Self::NamespaceUnverified => {
+                f.write_str("profile subscription namespace cannot be qualified")
+            }
+            Self::AuthBusy => f.write_str("profile authentication operation is busy"),
+            Self::AdmissionChanged => f.write_str("launch context changed during admission"),
+            Self::ConfirmationRequired => {
+                f.write_str("authentication operation requires confirmation")
+            }
+            Self::ConfirmationDeclined => f.write_str("authentication operation cancelled"),
             Self::AlreadyBound { provider, .. } => {
                 write!(f, "refusing to rebind {provider} without --replace")
             }
@@ -179,8 +196,14 @@ impl Error {
     pub fn hint(&self) -> Option<String> {
         Some(match self {
             Self::QualificationPending => {
-                "binding and profile metadata commands remain available".into()
+                "review the documented qualification matrix".into()
             }
+            Self::ArtifactInvalid => "use an already reviewed official artifact".into(),
+            Self::NamespaceUnverified => "review the supported backend and native policy conditions".into(),
+            Self::AuthBusy => "quiesce the selected profile before retrying".into(),
+            Self::AdmissionChanged => "retry after metadata changes have finished".into(),
+            Self::ConfirmationRequired => "use a terminal or explicitly pass --yes".into(),
+            Self::ConfirmationDeclined => return None,
             Self::AlreadyBound { old, .. } => {
                 format!("currently bound to {}", crate::registry::display::path(old))
             }
@@ -264,12 +287,50 @@ impl std::error::Error for NameError {}
 mod stage2_fixtures {
     use super::*;
     #[test]
+    fn stage3_operation_error_literals() {
+        for (error, message, hint) in [
+            (
+                Error::ArtifactInvalid,
+                "provider installation qualification is invalid",
+                Some("use an already reviewed official artifact"),
+            ),
+            (
+                Error::NamespaceUnverified,
+                "profile subscription namespace cannot be qualified",
+                Some("review the supported backend and native policy conditions"),
+            ),
+            (
+                Error::AuthBusy,
+                "profile authentication operation is busy",
+                Some("quiesce the selected profile before retrying"),
+            ),
+            (
+                Error::AdmissionChanged,
+                "launch context changed during admission",
+                Some("retry after metadata changes have finished"),
+            ),
+            (
+                Error::ConfirmationRequired,
+                "authentication operation requires confirmation",
+                Some("use a terminal or explicitly pass --yes"),
+            ),
+            (
+                Error::ConfirmationDeclined,
+                "authentication operation cancelled",
+                None,
+            ),
+        ] {
+            assert_eq!(error.to_string(), message);
+            assert_eq!(error.hint().as_deref(), hint);
+        }
+    }
+    #[test]
     fn fixed_launch_errors_do_not_echo_supplied_values() {
         let cases = [
             (
                 Error::QualificationPending,
-                "provider launch is disabled pending stage 3 qualification",
-                Some("binding and profile metadata commands remain available"),
+                "provider operation is disabled for this combination",
+                Some("review the documented qualification matrix"),
             ),
             (
                 Error::AlreadyBound {

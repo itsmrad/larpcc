@@ -5,6 +5,9 @@ fn ordinary_run_refuses_before_root_or_environment_inspection() {
     let f = Fixture::new();
     for args in [
         vec!["cc", "run", "missing"],
+        vec!["cc", "login", "missing"],
+        vec!["cc", "status", "missing"],
+        vec!["cc", "logout", "missing", "--yes"],
         vec!["cc", "run", "work", "--", "--config", "synthetic"],
     ] {
         let output = f

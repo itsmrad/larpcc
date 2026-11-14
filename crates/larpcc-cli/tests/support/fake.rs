@@ -89,12 +89,23 @@ fn run() -> io::Result<u32> {
         record["unix"] = unix::observe()?;
     }
     if let Some(path) = std::env::var_os("LARPCC_FAKE_RECORD") {
+        let mut pending = path.clone();
+        pending.push(".pending");
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(path)?;
+            .open(&pending)?;
+        if mode == "pause-record" {
+            file.write_all(b"{")?;
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            return Err(io::Error::other("synthetic record publication interrupted"));
+        }
         serde_json::to_writer(&mut file, &record)?;
         file.write_all(b"\n")?;
+        drop(file);
+        // Publish complete JSON atomically without replacing another child's marker.
+        std::fs::hard_link(&pending, &path)?;
+        std::fs::remove_file(pending)?;
     }
     match mode.as_str() {
         "exit" => (),
@@ -170,6 +181,11 @@ fn run() -> io::Result<u32> {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
+        }
+        "binary-output" => {
+            let buffer = [0, 255, 128, 27].repeat(32768);
+            io::stdout().write_all(&buffer)?;
+            io::stderr().write_all(&buffer)?;
         }
         "output" => {
             let buffer = vec![b'x'; 8192];

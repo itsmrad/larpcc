@@ -77,3 +77,13 @@ pub(crate) fn acquire_replaceable<T>(
 pub(crate) fn inspect_replaceable(path: &Path) -> Result<Option<CheckedObject>, AcquisitionError> {
     inspect(path, ObjectKind::File).map_err(Into::into)
 }
+
+#[cfg(windows)]
+pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
+    windows::open_artifact_checked(path, root)
+}
+
+#[cfg(windows)]
+pub(crate) fn open_auth_lock(path: &Path) -> Result<CheckedObject, Error> {
+    windows::open_auth_lock_checked(path)
+}

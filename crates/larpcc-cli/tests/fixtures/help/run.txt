@@ -8,3 +8,5 @@ Arguments:
 
 Options:
   -h, --help  Print help
+
+Profiles select native state, not a verified account, model or endpoint. Native project, configuration and administrator policy still apply. Provider restrictions remain possible.

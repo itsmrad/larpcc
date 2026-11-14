@@ -1,5 +1,6 @@
 mod render;
 
+use crate::launch::admission::{self, Operation};
 use crate::registry::{Error, ProfileName, Provider, Registry};
 use clap::{Parser, Subcommand, builder::PossibleValuesParser};
 use std::{
@@ -46,11 +47,25 @@ enum CcAction {
         #[command(subcommand)]
         command: ProviderAction,
     },
-    #[command(about = "Launch a profile (qualification pending; disabled in this build)")]
+    #[command(about = "Launch a profile (qualification pending; disabled in this build)", after_help = admission::ROUTING_NOTICE)]
     Run {
         name: ProfileName,
         #[arg(last = true)]
         args: Vec<std::ffi::OsString>,
+    },
+    #[command(about = "Authenticate a profile", after_help = admission::AUTH_HELP)]
+    Login {
+        name: ProfileName,
+        #[arg(long)]
+        yes: bool,
+    },
+    #[command(about = "Show native authentication status", after_help = admission::AUTH_HELP)]
+    Status { name: ProfileName },
+    #[command(about = "Log out a profile", after_help = admission::AUTH_HELP)]
+    Logout {
+        name: ProfileName,
+        #[arg(long)]
+        yes: bool,
     },
     #[command(
         about = "Manage profile records (no login, no provider launch)",
@@ -131,7 +146,10 @@ pub fn run() -> ExitCode {
     };
     let RootAction::Cc { command } = cli.command;
     let command = match command {
-        CcAction::Run { .. } => return operational_error(Error::QualificationPending),
+        CcAction::Run { name, args } => return operation(Operation::Run, name, args, false),
+        CcAction::Login { name, yes } => return operation(Operation::Login, name, vec![], yes),
+        CcAction::Status { name } => return operation(Operation::Status, name, vec![], true),
+        CcAction::Logout { name, yes } => return operation(Operation::Logout, name, vec![], yes),
         CcAction::Provider { command } => {
             return match Registry::locate().and_then(|r| match command {
                 ProviderAction::List => r.bindings().map(render::bindings),
@@ -245,6 +263,22 @@ fn write_output(output: &[u8], stdout: &mut impl Write, stderr: &mut impl Write)
             }
             ExitCode::FAILURE
         }
+    }
+}
+
+fn operation(
+    op: Operation,
+    name: ProfileName,
+    args: Vec<std::ffi::OsString>,
+    yes: bool,
+) -> ExitCode {
+    match admission::invoke(op, &name, args, yes, admission::ROWS) {
+        Ok(code) => std::process::exit(code as i32),
+        Err(Error::ConfirmationRequired) => {
+            let _ = operational_error(Error::ConfirmationRequired);
+            ExitCode::from(2)
+        }
+        Err(error) => operational_error(error),
     }
 }
 

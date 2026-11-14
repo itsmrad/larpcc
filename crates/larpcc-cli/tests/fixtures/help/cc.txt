@@ -5,6 +5,9 @@ Usage: larp cc <COMMAND>
 Commands:
   provider  Manage native provider bindings
   run       Launch a profile (qualification pending; disabled in this build)
+  login     Authenticate a profile
+  status    Show native authentication status
+  logout    Log out a profile
   profile   Manage profile records (no login, no provider launch)
 
 Options:

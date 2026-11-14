@@ -1,4 +1,5 @@
 mod cli;
+mod launch;
 mod platform;
 mod provider;
 mod registry;

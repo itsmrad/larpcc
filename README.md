@@ -2,7 +2,7 @@
 
 Larp CC manages named Claude Code and Codex profile records, distinct state directories, and explicit native executable bindings. Names are labels; immutable numeric IDs determine the directories. Renaming preserves both. Forgetting removes metadata and keeps the directory.
 
-**Provider execution is disabled pending stage 3 qualification.** Every ordinary `larp cc run NAME -- ARGS` refuses immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. Binding a path does not qualify a provider, version, installation or account-isolation claim.
+**Provider execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]`, `status NAME` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. Binding a path does not qualify a provider, version, installation or account-isolation claim.
 
 Requires Rust 1.89 or newer:
 
@@ -59,6 +59,6 @@ cargo test --bin larpcc-synthetic --features synthetic-launch --target-dir /abso
 cargo +1.89 test --workspace --locked
 ```
 
-The `synthetic-launch` feature builds separate test-only driver/fake binaries. Their provisional grammar and environment fixtures do not describe admitted vendor interfaces. Unix synthetic execution uses direct `execve`, preserves native argument bytes and inherited terminal/process-group behavior, and has no shell fallback or resident supervisor. Synthetic helpers are excluded by the explicit ordinary build/install commands above and are not release artifacts. No real-provider, authentication, credential-store or model operation is part of these checks.
+The `synthetic-launch` feature builds separate test-only driver/fake binaries. The legacy transport grammar and invented operation rows do not describe admitted vendor interfaces. Invented rows exercise the same bounded executable SHA-256, snapshot revalidation and metadata admission as ordinary dispatch. Unix run uses direct `execve`; synthetic authentication/status use a short-lived foreground wrapper retaining a per-ID cooperative lock until the direct child is reaped. Registry locks do not span confirmation or child lifetime. These checks do not exclude direct native clients or surviving descendants. Parent SIGKILL or an OS crash may release the cooperative lock while a child survives; human quiescence is required after abnormal exit. No shell fallback or background manager is used. Synthetic helpers are excluded by the explicit ordinary build/install commands above and are not release artifacts. Only fake operations are exercised; no installed provider, credential store or account is accessed. Native operation rows remain empty.
 
 Larp CC is independent and is not affiliated with Anthropic or OpenAI.
