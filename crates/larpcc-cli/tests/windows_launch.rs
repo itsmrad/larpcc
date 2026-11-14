@@ -434,3 +434,289 @@ fn l07_bounded_grandchild_inherits_exact_selected_home() {
     }
     assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), before);
 }
+
+#[test]
+fn stage3_checked_fake_digest_enters_and_wrong_digest_refuses() {
+    use sha2::{Digest, Sha256};
+    let f = setup();
+    let fake = f.temp.path().join("synthetic-native.exe");
+    let digest = format!("{:x}", Sha256::digest(fs::read(&fake).unwrap()));
+    let registry = fs::read(f.root.join("registry.json")).unwrap();
+    let wrong_digest = "0".repeat(64);
+    for (index, expected) in [(0, 0), (1, 1)] {
+        let marker = f.temp.path().join(format!("stage3-entry-{index}.json"));
+        let supplied = if index == 0 {
+            digest.as_str()
+        } else {
+            wrong_digest.as_str()
+        };
+        let mut command = f.command_for(
+            Path::new(env!("CARGO_BIN_EXE_larpcc-synthetic")),
+            &[
+                "stage3",
+                "run",
+                "claudea",
+                "--provider",
+                "claude",
+                "--sha256",
+                supplied,
+            ],
+        );
+        command
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .env("LARPCC_FAKE_RECORD", &marker)
+            .creation_flags(CREATE_NO_WINDOW);
+        let output = capture(command).unwrap();
+        assert_eq!(output.status.code(), Some(expected), "{}", stderr(&output));
+        assert!(output.stdout.is_empty());
+        if index == 0 {
+            assert!(
+                marker.is_file(),
+                "real checked hash path must enter controlled native fake"
+            );
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+            assert_eq!(value["args"].as_array().unwrap().len(), 1);
+        } else {
+            assert!(!marker.exists());
+            assert!(stderr(&output).contains("provider installation qualification is invalid"));
+        }
+        assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), registry);
+        assert!(!f.root.join("auth-locks").exists());
+    }
+}
+
+fn stage3_command(
+    f: &Fixture,
+    digest: &str,
+    provider: &str,
+    name: &str,
+    op: &str,
+    yes: bool,
+) -> Command {
+    let mut cmd = f.command_for(
+        Path::new(env!("CARGO_BIN_EXE_larpcc-synthetic")),
+        &[
+            "stage3",
+            op,
+            name,
+            "--provider",
+            provider,
+            "--sha256",
+            digest,
+        ],
+    );
+    if yes {
+        cmd.arg("--yes");
+    }
+    cmd.env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME")
+        .creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+fn stage3_digest(f: &Fixture) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "{:x}",
+        Sha256::digest(fs::read(f.temp.path().join("synthetic-native.exe")).unwrap())
+    )
+}
+fn stage3_notices(auth: bool) -> Vec<u8> {
+    let mut text = b"Profiles select native state, not a verified account, model or endpoint. Native project, configuration and administrator policy still apply. Provider restrictions remain possible.\n".to_vec();
+    if auth {
+        text.extend_from_slice(b"Quiesce relevant sessions before authentication changes. Refresh and logout may affect grants and integrations.\n");
+    }
+    text
+}
+fn stage3_identity(path: &Path, directory: bool) -> (u64, [u8; 16]) {
+    use std::{
+        mem::{size_of, zeroed},
+        os::windows::fs::OpenOptionsExt,
+    };
+    use windows_sys::Win32::Storage::FileSystem::*;
+    private(path, directory);
+    let file = fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .unwrap();
+    // SAFETY: plain native outputs, live fixture handle and exact writable buffer sizes.
+    let (mut id, mut info): (FILE_ID_INFO, FILE_STANDARD_INFO) = unsafe { (zeroed(), zeroed()) };
+    assert_ne!(
+        unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileIdInfo,
+                (&mut id as *mut FILE_ID_INFO).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        },
+        0
+    );
+    if !directory {
+        // SAFETY: live fixture handle and correctly sized native output.
+        assert_ne!(
+            unsafe {
+                GetFileInformationByHandleEx(
+                    file.as_raw_handle(),
+                    FileStandardInfo,
+                    (&mut info as *mut FILE_STANDARD_INFO).cast(),
+                    size_of::<FILE_STANDARD_INFO>() as u32,
+                )
+            },
+            0
+        );
+        assert_eq!(info.NumberOfLinks, 1);
+        assert_eq!(info.EndOfFile, 0);
+    }
+    (id.VolumeSerialNumber, id.FileId.Identifier)
+}
+#[test]
+fn stage3_all_operations_checked_hash_binary_io_u32_and_stable_private_locks() {
+    let f = setup();
+    let digest = stage3_digest(&f);
+    let registry = fs::read(f.root.join("registry.json")).unwrap();
+    let bytes = [0, 255, 128, 27].repeat(32768);
+    let mut directory_id = None;
+    for (provider, name, home_var, id) in [
+        ("claude", "claudea", "CLAUDE_CONFIG_DIR", "1"),
+        ("codex", "codexa", "CODEX_HOME", "3"),
+    ] {
+        let home = f.root.join("profiles").join(id);
+        let sentinel = home.join("invented-home-sentinel");
+        create_file(&sentinel, b"synthetic home unchanged");
+        let mut lock_id = None;
+        for op in ["run", "login", "status", "logout"] {
+            for mode in ["exit", "binary-output"] {
+                let record = f.temp.path().join(format!("stage3-{provider}-{op}-{mode}"));
+                let mut cmd = stage3_command(&f, &digest, provider, name, op, true);
+                cmd.env("LARPCC_FAKE_MODE", mode)
+                    .env("LARPCC_FAKE_EXIT", "305419896")
+                    .env("LARPCC_FAKE_RECORD", &record)
+                    .current_dir(f.temp.path());
+                let out = capture(cmd).unwrap();
+                assert_eq!(
+                    out.status.code().unwrap() as u32,
+                    0x12345678,
+                    "{}",
+                    stderr(&out)
+                );
+                let mut expected = stage3_notices(op != "run");
+                if mode == "binary-output" {
+                    expected.extend_from_slice(&bytes);
+                }
+                assert_eq!(out.stderr, expected);
+                assert_eq!(
+                    out.stdout,
+                    if mode == "binary-output" {
+                        bytes.as_slice()
+                    } else {
+                        b""
+                    }
+                );
+                let value = process_record(&record, Instant::now() + Duration::from_secs(3));
+                let args = value["args"].as_array().unwrap();
+                assert_eq!(args.len(), if op == "run" { 1 } else { 2 });
+                if op != "run" {
+                    assert_eq!(args[1], hex(OsStr::new(&format!("invented-{op}"))));
+                }
+                assert_eq!(value[home_var], hex(home.as_os_str()));
+                assert_eq!(value["cwd"], hex(f.temp.path().as_os_str()));
+                if op != "run" {
+                    let actual = stage3_identity(
+                        &f.root.join("auth-locks").join(format!("{id}.lock")),
+                        false,
+                    );
+                    assert_eq!(*lock_id.get_or_insert(actual), actual);
+                    let actual_dir = stage3_identity(&f.root.join("auth-locks"), true);
+                    assert_eq!(*directory_id.get_or_insert(actual_dir), actual_dir);
+                } else {
+                    assert!(
+                        !f.root
+                            .join("auth-locks")
+                            .join(format!("{id}.lock"))
+                            .exists()
+                    );
+                }
+                assert_eq!(fs::read(&sentinel).unwrap(), b"synthetic home unchanged");
+                assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), registry);
+            }
+        }
+    }
+}
+#[test]
+fn stage3_auth_guard_contention_release_distinct_id_and_confirmation_refusal() {
+    let f = setup();
+    let digest = stage3_digest(&f);
+    let registry = fs::read(f.root.join("registry.json")).unwrap();
+    for op in ["login", "logout"] {
+        let record = f.temp.path().join(format!("no-confirmation-{op}"));
+        let mut cmd = stage3_command(&f, &digest, "claude", "claudea", op, false);
+        cmd.env("LARPCC_FAKE_RECORD", &record);
+        let out = capture(cmd).unwrap();
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+        assert_eq!(
+            stderr(&out),
+            "error: authentication operation requires confirmation\nhint: use a terminal or explicitly pass --yes\n"
+        );
+        assert!(!record.exists());
+    }
+    let lock = f.root.join("auth-locks/1.lock");
+    let identity = stage3_identity(&lock, false);
+    let record = f.temp.path().join("held-auth");
+    let mut cmd = stage3_command(&f, &digest, "claude", "claudea", "status", false);
+    cmd.env("LARPCC_FAKE_MODE", "echo-io")
+        .env("LARPCC_FAKE_RECORD", &record)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    // A retained real Child handle authorizes bounded cleanup even if the rendezvous fails.
+    let wrapper = Grandchild(child.as_handle().try_clone_to_owned().unwrap());
+    let entered = process_record(&record, Instant::now() + Duration::from_secs(3));
+    assert_ne!(entered["pid"].as_u64(), Some(u64::from(child.id())));
+    let fake = Grandchild::open(&entered);
+    let rejected = f.temp.path().join("busy-must-not-enter");
+    let mut contender = stage3_command(&f, &digest, "claude", "claudea", "logout", true);
+    contender.env("LARPCC_FAKE_RECORD", &rejected);
+    let out = capture(contender).unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    assert_eq!(
+        stderr(&out),
+        "error: profile authentication operation is busy\nhint: quiesce the selected profile before retrying\n"
+    );
+    assert!(!rejected.exists());
+    let other = capture(stage3_command(
+        &f, &digest, "claude", "claudeb", "status", false,
+    ))
+    .unwrap();
+    assert!(other.status.success(), "{}", stderr(&other));
+    assert!(other.stdout.is_empty());
+    assert_eq!(other.stderr, stage3_notices(true));
+    assert_eq!(stage3_identity(&lock, false), identity);
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"controlled\0\xff\n")
+        .unwrap();
+    // Closing stdin releases the known fake; wait_output reaps the wrapper within the existing bound.
+    let out = wait_output(child).unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(out.stdout, b"controlled\0\xff\n");
+    assert_eq!(out.stderr, stage3_notices(true));
+    assert_ne!(fake.status().unwrap(), 259);
+    assert_ne!(wrapper.status().unwrap(), 259);
+    let next = capture(stage3_command(
+        &f, &digest, "claude", "claudea", "login", true,
+    ))
+    .unwrap();
+    assert!(next.status.success(), "{}", stderr(&next));
+    assert_eq!(next.stderr, stage3_notices(true));
+    assert!(next.stdout.is_empty());
+    assert_eq!(stage3_identity(&lock, false), identity);
+    assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), registry);
+}

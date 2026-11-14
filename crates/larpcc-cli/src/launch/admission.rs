@@ -440,7 +440,7 @@ fn revalidate_guard(root: &Path, id: ProfileId, guard: &AuthGuard) -> Result<(),
     }
     Ok(())
 }
-pub(crate) fn dispatch(a: Admitted<'_>, guard: Option<AuthGuard>) -> Result<u32, Error> {
+pub(crate) fn dispatch(a: Admitted<'_>, _guard: Option<AuthGuard>) -> Result<u32, Error> {
     // Admitted and AuthGuard own their path handles until the explicit drops after reap.
     eprintln!("{ROUTING_NOTICE}");
     if a.row.operation != Operation::Run {
@@ -457,7 +457,7 @@ pub(crate) fn dispatch(a: Admitted<'_>, guard: Option<AuthGuard>) -> Result<u32,
             );
         }
         let exit = platform::auth_spawn_wait(&a.plan)?;
-        drop(guard);
+        drop(_guard);
         drop(a);
         match exit {
             platform::AuthExit::Code(code) => Ok(code),
@@ -466,7 +466,11 @@ pub(crate) fn dispatch(a: Admitted<'_>, guard: Option<AuthGuard>) -> Result<u32,
     }
     #[cfg(windows)]
     {
-        super::windows::spawn_wait(&a.plan)
+        if a.row.operation == Operation::Run {
+            super::windows::spawn_wait(&a.plan)
+        } else {
+            super::windows::auth_spawn_wait(&a.plan)
+        }
     }
 }
 
@@ -658,6 +662,45 @@ mod tests {
             ),
             Err(Error::NamespaceUnverified)
         ));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn native_socket_is_refused_without_connecting_or_treating_it_as_absent() {
+        use std::os::unix::net::UnixListener;
+        let (_temp, registry, mut row) = fixture();
+        let socket_path = registry.root().join("profiles/1/endpoint");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        for kind in [ObjectKind::File, ObjectKind::Directory] {
+            row.paths = match kind {
+                ObjectKind::File => &[NativePath {
+                    relative: "endpoint",
+                    kind: ObjectKind::File,
+                    may_be_absent: true,
+                }],
+                ObjectKind::Directory => &[NativePath {
+                    relative: "endpoint",
+                    kind: ObjectKind::Directory,
+                    may_be_absent: true,
+                }],
+            };
+            assert!(matches!(
+                admit(
+                    &registry,
+                    Operation::Run,
+                    &"work".parse().unwrap(),
+                    vec![],
+                    std::slice::from_ref(&row),
+                    &[]
+                ),
+                Err(Error::NamespaceUnverified)
+            ));
+        }
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(socket_path.exists());
     }
     #[cfg(unix)]
     #[test]

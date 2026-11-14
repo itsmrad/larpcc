@@ -78,14 +78,12 @@ pub(crate) fn inspect_replaceable(path: &Path) -> Result<Option<CheckedObject>, 
     inspect(path, ObjectKind::File).map_err(Into::into)
 }
 
-// Windows implementation belongs to the coordinated W slice; closed until supplied.
 #[cfg(windows)]
-pub(crate) fn open_artifact(_path: &Path, _root: &Path) -> Result<(File, FileIdentity), Error> {
-    Err(Error::ArtifactInvalid)
+pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
+    windows::open_artifact_checked(path, root)
 }
 
 #[cfg(windows)]
-pub(crate) fn open_auth_lock(_path: &Path) -> Result<CheckedObject, Error> {
-    // Coordinated W implementation reopens and validates an existing empty lock.
-    Err(Error::NamespaceUnverified)
+pub(crate) fn open_auth_lock(path: &Path) -> Result<CheckedObject, Error> {
+    windows::open_auth_lock_checked(path)
 }

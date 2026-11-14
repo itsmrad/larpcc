@@ -1,4 +1,5 @@
 [package]
+exclude = ["tests/**"]
 name = "larpcc-cli"
 version.workspace = true
 edition.workspace = true

@@ -54,6 +54,12 @@ jobs:
           if ($text -notmatch 'TokenIsElevated\s*[:=]\s*(true|false)') { throw 'missing native TokenIsElevated boolean' }
           if ($Matches[1] -eq 'true') { Write-Output 'Elevated result only; non-elevated qualification is still required.' }
       - run: cargo +stable build --release --bin larp --locked
+      - if: runner.os == 'Linux'
+        name: Verify source archive and packaged all-features install closure
+        run: |
+          cargo +stable package --locked --offline
+          cargo +stable install --path "$CARGO_TARGET_DIR/package/larpcc-cli-0.1.0" --root "$LARPCC_TEST_PARENT/package-install" --all-features --locked --offline
+          python crates/larpcc-cli/tests/support/package_closure.py
       - run: cargo +stable test --test gate --all-features --locked
       - run: cargo +stable clippy --workspace --all-targets --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked -- -D warnings
       - run: cargo +stable test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
@@ -68,6 +74,23 @@ jobs:
           foreach ($fixtureProfile in @('claudea', 'codexb')) {
             if (-not $text.Contains("L07 $fixtureProfile process timing:") -or -not $text.Contains("L07 $fixtureProfile output collected_ms=")) { throw "missing native grandchild timing for $fixtureProfile" }
           }
+
+      - if: runner.os == 'Windows'
+        name: Checkout exact vulnerable J2 for isolated negative control
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: c2f42db51929f48d7b7a925d763b3189640acb51
+          path: .auth-cleanup-before
+          persist-credentials: false
+      - if: runner.os == 'Windows'
+        name: Prove auth guard regression fails on vulnerable J2
+        working-directory: .auth-cleanup-before
+        env:
+          CARGO_TARGET_DIR: ${{ env.LARPCC_TEST_PARENT }}/auth-cleanup-before-target
+        run: '& "$env:GITHUB_WORKSPACE/crates/larpcc-cli/tests/support/windows_auth_cleanup.ps1" -Phase before'
+      - if: runner.os == 'Windows'
+        name: Prove auth and Run lifecycle regressions pass on PR head
+        run: '& ./crates/larpcc-cli/tests/support/windows_auth_cleanup.ps1 -Phase after'
 
   msrv:
     timeout-minutes: 20
