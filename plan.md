@@ -1,6 +1,6 @@
 # Larp CC plan
 
-Baseline: `14e299f` (Cargo workspace, placeholder `larp` binary). Plan adopted 2026-11-11 from the master draft. The section "Changes from the master draft" lists every material edit. Detailed stage contracts live in `docs/stages/`. Stage 1: [`docs/stages/01-profiles.md`](docs/stages/01-profiles.md). Stage 2: [docs/stages/02-native-launch.md](docs/stages/02-native-launch.md).
+Baseline: `14e299f` (Cargo workspace, placeholder `larp` binary). Plan adopted 2026-11-11 from the master draft. The section "Changes from the master draft" lists every material edit. Detailed stage contracts live in `docs/stages/`. Stage 1: [`docs/stages/01-profiles.md`](docs/stages/01-profiles.md). Stage 2: [docs/stages/02-native-launch.md](docs/stages/02-native-launch.md). Stage 3: [docs/stages/03-account-qualification.md](docs/stages/03-account-qualification.md).
 
 ## Product boundary
 
@@ -62,7 +62,7 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
   - The provider is an enum.
   - The state directory is `<data root>/profiles/<id>`. Renaming never moves it.
 - **Data root.** `LARPCC_HOME`, otherwise the OS application-data directory. It is independent of provider homes.
-- **No reads of provider state.** Larp never reads provider auth, config or session content. Provider output stays on the terminal and is never logged by Larp.
+- **No reads of provider state.** Larp never reads provider auth, config or session content. Provider output stays on the terminal and is never logged by Larp. Stage 3 permits only the explicit bounded executable-byte and reviewed fixed-path metadata amendments in its contract.
 
 ## Stage sequence
 
@@ -107,22 +107,13 @@ Each claim below carries its evidence level. Source inspection is not runtime pr
 
 ## Stage 3 — Native authentication and account-safety qualification
 
-**Prerequisite:** stage-2 engineering gates. Before enabling real run or auth, freeze exact provider/version/interface/backend/OS combinations, installation compatibility, documented argument/environment grammar and native command table. Unknown/changed combinations remain disabled; a permanent qualified flag on a bound path is insufficient. No version probe or auth operation is implied by stage-2 acceptance.
+**Contract:** [docs/stages/03-account-qualification.md](docs/stages/03-account-qualification.md). Reconciled against merged M3 `022fb05278c633e849a5d7f44a5c67855ebe1cfc`, whose tree equals accepted Stage 2 candidate `433a6dd`; retained final QA accepted 47 IDs and independent OCR delegate coverage accepted 54/54 (four fresh, 50 inherited). Remaining native qualification limits are preserved in the contract.
 
-**Deliverable:**
-- **Launch enablement.** Use the synthetic-tested engine only after the selected combination's authorized qualification gates pass. Start with narrow reviewed command/option shapes and refuse all unreviewed config/profile/settings/remote/auth overrides, including Codex --profile/-p and all -c/--config forms; do not implement a partial TOML parser. Preserve unrelated environment, with version-specific conflict names/prefix exceptions explicitly reviewed. CLI filtering does not guarantee exclusion of native interactive auth, MCP OAuth, enterprise or project policy. Per-home Codex TUI discovery is supported by pinned static source, but same-home daemon reuse retains start-time environment; aliases/symlinks/remote and non-TUI/Windows behavior need qualification. Candidate foreground/--no-daemon policy requires exact version/interface/backend/OS evidence; no unknown-version injection. Resolve sequential and concurrent reuse before enablement, with safe later-specified home-identity/live-daemon/leak checks. No credential-store reads.
-- **Command mapping.** `login/status/logout` use the same LaunchPlan as `run`. Expected mapping: Claude `auth login|status|logout`; Codex `login`, `login status`, `logout`. Verify the mapping per supported version. Unknown or changed versions get an explicit unverified refusal before provider execution; native flags are never guessed. Refresh happens only through the client's supported lifecycle.
-- **Confirmation.** Auth-changing commands need explicit selection and interactive confirmation. They fail closed in non-interactive use unless a deliberate confirmation flag is given. No logout-all.
-- **What Larp does not record.** No email, no tokens, no background status polling.
-- **Live sessions.** Cooperative auth-operation locks. Unix `exec` cannot exclude independently running official clients, so users must quiesce sessions first. Larp does not claim otherwise.
+**Engineering:** planning technical review and lead merge precede already-authorized credential-free implementation. Keep registry v2 binding and an empty compiled artifact-operation table; fresh bounded checked-handle executable SHA-256 and coherent revalidation replace any enrollment idea. No qualify command, sidecar or new persistence schema. Ordinary run/login/status/logout remain closed before managed IO with zero/unmatched operation candidates. Nonpackaged invented-row tests exercise the same admission/dispatch machinery. First interactive run row may admit zero forwarded arguments only; exact native argv/env/store/path/backend inputs remain blocked row data until reviewed. Normal repository/native configuration use remains required.
 
-**Tests:**
-- **Fake clients:** command mapping, home and binary equivalence, cancellation and denial, native errors, no credential paths opened, conflict precedence, no automatic login.
-- **Human-run matrix (separately authorized):** two disposable identities; both login orders; restart; concurrent sessions; refresh A while B stays valid; logout A while B stays valid; keychain denial and fallback; ordinary global commands unchanged. Repeat per advertised OS/backend/version. No model turn without separate authorization. Store only redacted pass/fail/version evidence. Identity is checked via native status, never by reading credentials. Keyless Console is excluded. An unknown result blocks the support claim.
+**Native enablement:** separate exact artifact/operation/interface/backend/OS sheets, official byte/source linkage and bounded explicitly authorized B/C results. First eligible official release on selected OS is TBD; no installed/latest release assumption. Native output remains human terminal pass-through for all operations; no account-derived verified label, credential reads, capture or parsing. Quiescence, per-immutable-ID cooperative auth/status locks, exact confirmations and native lifecycle proof are required; Unix run stays exec. Unknown guard/store controls keep affected rows closed. No fallback, daemon manager, endpoint sandbox or account rotation.
 
-**Ownership:** C-auth, C-policy, an independent C-qualification tester.
-
-**Merge/enablement gate:** synthetic evidence may complete engineering code while real launches remain disabled. Authorized exact-version/interface/backend/OS native qualification separately controls enablement and release claims; pending or unknown results never infer a pass. Real auth/account operations retain their separate explicit authorization requirements. The full advertised two-account matrix still gates release qualification.
+**Ownership/gates:** one core writer owns shared code/manifests/CI and validated seed; optional Windows writer owns Windows files/tests only from exact seed SHA. Core arranges dependent-target CI before parallel work. Independent final-head A01–A08 QA and per-file OCR delegate review precede lead merge; lead checks accepted/merged-tree equality afterwards. Static evidence can overlap engineering. No management-only sub-orchestrator. Both providers/native Windows remain MVP goals; empty-table engineering completion is not enabled account support. Real native/version/account operations require concrete filled approvals; this plan authorizes none. README remains done facts only.
 
 ## Stage 4 — Recognizable aliases and owned cleanup
 
