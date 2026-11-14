@@ -275,7 +275,7 @@ fn operation(
     match admission::invoke(op, &name, args, yes, admission::ROWS) {
         Ok(code) => std::process::exit(code as i32),
         Err(Error::ConfirmationRequired) => {
-            operational_error(Error::ConfirmationRequired);
+            let _ = operational_error(Error::ConfirmationRequired);
             ExitCode::from(2)
         }
         Err(error) => operational_error(error),
