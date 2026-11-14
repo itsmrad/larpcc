@@ -665,6 +665,45 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn native_socket_is_refused_without_connecting_or_treating_it_as_absent() {
+        use std::os::unix::net::UnixListener;
+        let (_temp, registry, mut row) = fixture();
+        let socket_path = registry.root().join("profiles/1/endpoint");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        for kind in [ObjectKind::File, ObjectKind::Directory] {
+            row.paths = match kind {
+                ObjectKind::File => &[NativePath {
+                    relative: "endpoint",
+                    kind: ObjectKind::File,
+                    may_be_absent: true,
+                }],
+                ObjectKind::Directory => &[NativePath {
+                    relative: "endpoint",
+                    kind: ObjectKind::Directory,
+                    may_be_absent: true,
+                }],
+            };
+            assert!(matches!(
+                admit(
+                    &registry,
+                    Operation::Run,
+                    &"work".parse().unwrap(),
+                    vec![],
+                    std::slice::from_ref(&row),
+                    &[]
+                ),
+                Err(Error::NamespaceUnverified)
+            ));
+        }
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(socket_path.exists());
+    }
+    #[cfg(unix)]
+    #[test]
     fn unrelated_rows_close_before_selected_home_and_artifact_access() {
         use std::os::unix::fs::symlink;
         let (temp, registry, mut row) = fixture();
