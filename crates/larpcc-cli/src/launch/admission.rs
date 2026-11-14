@@ -440,7 +440,7 @@ fn revalidate_guard(root: &Path, id: ProfileId, guard: &AuthGuard) -> Result<(),
     }
     Ok(())
 }
-pub(crate) fn dispatch(a: Admitted<'_>, guard: Option<AuthGuard>) -> Result<u32, Error> {
+pub(crate) fn dispatch(a: Admitted<'_>, _guard: Option<AuthGuard>) -> Result<u32, Error> {
     // Admitted and AuthGuard own their path handles until the explicit drops after reap.
     eprintln!("{ROUTING_NOTICE}");
     if a.row.operation != Operation::Run {
@@ -457,7 +457,7 @@ pub(crate) fn dispatch(a: Admitted<'_>, guard: Option<AuthGuard>) -> Result<u32,
             );
         }
         let exit = platform::auth_spawn_wait(&a.plan)?;
-        drop(guard);
+        drop(_guard);
         drop(a);
         match exit {
             platform::AuthExit::Code(code) => Ok(code),
