@@ -87,6 +87,8 @@ Digest equality discriminates reviewed bytes; it does not prove official provena
 
 There are **zero enabled rows and zero native path/env/argv inventories** at freeze, for either provider or any OS. This is a concrete closed data contract, not permission for developers to fill gaps by inference. Parallel Codex/Claude evidence artifacts, when routed by the lead, are inputs to later reviewed row amendments; their absence does not delay closed-table engineering or establish facts.
 
+Received Claude static handover (2026-11-14): public prospective 2.1.325 is not an installed/eligible artifact. It reports official multiple-config subscription support excluding keyless Console, and pinned release notes involving status refresh/locking; status therefore remains an auth operation under §6. Exact bootstrap/refresh/logout/global stores and locks, installed bytes/provenance and native behavior remain unknown row inputs. All four Claude rows stay closed; this inherited static evidence supplies no runtime proof or new path-read authority.
+
 For each operation, the row amendment must fill this exact finite inventory (no wildcard settings scan):
 
 | Row sheet field | Required content |
