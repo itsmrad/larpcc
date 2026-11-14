@@ -6,21 +6,23 @@ import signal
 import subprocess
 import sys
 
-driver, fake, base = sys.argv[1:]
+driver, fake, base, *stage3 = sys.argv[1:]
 
 def inherited_signals():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
     signal.pthread_sigmask(signal.SIG_BLOCK, [signal.SIGTERM])
 
 records = []
-for suffix, args in [("direct", [fake, "prompt"]), ("launch", [driver, "cc", "run", "claudea", "--", "prompt"])]:
+launch = [driver, "stage3", stage3[1], "work", "--provider", "codex", "--sha256", stage3[0], "--yes"] if stage3 else [driver, "cc", "run", "claudea", "--", "prompt"]
+for suffix, args in [("direct", [fake, "prompt"]), ("launch", launch)]:
     path = Path(base + "." + suffix)
     env = dict(os.environ)
     env["LARPCC_FAKE_RECORD"] = str(path)
     child = subprocess.Popen(args, env=env, preexec_fn=inherited_signals, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         out, err = child.communicate(timeout=8)
-        assert child.returncode == 0 and not out and not err, (child.returncode, err)
+        assert child.returncode == 0 and not out and (not err or (stage3 and suffix == "launch" and err.startswith(b"Profiles select native state"))), (child.returncode, err)
     except BaseException:
         child.kill()
         child.communicate(timeout=2)

@@ -171,6 +171,11 @@ fn run() -> io::Result<u32> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
+        "binary-output" => {
+            let buffer = [0, 255, 128, 27].repeat(32768);
+            io::stdout().write_all(&buffer)?;
+            io::stderr().write_all(&buffer)?;
+        }
         "output" => {
             let buffer = vec![b'x'; 8192];
             let mut out = io::stdout().lock();

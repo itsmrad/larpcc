@@ -83,3 +83,9 @@ pub(crate) fn inspect_replaceable(path: &Path) -> Result<Option<CheckedObject>, 
 pub(crate) fn open_artifact(_path: &Path, _root: &Path) -> Result<(File, FileIdentity), Error> {
     Err(Error::ArtifactInvalid)
 }
+
+#[cfg(windows)]
+pub(crate) fn open_auth_lock(_path: &Path) -> Result<CheckedObject, Error> {
+    // Coordinated W implementation reopens and validates an existing empty lock.
+    Err(Error::NamespaceUnverified)
+}

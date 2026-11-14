@@ -183,7 +183,7 @@ pub(super) fn capacity(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
         Ok(bytes)
     }
 }
-pub(super) fn lock(
+fn lock(
     root: &Path,
     timeout: Duration,
 ) -> Result<(File, Vec<crate::platform::CheckedObject>), Error> {
@@ -245,6 +245,33 @@ pub(super) fn lock(
                 }
                 thread::sleep(Duration::from_millis(25));
             }
+            Err(std::fs::TryLockError::Error(e)) => return Err(io("lock", &path, e)),
+        }
+    }
+}
+// Admission may never recreate vanished metadata while rechecking a snapshot.
+pub(super) fn admission_lock(
+    root: &Path,
+) -> Result<(File, Vec<crate::platform::CheckedObject>), Error> {
+    let held = fixed(root)?;
+    let path = root.join("registry.lock");
+    let inspected = crate::platform::inspect(&path, crate::platform::ObjectKind::File)?
+        .ok_or(Error::AdmissionChanged)?;
+    let opened = paths::options()
+        .open(&path)
+        .map_err(|e| io("open", &path, e))?;
+    let checked = crate::platform::verify_opened(opened, &path, crate::platform::ObjectKind::File)?;
+    if checked.identity != inspected.identity {
+        return Err(Error::AdmissionChanged);
+    }
+    let start = Instant::now();
+    loop {
+        match checked.file.try_lock() {
+            Ok(()) => return Ok((checked.file, held)),
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < Duration::from_secs(10) => {
+                thread::sleep(Duration::from_millis(25))
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return Err(Error::AdmissionChanged),
             Err(std::fs::TryLockError::Error(e)) => return Err(io("lock", &path, e)),
         }
     }
