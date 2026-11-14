@@ -9,10 +9,12 @@ fn ordinary_execution_remains_closed_even_with_synthetic_markers() {
         command
             .env("LARPCC_FAKE_MODE", "exit")
             .env("LARPCC_FAKE_EXIT", "0");
-        let output = command.output().unwrap();
+        let output = capture(command).unwrap();
         assert_eq!(output.status.code(), Some(1));
-        assert!(
-            stderr(&output).contains("provider launch is disabled pending stage 3 qualification")
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            stderr(&output),
+            include_str!("fixtures/qualification-pending.txt")
         );
     }
     assert!(!f.root.exists());

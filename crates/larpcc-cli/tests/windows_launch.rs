@@ -434,3 +434,55 @@ fn l07_bounded_grandchild_inherits_exact_selected_home() {
     }
     assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), before);
 }
+
+#[test]
+fn stage3_checked_fake_digest_enters_and_wrong_digest_refuses() {
+    use sha2::{Digest, Sha256};
+    let f = setup();
+    let fake = f.temp.path().join("synthetic-native.exe");
+    let digest = format!("{:x}", Sha256::digest(fs::read(&fake).unwrap()));
+    let registry = fs::read(f.root.join("registry.json")).unwrap();
+    let wrong_digest = "0".repeat(64);
+    for (index, expected) in [(0, 0), (1, 1)] {
+        let marker = f.temp.path().join(format!("stage3-entry-{index}.json"));
+        let supplied = if index == 0 {
+            digest.as_str()
+        } else {
+            wrong_digest.as_str()
+        };
+        let mut command = f.command_for(
+            Path::new(env!("CARGO_BIN_EXE_larpcc-synthetic")),
+            &[
+                "stage3",
+                "run",
+                "claudea",
+                "--provider",
+                "claude",
+                "--sha256",
+                supplied,
+            ],
+        );
+        command
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .env("LARPCC_FAKE_RECORD", &marker)
+            .creation_flags(CREATE_NO_WINDOW);
+        let output = capture(command).unwrap();
+        assert_eq!(output.status.code(), Some(expected), "{}", stderr(&output));
+        assert!(output.stdout.is_empty());
+        if index == 0 {
+            assert!(
+                marker.is_file(),
+                "real checked hash path must enter controlled native fake"
+            );
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+            assert_eq!(value["args"].as_array().unwrap().len(), 1);
+        } else {
+            assert!(!marker.exists());
+            assert!(stderr(&output).contains("provider installation qualification is invalid"));
+        }
+        assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), registry);
+        assert!(!f.root.join("auth-locks").exists());
+    }
+}

@@ -586,6 +586,11 @@ fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> io::Result<bool> {
 }
 
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
+    let (target, checked) = executable_checked(path, root)?;
+    Ok((target, checked.identity))
+}
+
+fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObject), Error> {
     use std::io::Read;
     let _parents = anchor(path)?;
     let file = open(
@@ -679,7 +684,67 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
     {
         return Err(unsafe_path(path, "is Larp CC itself"));
     }
-    Ok((target, checked.identity))
+    Ok((target, checked))
+}
+
+// The caller retains directory anchors while consuming the returned handle.
+pub(crate) fn open_artifact_checked(
+    path: &Path,
+    root: &Path,
+) -> Result<(File, FileIdentity), Error> {
+    use std::io::{Seek, SeekFrom};
+    let (_, mut checked) = executable_checked(path, root)?;
+    single_link_info(&checked.file, path)?;
+    checked
+        .file
+        .seek(SeekFrom::Start(0))
+        .map_err(|source| Error::Io {
+            action: "rewind executable",
+            path: path.into(),
+            source,
+        })?;
+    Ok((checked.file, checked.identity))
+}
+
+fn single_link_info(file: &File, path: &Path) -> Result<FILE_STANDARD_INFO, Error> {
+    // SAFETY: plain output structure, initialized before use by the successful query.
+    let mut info: FILE_STANDARD_INFO = unsafe { zeroed() };
+    // SAFETY: live handle and exact writable output size; metadata query only.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileStandardInfo,
+            (&mut info as *mut FILE_STANDARD_INFO).cast(),
+            size_of::<FILE_STANDARD_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io_path(path, "inspect opened object"));
+    }
+    if info.NumberOfLinks != 1 || info.DeletePending {
+        return Err(unsafe_path(path, "filesystem identity cannot be verified"));
+    }
+    Ok(info)
+}
+
+// Existing locks are verify-only: OPEN_EXISTING, no delete sharing, no contents IO.
+// Core must retain the actual directory anchors throughout the guard lifetime.
+pub(crate) fn open_auth_lock_checked(path: &Path) -> Result<CheckedObject, Error> {
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(unsafe_path(path, "does not exist"));
+    }
+    let file = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    .ok_or_else(|| unsafe_path(path, "does not exist"))?;
+    let checked = verify(file, path, ObjectKind::File, Policy::Managed)?;
+    if single_link_info(&checked.file, path)?.EndOfFile != 0 {
+        return Err(unsafe_path(path, "filesystem identity cannot be verified"));
+    }
+    Ok(checked)
 }
 
 #[cfg(test)]
@@ -690,6 +755,185 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
+    fn assert_noninheriting(file: &File) {
+        let mut flags = 0;
+        // SAFETY: live checked handle and valid flags output.
+        assert_ne!(
+            unsafe { GetHandleInformation(file.as_raw_handle(), &mut flags) },
+            0
+        );
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+    }
+    #[test]
+    fn stage3_artifact_returns_readable_rewound_handle_and_checked_identity() {
+        use sha2::{Digest, Sha256};
+        let temp = fixture();
+        let path = temp.path().join("fake.exe");
+        let bytes = b"MZxxcontrolled fake artifact; never executed";
+        fixture_private::create_file(&path, bytes).unwrap();
+        let expected = inspect(&path, ObjectKind::File).unwrap().unwrap().identity;
+        let (mut file, id) = open_artifact_checked(&path, &temp.path().join("managed")).unwrap();
+        assert_eq!(id, expected);
+        assert_noninheriting(&file);
+        assert_eq!(
+            verify_opened(file.try_clone().unwrap(), &path, ObjectKind::File)
+                .unwrap()
+                .identity,
+            id
+        );
+        let mut hash = Sha256::new();
+        io::copy(&mut file, &mut hash).unwrap();
+        assert_eq!(hash.finalize(), Sha256::digest(bytes));
+        assert!(std::fs::rename(&path, temp.path().join("moved.exe")).is_err());
+        assert!(open_artifact_checked(&path, temp.path()).is_err());
+        drop(file);
+        let alias = temp.path().join("alias.exe");
+        std::fs::hard_link(&path, &alias).unwrap();
+        assert!(open_artifact_checked(&path, &temp.path().join("managed")).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+    #[test]
+    fn stage3_auth_lock_reopen_identity_noninheritance_and_lock_lifetime() {
+        let temp = fixture();
+        let dir = temp.path().join("auth-locks");
+        drop(create_directory(&dir).unwrap());
+        let path = dir.join("1.lock");
+        let expected = create_file(&path).unwrap().identity;
+        let pins = anchor(&path).unwrap();
+        let first = open_auth_lock_checked(&path).unwrap();
+        assert_eq!(first.identity, expected);
+        assert_noninheriting(&first.file);
+        first.file.try_lock().unwrap();
+        let second = open_auth_lock_checked(&path).unwrap();
+        assert_eq!(second.identity, expected);
+        assert!(matches!(
+            second.file.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        assert!(std::fs::rename(&dir, temp.path().join("moved")).is_err());
+        assert!(std::fs::remove_file(&path).is_err());
+        drop(first);
+        second.file.try_lock().unwrap();
+        drop(second);
+        assert_eq!(open_auth_lock_checked(&path).unwrap().identity, expected);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        drop(pins);
+        std::fs::rename(&dir, temp.path().join("moved")).unwrap();
+    }
+    #[test]
+    fn stage3_auth_lock_rejects_contents_hardlink_kind_missing_and_reparse_without_repair() {
+        let temp = fixture();
+        let path = temp.path().join("nonempty.lock");
+        let bytes = b"invented lock contents must remain unchanged";
+        fixture_private::create_file(&path, bytes).unwrap();
+        let before = snapshot_named_security(&path);
+        assert!(open_auth_lock_checked(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(snapshot_named_security(&path), before);
+        let empty = temp.path().join("empty.lock");
+        drop(create_file(&empty).unwrap());
+        let alias = temp.path().join("alias.lock");
+        std::fs::hard_link(&empty, &alias).unwrap();
+        assert!(open_auth_lock_checked(&empty).is_err());
+        assert!(open_auth_lock_checked(&alias).is_err());
+        assert!(open_auth_lock_checked(temp.path()).is_err());
+        let missing = temp.path().join("missing.lock");
+        assert!(open_auth_lock_checked(&missing).is_err());
+        assert!(!missing.exists());
+        let link = temp.path().join("link.lock");
+        std::os::windows::fs::symlink_file(&empty, &link)
+            .expect("native reparse fixture required; no skipped acceptance");
+        assert!(open_auth_lock_checked(&link).is_err());
+        let dir_link = temp.path().join("directory-link");
+        let target = temp.path().join("target");
+        drop(create_directory(&target).unwrap());
+        drop(create_file(&target.join("1.lock")).unwrap());
+        std::os::windows::fs::symlink_dir(&target, &dir_link)
+            .expect("native directory reparse fixture required; no skipped acceptance");
+        assert!(open_auth_lock_checked(&dir_link.join("1.lock")).is_err());
+    }
+    #[test]
+    fn stage3_helpers_refuse_unsafe_ancestry_and_preserve_acl() {
+        let temp = fixture();
+        let user = sid_string(&user_sid(temp.path()).unwrap());
+        let hostile = temp.path().join("hostile");
+        directory_with(&hostile, &format!("D:P(A;;FA;;;{user})(A;;WD;;;WD)"));
+        fixture_private::create_file(&hostile.join("fake.exe"), b"MZxx").unwrap();
+        fixture_private::create_file(&hostile.join("1.lock"), b"").unwrap();
+        let before = snapshot_named_security(&hostile);
+        assert!(
+            open_artifact_checked(&hostile.join("fake.exe"), &temp.path().join("managed")).is_err()
+        );
+        assert!(open_auth_lock_checked(&hostile.join("1.lock")).is_err());
+        assert_eq!(snapshot_named_security(&hostile), before);
+    }
+    #[test]
+    fn stage3_helpers_reject_private_read_denial_and_foreign_acl_without_repair() {
+        let temp = fixture();
+        let user = sid_string(&user_sid(temp.path()).unwrap());
+        for (name, sddl) in [
+            ("denied.exe", format!("D:P(D;;RD;;;{user})(A;;FA;;;{user})")),
+            ("foreign.exe", format!("D:P(A;;FA;;;{user})(A;;FW;;;WD)")),
+        ] {
+            let path = temp.path().join(name);
+            let sd = descriptor(&sddl, &path).unwrap();
+            let sa = SECURITY_ATTRIBUTES {
+                nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: sd.0,
+                bInheritHandle: 0,
+            };
+            let native_name = wide(&path).unwrap();
+            // SAFETY: new synthetic file only; descriptor valid through exclusive creation.
+            let handle = unsafe {
+                CreateFileW(
+                    native_name.as_ptr(),
+                    FILE_WRITE_DATA,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    &sa,
+                    CREATE_NEW,
+                    FILE_FLAG_OPEN_REPARSE_POINT,
+                    null_mut(),
+                )
+            };
+            assert_ne!(handle, INVALID_HANDLE_VALUE);
+            // SAFETY: successful creation transferred ownership of this new handle.
+            let mut file = unsafe { File::from_raw_handle(handle) };
+            file.write_all(b"MZxx").unwrap();
+            drop(file);
+            let before = snapshot_named_security(&path);
+            if name == "denied.exe" {
+                // Prove the tested token really cannot read, even on an elevated runner.
+                assert!(open(&path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE).is_err());
+            }
+            assert!(open_artifact_checked(&path, &temp.path().join("managed")).is_err());
+            assert!(open_auth_lock_checked(&path).is_err());
+            assert_eq!(snapshot_named_security(&path), before);
+        }
+    }
+    #[test]
+    fn stage3_artifact_rejects_wrong_format_kind_extension_and_reparse() {
+        let temp = fixture();
+        let root = temp.path().join("managed");
+        for (name, bytes) in [
+            ("empty.exe", &b""[..]),
+            ("text.exe", &b"#!fake"[..]),
+            ("fake.cmd", &b"MZxx"[..]),
+        ] {
+            let path = temp.path().join(name);
+            fixture_private::create_file(&path, bytes).unwrap();
+            assert!(open_artifact_checked(&path, &root).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        let directory = temp.path().join("directory.exe");
+        drop(create_directory(&directory).unwrap());
+        assert!(open_artifact_checked(&directory, &root).is_err());
+        let target = temp.path().join("target.exe");
+        fixture_private::create_file(&target, b"MZxx").unwrap();
+        let alias = temp.path().join("link.exe");
+        std::os::windows::fs::symlink_file(&target, &alias)
+            .expect("native reparse fixture required; no skipped acceptance");
+        assert!(open_artifact_checked(&alias, &root).is_err());
+    }
     fn acl(aces: &[(u8, u8, u32, &str)]) -> Vec<u8> {
         let path = Path::new(r"C:\synthetic");
         let entries: String = aces
