@@ -687,7 +687,8 @@ fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObjec
     Ok((target, checked))
 }
 
-// The caller retains directory anchors while consuming the returned handle.
+// Ancestor pins protect the validation walk and drop before this File is returned.
+// The returned file denies delete sharing; path-based dispatch still has a final reopen race.
 pub(crate) fn open_artifact_checked(
     path: &Path,
     root: &Path,
@@ -742,6 +743,7 @@ pub(crate) fn open_auth_lock_checked(path: &Path) -> Result<CheckedObject, Error
     .ok_or_else(|| unsafe_path(path, "does not exist"))?;
     let checked = verify(file, path, ObjectKind::File, Policy::Managed)?;
     if single_link_info(&checked.file, path)?.EndOfFile != 0 {
+        // Nonempty coordination files are invalid; retain the frozen safety diagnostic.
         return Err(unsafe_path(path, "filesystem identity cannot be verified"));
     }
     Ok(checked)
@@ -872,7 +874,10 @@ mod tests {
         let temp = fixture();
         let user = sid_string(&user_sid(temp.path()).unwrap());
         for (name, sddl) in [
-            ("denied.exe", format!("D:P(D;;RD;;;{user})(A;;FA;;;{user})")),
+            (
+                "denied.exe",
+                format!("D:P(D;;{FILE_READ_DATA:#x};;;{user})(A;;FA;;;{user})"),
+            ),
             ("foreign.exe", format!("D:P(A;;FA;;;{user})(A;;FW;;;WD)")),
         ] {
             let path = temp.path().join(name);
@@ -902,6 +907,8 @@ mod tests {
             drop(file);
             let before = snapshot_named_security(&path);
             if name == "denied.exe" {
+                // Metadata remains verifiable while this token cannot read file data.
+                assert!(inspect(&path, ObjectKind::File).unwrap().is_some());
                 // Prove the tested token really cannot read, even on an elevated runner.
                 assert!(open(&path, FILE_READ_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE).is_err());
             }
