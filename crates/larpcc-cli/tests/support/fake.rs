@@ -104,6 +104,20 @@ fn run() -> io::Result<u32> {
         "sleep" => std::thread::sleep(std::time::Duration::from_secs(5)),
         "bounded-grandchild" => std::thread::sleep(std::time::Duration::from_secs(3)),
         "grandchild" => {
+            #[cfg(windows)]
+            if let Some(release) = std::env::var_os("LARPCC_FAKE_EXIT_RELEASE") {
+                // Let the test retain our identity-checked handle before we can exit.
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while !std::path::Path::new(&release).exists() {
+                    if std::time::Instant::now() >= end {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "synthetic exit observation handshake",
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
             let mut command = std::process::Command::new(std::env::current_exe()?);
             command
                 .env_clear()

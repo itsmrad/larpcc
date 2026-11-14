@@ -7,7 +7,7 @@ use std::{
     io::{self, Write},
     os::windows::{
         ffi::{OsStrExt, OsStringExt},
-        io::{AsRawHandle, FromRawHandle, OwnedHandle},
+        io::{AsHandle, AsRawHandle, FromRawHandle, OwnedHandle},
         process::CommandExt,
     },
     path::Path,
@@ -221,31 +221,37 @@ impl Grandchild {
         );
         // SAFETY: successful open transfers ownership; all later operations reuse this handle.
         let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+        let (created, _) =
+            Self::times(&handle).expect("child identity query failed; refusing termination");
+        assert_eq!(
+            record["windows_creation_time"].as_u64(),
+            Some(created),
+            "child creation identity mismatch; refusing termination"
+        );
+        Self(handle)
+    }
+    fn times(handle: &OwnedHandle) -> io::Result<(u64, u64)> {
         let mut created = FILETIME {
             dwLowDateTime: 0,
             dwHighDateTime: 0,
         };
         let (mut exited, mut kernel, mut user) = (created, created, created);
-        // SAFETY: live query handle and valid FILETIME output buffers.
-        assert_ne!(
-            unsafe {
-                GetProcessTimes(
-                    handle.as_raw_handle(),
-                    &mut created,
-                    &mut exited,
-                    &mut kernel,
-                    &mut user,
-                )
-            },
-            0,
-            "grandchild identity query failed; refusing termination"
-        );
-        assert_eq!(
-            record["windows_creation_time"].as_u64(),
-            Some((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime)),
-            "grandchild creation identity mismatch; refusing termination"
-        );
-        Self(handle)
+        // SAFETY: retained process handle and valid FILETIME output buffers.
+        if unsafe {
+            GetProcessTimes(
+                handle.as_raw_handle(),
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let ticks =
+            |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        Ok((ticks(created), ticks(exited)))
     }
     fn status(&self) -> io::Result<u32> {
         let mut code = 0;
@@ -280,6 +286,25 @@ impl Drop for Grandchild {
     }
 }
 
+fn process_record(path: &Path, end: Instant) -> serde_json::Value {
+    loop {
+        match fs::read(path) {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(record) => return record,
+                Err(error) if error.is_eof() => (),
+                Err(error) => panic!("invalid synthetic process record: {error}"),
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => panic!("cannot read synthetic process record: {error}"),
+        }
+        assert!(
+            Instant::now() < end,
+            "process record deadline; cleanup identity unavailable"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn l07_bounded_grandchild_inherits_exact_selected_home() {
     let f = setup();
@@ -291,55 +316,100 @@ fn l07_bounded_grandchild_inherits_exact_selected_home() {
         let record = f.temp.path().join(format!("descendant-{name}"));
         let child_record = record.with_extension("grandchild");
         let done = child_record.with_extension("grandchild.done");
+        let release = record.with_extension("release");
         let mut command = driver(&f, name);
         command
             .arg("prompt")
             .env("LARPCC_FAKE_MODE", "grandchild")
-            .env("LARPCC_FAKE_RECORD", &record);
+            .env("LARPCC_FAKE_RECORD", &record)
+            .env("LARPCC_FAKE_EXIT_RELEASE", &release)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let started = Instant::now();
-        let out = capture(command).unwrap();
-        let driver_elapsed = started.elapsed();
-        let grandchild = loop {
-            match fs::read(&child_record) {
-                Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                    Ok(record) => break record,
-                    Err(error) if error.is_eof() => (),
-                    Err(error) => panic!("invalid synthetic grandchild record: {error}"),
-                },
-                Err(error) if error.kind() == io::ErrorKind::NotFound => (),
-                Err(error) => panic!("cannot read synthetic grandchild record: {error}"),
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(2),
-                "grandchild record deadline; cleanup identity unavailable"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        let end = started + Duration::from_secs(10);
+        let launcher = command.spawn().unwrap();
+        // A clone of our direct Child handle already has a known identity; no PID lookup.
+        let launcher_handle = Grandchild(launcher.as_handle().try_clone_to_owned().unwrap());
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let output = wait_output(launcher);
+            let _ = send.send((Instant::now(), output));
+        });
+        let parent = process_record(&record, end);
+        let direct = Grandchild::open(&parent);
+        create_file(&release, b"observe direct exit");
+        let grandchild = process_record(&child_record, end);
         let child = Grandchild::open(&grandchild);
-        let end = started + Duration::from_secs(5);
-        while (!done.exists() || child.status().unwrap() == 259) && Instant::now() < end {
+        while Instant::now() < end {
+            if direct.status().unwrap() != 259
+                && launcher_handle.status().unwrap() != 259
+                && child.status().unwrap() != 259
+            {
+                break;
+            }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(
-            done.exists() && started.elapsed() < Duration::from_secs(5),
-            "bounded grandchild did not complete within five seconds"
+        let observed = started.elapsed();
+        let (direct_created, direct_exited) = Grandchild::times(&direct.0).unwrap();
+        let (launcher_created, launcher_exited) = Grandchild::times(&launcher_handle.0).unwrap();
+        let (child_created, child_exited) = Grandchild::times(&child.0).unwrap();
+        eprintln!(
+            "L07 {name} process timing: direct_status={} launcher_status={} grandchild_status={} startup_to_direct_ms={} direct_lifetime_ms={} launcher_after_direct_ms={:?} grandchild_lifetime_ms={} all_exits_observed_ms={}",
+            direct.status().unwrap(),
+            launcher_handle.status().unwrap(),
+            child.status().unwrap(),
+            direct_created.saturating_sub(launcher_created) / 10_000,
+            direct_exited.saturating_sub(direct_created) / 10_000,
+            launcher_exited
+                .checked_sub(direct_exited)
+                .map(|ticks| ticks / 10_000),
+            child_exited.saturating_sub(child_created) / 10_000,
+            observed.as_millis()
         );
-        assert!(out.status.success(), "{}", stderr(&out));
-        assert!(out.stdout.is_empty());
-        assert!(out.stderr.is_empty());
-        assert!(
-            driver_elapsed < Duration::from_secs(2),
-            "launcher lingered after direct child exit"
+        assert_eq!(
+            direct.status().unwrap(),
+            0,
+            "direct fake must exit successfully"
         );
-        assert_eq!(fs::read(&done).unwrap(), b"synthetic helper completed\n");
-        let read =
-            |path| serde_json::from_slice::<serde_json::Value>(&fs::read(path).unwrap()).unwrap();
-        let parent = read(&record);
+        assert_eq!(
+            launcher_handle.status().unwrap(),
+            0,
+            "launcher must exit successfully"
+        );
         assert_eq!(
             child.status().unwrap(),
             0,
             "grandchild must exit itself successfully"
         );
+        let (collected, out) = receive
+            .recv_timeout(end.saturating_duration_since(Instant::now()))
+            .expect("output collection exceeded ten seconds after independent process observation");
+        let out = out.unwrap();
+        eprintln!(
+            "L07 {name} output collected_ms={} collection_after_all_exits_observed_ms={}",
+            collected.duration_since(started).as_millis(),
+            collected
+                .saturating_duration_since(started + observed)
+                .as_millis()
+        );
+        // FILETIME is in 100ns units; compare actual exits, excluding startup and pipe draining.
+        assert!(
+            launcher_exited
+                .checked_sub(direct_exited)
+                .is_some_and(|ticks| ticks < 20_000_000),
+            "launcher lingered at least two seconds after actual direct child exit"
+        );
+        assert!(
+            child_exited
+                .checked_sub(child_created)
+                .is_some_and(|ticks| ticks < 50_000_000),
+            "bounded grandchild did not exit itself within five seconds"
+        );
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert!(out.stdout.is_empty());
+        assert!(out.stderr.is_empty());
+        assert_eq!(fs::read(&done).unwrap(), b"synthetic helper completed\n");
         assert_ne!(parent["pid"], grandchild["pid"]);
         assert_eq!(
             parent[selected],
