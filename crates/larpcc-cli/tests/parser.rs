@@ -12,6 +12,9 @@ fn help_fixtures_and_missing_subcommands() {
         (vec!["cc", "provider", "bind"], "bind"),
         (vec!["cc", "provider", "list"], "providers"),
         (vec!["cc", "run"], "run"),
+        (vec!["cc", "login"], "login"),
+        (vec!["cc", "status"], "status"),
+        (vec!["cc", "logout"], "logout"),
         (vec!["cc", "profile", "add"], "add"),
         (vec!["cc", "profile", "list"], "list"),
         (vec!["cc", "profile", "show"], "show"),
@@ -26,7 +29,8 @@ fn help_fixtures_and_missing_subcommands() {
         .replace("\r\n", "\n");
         let help = f.run(&[args.as_slice(), &["--help"]].concat(), 0);
         assert_eq!(stdout(&help), expected);
-        if args.len() < 3 && args != ["cc", "run"] {
+        if args.len() < 3 && !matches!(args.last(), Some(&"run" | &"login" | &"status" | &"logout"))
+        {
             assert_eq!(stderr(&f.run(&args, 2)), expected);
         }
     }
@@ -41,9 +45,9 @@ fn version_and_usage_errors_do_not_create_root() {
     }
     for args in [
         vec!["cc", "run"],
-        vec!["cc", "login", "x"],
-        vec!["cc", "status", "x"],
-        vec!["cc", "logout", "x"],
+        vec!["cc", "login"],
+        vec!["cc", "status"],
+        vec!["cc", "logout"],
         vec!["cc", "alias"],
         vec!["--foo"],
         vec!["cc", "--version"],

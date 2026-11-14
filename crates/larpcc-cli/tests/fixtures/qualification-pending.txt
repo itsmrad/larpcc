@@ -1,2 +1,2 @@
-error: provider launch is disabled pending stage 3 qualification
-hint: binding and profile metadata commands remain available
+error: provider operation is disabled for this combination
+hint: review the documented qualification matrix

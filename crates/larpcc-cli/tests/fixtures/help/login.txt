@@ -1,0 +1,13 @@
+Authenticate a profile
+
+Usage: larp cc login [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>  
+
+Options:
+      --yes   
+  -h, --help  Print help
+
+Profiles select native state, not a verified account, model or endpoint. Native project, configuration and administrator policy still apply. Provider restrictions remain possible.
+Quiesce relevant sessions before authentication changes. Refresh and logout may affect grants and integrations.

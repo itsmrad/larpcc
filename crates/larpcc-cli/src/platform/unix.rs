@@ -364,11 +364,6 @@ fn canonical_missing(path: &Path) -> Result<PathBuf, Error> {
     }
 }
 
-#[cfg(feature = "synthetic-launch")]
-#[allow(
-    dead_code,
-    reason = "Execution is used only by the separate synthetic driver."
-)]
 pub fn execve(
     path: &Path,
     argv0: &std::ffi::OsStr,
@@ -460,6 +455,18 @@ pub fn execve(
 
 pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error> {
     Ok(path.starts_with(root))
+}
+
+pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
+    let (resolved, expected) = executable(path, root)?;
+    let file = open(&resolved, ObjectKind::File, false)?;
+    let meta = file.metadata().map_err(|e| io_error("inspect", path, e))?;
+    trusted(&resolved, &meta)?;
+    acl_file(&file, path)?;
+    if !meta.is_file() || meta.mode() & 0o111 == 0 || identity(&meta) != expected {
+        return Err(Error::ArtifactInvalid);
+    }
+    Ok((file, expected))
 }
 
 #[cfg(test)]

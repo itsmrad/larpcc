@@ -2,6 +2,8 @@
 mod cli;
 #[path = "../../src/launch/mod.rs"]
 mod launch;
+#[path = "../../src/launch/legacy.rs"]
+mod legacy;
 #[cfg(unix)]
 #[path = "unix_observe.rs"]
 mod observe;
@@ -42,6 +44,9 @@ enum Action {
     },
 }
 fn main() -> std::process::ExitCode {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("stage3")) {
+        return stage3();
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("cc"))
         && std::env::args_os().nth(2).as_deref() != Some(std::ffi::OsStr::new("run"))
     {
@@ -64,9 +69,9 @@ fn main() -> std::process::ExitCode {
         None
     };
     let result = registry::Registry::locate()
-        .and_then(|r| r.launch_target(&name))
-        .and_then(|t| launch::plan(&t, args, &std::env::vars_os().collect::<Vec<_>>()))
-        .and_then(|p| launch::execute(&p));
+        .and_then(|r| r.admission_snapshot(&name, |_| true).map(|s| s.target))
+        .and_then(|t| legacy::plan(&t, args, &std::env::vars_os().collect::<Vec<_>>()))
+        .and_then(|p| legacy::execute(&p));
     match result {
         Ok(code) => std::process::exit(code as i32),
         Err(error) => {
@@ -87,6 +92,76 @@ fn main() -> std::process::ExitCode {
                 let _ = writeln!(err, "hint: {hint}");
             }
             std::process::exit(1);
+        }
+    }
+}
+
+// Nonpackaged invented-row input. Ordinary larp never compiles this parser or row.
+#[derive(Parser)]
+struct Invented {
+    #[arg(value_parser = ["run", "login", "status", "logout"])]
+    operation: String,
+    name: registry::ProfileName,
+    #[arg(long)]
+    sha256: String,
+    #[arg(long, value_parser = ["claude", "codex"])]
+    provider: String,
+    #[arg(long)]
+    yes: bool,
+    #[arg(last = true)]
+    args: Vec<OsString>,
+}
+fn stage3() -> std::process::ExitCode {
+    use launch::admission::{self, ArtifactRow, Operation};
+    let input = Invented::parse_from(
+        std::iter::once(OsString::from("stage3")).chain(std::env::args_os().skip(2)),
+    );
+    let op = match input.operation.as_str() {
+        "login" => Operation::Login,
+        "status" => Operation::Status,
+        "logout" => Operation::Logout,
+        _ => Operation::Run,
+    };
+    let mut sha256 = [0; 32];
+    if input.sha256.len() != 64 || !input.sha256.is_ascii() {
+        eprintln!("invalid invented digest");
+        return 2.into();
+    }
+    for (i, byte) in sha256.iter_mut().enumerate() {
+        let Ok(value) = u8::from_str_radix(&input.sha256[i * 2..i * 2 + 2], 16) else {
+            eprintln!("invalid invented digest");
+            return 2.into();
+        };
+        *byte = value;
+    }
+    let row = ArtifactRow {
+        provider: input.provider.parse().unwrap(),
+        release: "invented-1",
+        sha256,
+        install_kind: "test-fixture",
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        operation: op,
+        interface: "invented",
+        backend: "invented-no-network",
+        policy_revision: 1,
+        argv: &[],
+        denied_env: &["LARPCC_SYNTHETIC_DENY_"],
+        paths: &[],
+        evidence: "synthetic fixture only",
+    };
+    match admission::invoke(op, &input.name, input.args, input.yes, &[row]) {
+        Ok(code) => std::process::exit(code as i32),
+        Err(error) => {
+            eprintln!("error: {error}");
+            if let Some(hint) = error.hint() {
+                eprintln!("hint: {hint}");
+            }
+            if matches!(error, registry::Error::ConfirmationRequired) {
+                2.into()
+            } else {
+                1.into()
+            }
         }
     }
 }

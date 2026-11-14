@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, stage/2-core]
+    branches: [main, stage/2-core, stage/3-core]
   push:
     branches: [main]
 
@@ -54,6 +54,7 @@ jobs:
           if ($text -notmatch 'TokenIsElevated\s*[:=]\s*(true|false)') { throw 'missing native TokenIsElevated boolean' }
           if ($Matches[1] -eq 'true') { Write-Output 'Elevated result only; non-elevated qualification is still required.' }
       - run: cargo +stable build --release --bin larp --locked
+      - run: cargo +stable test --test gate --all-features --locked
       - run: cargo +stable clippy --workspace --all-targets --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked -- -D warnings
       - run: cargo +stable test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
       - run: cargo +stable test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked

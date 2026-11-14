@@ -77,3 +77,9 @@ pub(crate) fn acquire_replaceable<T>(
 pub(crate) fn inspect_replaceable(path: &Path) -> Result<Option<CheckedObject>, AcquisitionError> {
     inspect(path, ObjectKind::File).map_err(Into::into)
 }
+
+// Windows implementation belongs to the coordinated W slice; closed until supplied.
+#[cfg(windows)]
+pub(crate) fn open_artifact(_path: &Path, _root: &Path) -> Result<(File, FileIdentity), Error> {
+    Err(Error::ArtifactInvalid)
+}

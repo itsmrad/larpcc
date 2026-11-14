@@ -183,7 +183,7 @@ pub(super) fn capacity(bytes: Vec<u8>) -> Result<Vec<u8>, Error> {
         Ok(bytes)
     }
 }
-fn lock(
+pub(super) fn lock(
     root: &Path,
     timeout: Duration,
 ) -> Result<(File, Vec<crate::platform::CheckedObject>), Error> {
@@ -406,7 +406,11 @@ pub(super) fn phase(action: &str, path: &Path) -> Result<(), Error> {
 pub(super) fn fixed(root: &Path) -> Result<Vec<crate::platform::CheckedObject>, Error> {
     use crate::platform::{ObjectKind, inspect};
     let mut held = Vec::new();
-    for path in [root.to_path_buf(), root.join("profiles")] {
+    for path in [
+        root.to_path_buf(),
+        root.join("profiles"),
+        root.join("auth-locks"),
+    ] {
         if let Some(object) = inspect(&path, ObjectKind::Directory)? {
             held.push(object);
         }

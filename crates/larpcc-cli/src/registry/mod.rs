@@ -6,7 +6,6 @@ mod store;
 #[cfg(test)]
 mod tests;
 pub use error::{Error, NameError};
-#[cfg(feature = "synthetic-launch")]
 pub use model::LaunchTarget;
 pub use model::{
     BindOutcome, Binding, BindingState, DirStatus, Profile, ProfileEntry, ProfileId, ProfileName,
@@ -48,15 +47,20 @@ impl Registry {
     pub fn bind(&self, p: Provider, exe: PathBuf, replace: bool) -> Result<BindOutcome, Error> {
         store::bind(self.root(), p, exe, replace)
     }
-    #[cfg(feature = "synthetic-launch")]
-    #[allow(
-        dead_code,
-        reason = "Called only by the separate synthetic driver; ordinary dispatch stays closed."
-    )]
-    pub fn launch_target(&self, name: &ProfileName) -> Result<LaunchTarget, Error> {
+    pub(crate) fn launch_target(
+        &self,
+        name: &ProfileName,
+    ) -> Result<crate::launch::admission::AdmissionSnapshot, Error> {
+        self.admission_snapshot(name, |_| true)
+    }
+    pub(crate) fn admission_snapshot(
+        &self,
+        name: &ProfileName,
+        candidate: impl Fn(Provider) -> bool,
+    ) -> Result<crate::launch::admission::AdmissionSnapshot, Error> {
         let _ancestors = crate::platform::anchor(self.root())?.ancestors;
-        let _ancestors = crate::platform::anchor(self.root())?.ancestors;
-        let _fixed = store::fixed(self.root())?;
+        let mut held = store::fixed(self.root())?;
+        held.extend(_ancestors);
         let data = store::load(self.root())?;
         let profile = data
             .profiles
@@ -64,7 +68,19 @@ impl Registry {
             .find(|p| &p.name == name)
             .cloned()
             .ok_or_else(|| Error::NotFound { name: name.clone() })?;
+        if !candidate(profile.provider) {
+            return Err(Error::QualificationPending);
+        }
         let entries = paths::entries(self.root(), &data.profiles)?;
+        let mut homes = Vec::new();
+        for entry in &entries {
+            if let Some(object) =
+                crate::platform::inspect(&entry.state_dir, crate::platform::ObjectKind::Directory)?
+            {
+                homes.push((entry.profile.id, object.identity.clone()));
+                held.push(object);
+            }
+        }
         for entry in &entries {
             if let DirStatus::Unsafe(reason) = &entry.status {
                 return Err(Error::Unsafe {
@@ -92,15 +108,25 @@ impl Registry {
             })?;
         let (resolved_executable, identity) =
             crate::provider::validate(profile.provider, &binding.executable, self.root())?;
-        Ok(LaunchTarget {
-            profile,
-            state_dir,
-            stored_executable: binding.executable.clone(),
-            resolved_executable,
-            identity,
+        Ok(crate::launch::admission::AdmissionSnapshot {
+            revision: data.revision,
+            homes,
+            held,
+            target: LaunchTarget {
+                profile,
+                state_dir,
+                stored_executable: binding.executable.clone(),
+                resolved_executable,
+                identity,
+            },
         })
     }
 
+    pub(crate) fn admission_lock(
+        &self,
+    ) -> Result<(std::fs::File, Vec<crate::platform::CheckedObject>), Error> {
+        store::lock(self.root(), std::time::Duration::from_secs(10))
+    }
     pub fn locate() -> Result<Registry, Error> {
         Self::at(paths::resolve(|key| std::env::var_os(key))?)
     }
