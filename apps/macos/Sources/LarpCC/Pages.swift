@@ -28,12 +28,13 @@ struct GeneralPage: View {
                 .disabled(AppearanceMode.launchOverride != nil)
             }
 
-            Section("Larp") {
+            Section("Command-line tool") {
                 LabeledContent {
                     HStack(spacing: 8) {
+                        if !store.isFixture || store.snapshot == nil {
+                            Button("Use Sample Data") { store.useFixture() }
+                        }
                         Button("Choose…") { store.chooseExecutable() }
-                        Button("Use Sample Data") { store.useFixture() }
-                            .disabled(store.isFixture && store.snapshot != nil)
                     }
                 } label: {
                     Text("larp executable")
@@ -85,12 +86,15 @@ struct CatalogPage: View {
 
     var body: some View {
         Form {
-            Section {
-                if items.isEmpty {
+            if items.isEmpty {
+                Section {
                     Text(kind == .mcp ? "No MCP servers in the catalog." : "No skills in the catalog.")
                         .foregroundStyle(.secondary)
                 }
-                ForEach(items) { item in
+            }
+            // One section per item: a header row, then a switch per profile.
+            ForEach(items) { item in
+                Section {
                     LabeledContent {
                         Text("\(item.profileIDs.count) of \(snapshot.profiles.count) on")
                             .monospacedDigit()
@@ -100,87 +104,28 @@ struct CatalogPage: View {
                                      color: kind == .mcp ? .indigo : .pink)
                         }
                     }
-                }
-            } header: {
-                Text(kind == .mcp ? "Catalog" : "Library")
-            }
-
-            if !items.isEmpty && !snapshot.profiles.isEmpty {
-                Section {
-                    MatrixGrid(store: store, snapshot: snapshot, items: items, kind: kind)
-                } header: {
-                    Text("Profiles")
+                    ForEach(snapshot.profiles) { profile in
+                        Toggle(isOn: Binding(
+                            get: { item.profileIDs.contains(profile.id) },
+                            set: { store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: $0)) }
+                        )) {
+                            Label { Text(profile.name) } icon: { ProviderGlyph(provider: profile.provider, size: 14) }
+                        }
+                        .foregroundStyle(profile.readiness == .off ? .secondary : .primary)
+                        .accessibilityLabel("\(item.id) for \(profile.name)")
+                    }
                 } footer: {
-                    Text(kind == .mcp
-                         ? "Switches choose which profiles receive each server definition. LarpCC never starts a server."
-                         : "Switches choose which profiles can use each skill.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    if item.id == items.last?.id {
+                        Text(kind == .mcp
+                             ? "Switches choose which profiles receive each server definition. LarpCC never starts a server."
+                             : "Switches choose which profiles can use each skill.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
         .formStyle(.grouped)
-    }
-}
-
-/// Items × profiles grid of switches.
-private struct MatrixGrid: View {
-    @ObservedObject var store: AppStore
-    let snapshot: Snapshot
-    let items: [CatalogItem]
-    let kind: CatalogKind
-    private let column: CGFloat = 76
-
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            grid
-            ScrollView(.horizontal) { grid.padding(.bottom, 6) }
-        }
-    }
-
-    private var grid: some View {
-        Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-            GridRow(alignment: .bottom) {
-                Text(kind == .mcp ? "Server" : "Skill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 150, alignment: .leading)
-                    .padding(.bottom, 6)
-                ForEach(snapshot.profiles) { profile in
-                    VStack(spacing: 3) {
-                        ProviderGlyph(provider: profile.provider, size: 12)
-                        Text(profile.name)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: column, maxWidth: .infinity)
-                    .padding(.bottom, 6)
-                    .help(profile.name)
-                }
-            }
-
-            ForEach(items) { item in
-                Divider().gridCellUnsizedAxes(.horizontal)
-                GridRow {
-                    Text(item.id)
-                        .lineLimit(1)
-                        .frame(minWidth: 150, alignment: .leading)
-                        .padding(.vertical, 7)
-                    ForEach(snapshot.profiles) { profile in
-                        Toggle("\(item.id) for \(profile.name)", isOn: Binding(
-                            get: { item.profileIDs.contains(profile.id) },
-                            set: { store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: $0)) }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                        .frame(minWidth: column, maxWidth: .infinity)
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -232,35 +177,32 @@ struct AliasesPage: View {
                         Text(row.alias).font(.body.monospaced())
                     }
                 }
+                HStack(spacing: 8) {
+                    TextField("Command name", text: $newName, prompt: Text("command-name"))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .font(.body.monospaced())
+                        .frame(maxWidth: 200)
+                        .onSubmit(add)
+                    Picker("Profile", selection: $newProfileID) {
+                        if newProfileID.isEmpty { Text("Choose…").tag("") }
+                        ForEach(snapshot.profiles) { Text($0.name).tag($0.id) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .onAppear { if newProfileID.isEmpty { newProfileID = snapshot.profiles.first?.id ?? "" } }
+                    Spacer(minLength: 0)
+                    Button("Add", action: add)
+                        .disabled(!canAdd)
+                }
             } header: {
                 Text("Commands")
             } footer: {
-                Text("Each alias is a command that starts its profile. LarpCC never edits your shell configuration or PATH.")
+                Text(!trimmed.isEmpty && !canAdd
+                     ? (nameTaken ? "That alias already exists." : (LarpNames.isValidAlias(trimmed) ? "Choose a profile." : "Use a new lowercase name, up to 32 characters. claude and codex are reserved."))
+                     : "Each alias is a command that starts its profile: lowercase letters, digits, - or _. LarpCC never edits your shell configuration or PATH.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-            }
-
-            Section("Add Alias") {
-                TextField(text: $newName, prompt: Text("claude-work")) {
-                    Text("Command name")
-                    Text("Lowercase letters, digits, - or _.")
-                }
-                .onSubmit(add)
-                Picker("Profile", selection: $newProfileID) {
-                    if newProfileID.isEmpty { Text("Choose…").tag("") }
-                    ForEach(snapshot.profiles) { Text($0.name).tag($0.id) }
-                }
-                .onAppear { if newProfileID.isEmpty { newProfileID = snapshot.profiles.first?.id ?? "" } }
-                HStack {
-                    if !trimmed.isEmpty && !canAdd {
-                        Text(nameTaken ? "That alias already exists." : (LarpNames.isValidAlias(trimmed) ? "Choose a profile." : "Use a new lowercase name, up to 32 characters. claude and codex are reserved."))
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Add Alias", action: add)
-                        .disabled(!canAdd)
-                }
             }
         }
         .formStyle(.grouped)
@@ -292,10 +234,20 @@ struct DesktopAppsPage: View {
                 }
                 ForEach(snapshot.profiles) { profile in
                     LabeledContent {
-                        Button("Open") { store.perform(.open(profileID: profile.id, surface: .desktop)) }
-                            .disabled(!profile.desktopEnabled)
+                        HStack(spacing: 10) {
+                            if profile.desktopEnabled {
+                                Button("Open") { store.perform(.open(profileID: profile.id, surface: .desktop)) }
+                                    .controlSize(.small)
+                            }
+                            Toggle("Desktop app for \(profile.name)", isOn: Binding(
+                                get: { profile.desktopEnabled },
+                                set: { store.perform(.setSurface(profileID: profile.id, surface: .desktop, enabled: $0)) }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                        }
                     } label: {
-                        RowLabel(profile.name, subtitle: profile.desktopEnabled ? "\(profile.provider.desktopApp) · own data folder" : "Desktop app off for this profile") {
+                        RowLabel(profile.name, subtitle: profile.desktopEnabled ? "Own \(profile.provider.desktopApp) data folder" : "Off") {
                             ProviderGlyph(provider: profile.provider)
                         }
                     }
@@ -314,15 +266,15 @@ struct DesktopAppsPage: View {
     private func appRow(_ provider: Provider) -> some View {
         let bindings = snapshot.profiles.filter { $0.provider == provider }.compactMap(\.desktopBinding)
         let binding = bindings.first { $0.state == .ok } ?? bindings.first
-        let detail = [binding?.versionTitle ?? "Not detected", binding?.displayPath].compactMap { $0 }.joined(separator: " · ")
+        let state = [binding?.stateTitle ?? "No profiles", binding?.detectedVersion].compactMap { $0 }.joined(separator: " · ")
         return LabeledContent {
             HStack(spacing: 6) {
                 StatusDot(color: binding?.stateColor ?? .secondary)
-                Text(binding?.stateTitle ?? "No profiles")
+                Text(state)
             }
         } label: {
-            RowLabel(provider.desktopApp, subtitle: detail) {
-                IconTile(symbol: "macwindow", color: provider == .claude ? .orange : .teal)
+            RowLabel(provider.desktopApp, subtitle: binding?.displayPath ?? "Not linked") {
+                ProviderTile(provider: provider)
             }
         }
     }
@@ -352,10 +304,10 @@ struct AboutPage: View {
                 ValueRow("Data source", value: store.isFixture ? "Sample data" : "Your larp executable")
             }
             Section("Privacy") {
-                Label("Runs only the larp executable you choose", systemImage: "terminal")
-                Label("Makes no network requests", systemImage: "wifi.slash")
-                Label("Never reads sign-in tokens or keychain items", systemImage: "lock.shield")
-                Label("No background activity or login items", systemImage: "moon.zzz")
+                Label { Text("Runs only the larp executable you choose") } icon: { Image(systemName: "terminal").frame(width: 20) }
+                Label { Text("Makes no network requests") } icon: { Image(systemName: "wifi.slash").frame(width: 20) }
+                Label { Text("Never reads sign-in tokens or keychain items") } icon: { Image(systemName: "lock.shield").frame(width: 20) }
+                Label { Text("No background activity or login items") } icon: { Image(systemName: "moon.zzz").frame(width: 20) }
             }
         }
         .formStyle(.grouped)

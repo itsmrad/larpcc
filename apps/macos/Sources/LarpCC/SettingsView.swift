@@ -74,6 +74,9 @@ struct SettingsView: View {
                 .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 300)
         } detail: {
             detail
+                // Minimum on the detail column, not the split view: a split-view
+                // minimum makes the detail snap instead of resizing as the sidebar slides in.
+                .frame(minWidth: 460, minHeight: 480)
                 .navigationTitle(title)
                 .toolbar { toolbar }
                 .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
@@ -123,9 +126,10 @@ struct SettingsView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: store.isFixture ? "testtube.2" : "terminal")
-                Text(store.isFixture ? "Sample data · changes stay in memory" : "Using your larp executable")
+                Text(store.isFixture ? "Sample data" : "Your larp executable")
                     .lineLimit(1)
             }
+            .help(store.isFixture ? "Sample data: changes stay in memory and reset on restart." : "Using your larp executable")
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -269,12 +273,10 @@ struct SettingsView: View {
 private struct ProfileSidebarRow: View {
     let profile: Profile
     var body: some View {
-        HStack(spacing: 6) {
-            Label {
-                Text(profile.name).lineLimit(1)
-            } icon: {
-                ProviderGlyph(provider: profile.provider)
-            }
+        HStack(spacing: 10) {
+            // Not a Label: the sidebar restyles Label icons, which washes out the marks.
+            ProviderGlyph(provider: profile.provider)
+            Text(profile.name).lineLimit(1)
             Spacer(minLength: 4)
             if profile.readiness != .off {
                 StatusDot(color: profile.readiness.color)

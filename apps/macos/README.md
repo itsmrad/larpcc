@@ -65,4 +65,4 @@ without opening a window or invoking a CLI. Verify relocation with the original
 `.build` directory absent. No signing, notarization, installation or artifact publishing is
 included. The dedicated macOS workflow runs synthetic tests and release bundling.
 Native manual validation still covers keyboard/VoiceOver, selection, search,
-matrix scrolling, cancellation, delete wording, and light/dark appearance.
+catalog switches, cancellation, delete wording, and light/dark appearance.

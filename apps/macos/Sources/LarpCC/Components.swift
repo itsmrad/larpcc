@@ -65,17 +65,41 @@ extension Provider {
     var desktopApp: String { self == .claude ? "Claude.app" : "ChatGPT.app" }
 }
 
-/// Monochrome provider glyph.
+/// Monochrome provider mark, sized like a sidebar symbol.
 struct ProviderGlyph: View {
     let provider: Provider
     var size: CGFloat = 16
+    @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
-        Image(systemName: provider.symbol) // neutral SF Symbol, not a vendor mark
-            .font(.system(size: size * 0.9, weight: .regular))
-            .foregroundStyle(.primary)
+        // Explicit colors: the sidebar's vibrancy washes out thin shapes drawn in .primary.
+        ProviderMark(provider: provider)
+            .fill(prominence == .increased ? Color.white : Color(nsColor: .labelColor))
+            .frame(width: size, height: size)
             .frame(width: size + 4, height: size + 4)
             .accessibilityLabel(provider.title)
+    }
+}
+
+/// Provider mark in white on its rounded-square brand tile.
+struct ProviderTile: View {
+    let provider: Provider
+    var size: CGFloat = 20
+
+    var body: some View {
+        ProviderMark(provider: provider)
+            .fill(.white)
+            .padding(size * 0.2)
+            .frame(width: size, height: size)
+            .background(
+                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                    .fill(provider.tileColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
+            )
+            .accessibilityHidden(true)
     }
 }
 
@@ -155,17 +179,14 @@ struct RowLabel<Icon: View>: View {
         self.title = title; self.subtitle = subtitle; self.icon = icon()
     }
     var body: some View {
-        HStack(spacing: 10) {
-            icon
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
+        // Native title + description label so Form rows can wrap and compress.
+        Label {
+            Text(title)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
             }
+        } icon: {
+            icon
         }
     }
 }

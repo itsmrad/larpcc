@@ -13,6 +13,8 @@ bin_dir="$(swift build -c release --show-bin-path)"
 # Only create/replace the executable and metadata inside this package's output.
 app='dist/LarpCC.app'
 mkdir -p "$app/Contents/MacOS"
+# Replace rather than overwrite, so a running copy keeps its own signed file.
+rm -f "$app/Contents/MacOS/LarpCC"
 cp "$bin_dir/LarpCC" "$app/Contents/MacOS/LarpCC"
 # SwiftPM Bundle.module resolves its bundle from Bundle.main.bundleURL.
 find "$bin_dir" -maxdepth 1 -name '*.bundle' -exec cp -R {} "$app/" \;
