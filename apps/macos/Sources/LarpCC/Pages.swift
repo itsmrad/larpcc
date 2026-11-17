@@ -60,7 +60,7 @@ struct GeneralPage: View {
                     set: { store.perform(.setSyncNewServers($0)) }
                 )) {
                     Text("New MCP servers start on for every profile")
-                    Text("Applies to servers added later. Existing switches stay as they are.")
+                    Text("When on, servers added to the catalog are switched on for every profile.")
                 }
                 .disabled(store.snapshot == nil)
             }
