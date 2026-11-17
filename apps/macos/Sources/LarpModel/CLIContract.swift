@@ -41,9 +41,10 @@ enum CLIContract {
                   Set(object.keys).isSubset(of: Set(props.keys)) else { return false }
             return object.allSatisfy { valid($0.value, props[$0.key]!) }
         case "array":
-            guard let array = value as? [Any], let item = rule["items"] as? [String: Any] else { return false }
+            guard let array = value as? [Any] else { return false }
             if let max = rule["maxItems"] as? Int, array.count > max { return false }
-            return array.allSatisfy { valid($0, item) }
+            if let item = rule["items"] as? [String: Any] { return array.allSatisfy { valid($0, item) } }
+            return true
         case "string":
             guard let s = value as? String else { return false }
             if let pattern = rule["pattern"] as? String { return s.range(of: pattern, options: .regularExpression)?.lowerBound == s.startIndex && s.range(of: pattern, options: .regularExpression)?.upperBound == s.endIndex }

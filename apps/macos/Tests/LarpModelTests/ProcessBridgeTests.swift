@@ -10,9 +10,13 @@ final class ProcessBridgeTests: XCTestCase {
         var bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]); bytes.append(10); return bytes
     }
     func testEveryFrozenExampleAndErrorVariant() throws {
-        for e in try Self.examples() {
-            let result = try CLIContract.decode(Self.bytes(e), exit: e["ok"] as? Bool == true ? 0 : 1)
-            XCTAssertEqual(result.command, e["command"] as? String)
+        for (index, e) in try Self.examples().enumerated() {
+            do {
+                let result = try CLIContract.decode(Self.bytes(e), exit: e["ok"] as? Bool == true ? 0 : 1)
+                XCTAssertEqual(result.command, e["command"] as? String)
+            } catch {
+                XCTFail("Frozen example index \(index), command \(e["command"] as? String ?? "missing") failed decoding")
+            }
         }
     }
     func testCopiesMatchMergedContract() throws {
