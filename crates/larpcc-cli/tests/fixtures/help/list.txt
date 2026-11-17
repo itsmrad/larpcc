@@ -1,6 +1,8 @@
 List profiles
 
-Usage: larp cc profile list
+Usage: larp cc profile list [OPTIONS]
 
 Options:
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

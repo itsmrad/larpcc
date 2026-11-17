@@ -1,13 +1,16 @@
 Manage profile records (no login, no provider launch)
 
-Usage: larp cc profile <COMMAND>
+Usage: larp cc profile [OPTIONS] <COMMAND>
 
 Commands:
-  add     Register a profile and create its empty state directory
-  list    List profiles
-  show    Show one profile
-  rename  Rename a profile; its ID and state directory do not change
-  forget  Remove a profile from the registry; its state directory is kept
+  surface  Enable or disable a profile surface (does not qualify native launch)
+  add      Register a profile and create its empty state directory
+  list     List profiles
+  show     Show one profile
+  rename   Rename a profile; its ID and state directory do not change
+  forget   Remove a profile from the registry; its state directory is kept
 
 Options:
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

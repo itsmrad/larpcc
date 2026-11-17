@@ -1,10 +1,16 @@
 Register a profile and create its empty state directory
 
-Usage: larp cc profile add --provider <PROVIDER> <NAME>
+Usage: larp cc profile add [OPTIONS] --provider <PROVIDER> <NAME>
 
 Arguments:
   <NAME>  Profile name: 1-32 characters from a-z, 0-9, '-', '_', starting with a letter
 
 Options:
-      --provider <PROVIDER>  Provider this profile is for [possible values: claude, codex]
-  -h, --help                 Print help
+      --json
+          Emit one local metadata JSON envelope
+      --provider <PROVIDER>
+          Provider this profile is for [possible values: claude, codex]
+      --expected-revision <EXPECTED_REVISION>
+          Refuse if the registry revision has changed
+  -h, --help
+          Print help

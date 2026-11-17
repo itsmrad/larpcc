@@ -15,6 +15,15 @@ JSON [contract](../contracts/cli-v1.md) applies to each slice, implemented with
 the seed and expanded only through its frozen variants. No concurrent writers
 in shared files. Lead arranges independent QA/OCR and alone merges.
 
+## Delivery split (lead decision)
+
+The first implementation PR ships only the v3 model/layout, surface toggles,
+JSON framing for implemented commands and locked revision preconditions. Legacy
+v1/v2 reads remain available; all legacy mutations refuse `recovery_required`.
+It does not expose migrate/delete/recover until their durable transactions,
+confinement and acceptance tests are implemented in the follow-up PR. Dependent
+modules consume the reviewed seed; this split does not mark full Stage04 complete.
+
 ## Grammar and persisted v3
 
 Existing profile/provider commands retain grammar. Add:
@@ -57,8 +66,8 @@ requiring v3 refuse `recovery_required` until explicit `profile migrate`.
 v1 can first use the existing v2 upgrade; migrate accepts v1 by the same
 validated v2 logical representation. No automatic content migration on reads.
 Migrate preflights the entire managed set under existing safety rules, all
-profiles quiescent; occupied homes refuse. Only empty or documented synthetic
-fixture homes are eligible in this delivery. If nonempty unknown/native data
+profiles satisfying the bounded liveness checks below; occupied homes refuse.
+Only empty or documented synthetic fixture homes are eligible in this delivery. If nonempty unknown/native data
 exists, refuse without content reads or moves; no login data adoption/copy.
 
 Use a durable root journal with original revision, immutable IDs, checked folder
@@ -81,11 +90,23 @@ cooperative lock does not constrain unknown old clients.
 
 Acquire per-ID lifecycle guard first, then registry lock; shared order applies
 to launch/auth/delete/share. Never hold registry lock across logout, prompts or
-child waits. Revalidate snapshot after any unlocked interval. Refuse known CLI
-or desktop activity, guard contention, uncertain process identity or safety
-failure. OS lock loss after parent crash does not establish child death:
-recover requires human quiescence confirmation (`--yes`) and independently
-reviewed surface checks; uncertain native state refuses, never kill unknown PIDs.
+child waits. Revalidate snapshot after any unlocked interval. Refuse visible
+Larp-managed activity (profile guard held), guard contention,
+or safety failure. On macOS also inspect only validated official Claude.app /
+ChatGPT.app identities for an exact profile `--user-data-dir` argument match;
+known activity refuses. Unknown/unverifiable inspected app identity, denied or
+incomplete inspection, malformed arguments, timeout or truncation refuses with
+safe diagnostics. Never inspect process environment, tokens or account data.
+
+The user must close sessions started outside Larp (including manual terminal
+`CLAUDE_CONFIG_DIR` / `CODEX_HOME` sessions) before confirming `--yes`. This is
+bounded local data hygiene, not proof against arbitrary same-user native clients
+that close handles or change executable identity. Empty folders, an empty
+qualification table, marker files and absence of a cooperative guard are not
+independent proof of native inactivity. No broad `/proc` heuristic is required.
+OS lock loss after parent crash does not establish child death: recover requires
+explicit human quiescence confirmation (`--yes`) plus the same bounded surface
+checks. Never kill unknown PIDs or automatically resume a transaction.
 
 Under lock preflight reference cleanup and ownership drift **before** tombstone.
 Record a bounded fixed transaction describing ID, expected revision, owned
@@ -108,7 +129,8 @@ tag. Symlink/reparse leaves are unlinked as leaves only, never traversed;
 unsafe/unverifiable leaf handling refuses. Never read regular-file contents;
 hardlinks unlink only the in-folder name, never mutate target bytes. Replaced
 identities, mount points, junctions, permission failures, oversized enumeration
-or unexpected activity leave tombstone, not a fallback. Bound 100,000 entries,
+or activity detected by the bounded checks leave tombstone, not a fallback.
+Bound 100,000 entries,
 64 levels and 30 seconds per attempt; resume explicitly, no background job.
 Manifest cannot enlarge this subtree. Forged path/hash metadata grants no
 arbitrary deletion authority. Same-user privileged racing remains a limitation;
@@ -140,7 +162,7 @@ implemented and actually executed with `cargo test --workspace --locked stage04_
 | stage04_migration_crash | crash each rename/journal/registry boundary; deterministic resume or safe refusal; two migrators serialize; no lost/outside bytes |
 | stage04_delete | folder really absent; forget retains folder; aliases/catalog/skills cleaned; ID never reused; --yes/--logout/JSON precedence; keychain warning |
 | stage04_delete_escape | traversal/forged manifest/journal, symlink/junction swap, mount/hardlink/outside sentinel; no outside deletion, no token-content reads |
-| stage04_delete_recovery | crash every cleanup boundary; tombstone blocks all consumers; busy CLI/desktop, surviving child and uncertain liveness refuse; concurrent edits/drift retain tombstone |
+| stage04_delete_recovery | crash every cleanup boundary; tombstone blocks all consumers; busy CLI/desktop, surviving managed child and uncertain inspected app identity refuse; concurrent edits/drift retain tombstone |
 
 Every fixture uses private temporary LARPCC_HOME and names claude-work/codex-45,
 synthetic children only, bounded waits and finally cleanup of all test artifacts.

@@ -110,8 +110,18 @@ pub(super) fn entries(root: &Path, profiles: &[Profile]) -> Result<Vec<ProfileEn
     let mut identities = HashMap::new();
     let mut result = Vec::with_capacity(profiles.len());
     for profile in profiles {
-        let state_dir = root.join("profiles").join(profile.id.to_string());
-        let mut status = crate::platform::inspect_home(&state_dir)?;
+        let container = root.join("profiles").join(profile.id.to_string());
+        let state_dir = if profile.surfaces.is_some() {
+            container.join("cli")
+        } else {
+            container.clone()
+        };
+        let container_status = crate::platform::inspect_home(&container)?;
+        let mut status = if container_status == DirStatus::Ok {
+            crate::platform::inspect_home(&state_dir)?
+        } else {
+            container_status
+        };
         if status == DirStatus::Ok
             && let Some(object) =
                 crate::platform::inspect(&state_dir, crate::platform::ObjectKind::Directory)?

@@ -1,9 +1,11 @@
 Show one profile
 
-Usage: larp cc profile show <NAME>
+Usage: larp cc profile show [OPTIONS] <NAME>
 
 Arguments:
   <NAME>  Profile name
 
 Options:
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

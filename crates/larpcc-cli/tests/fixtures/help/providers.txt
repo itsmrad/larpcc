@@ -1,6 +1,8 @@
 List provider bindings
 
-Usage: larp cc provider list
+Usage: larp cc provider list [OPTIONS]
 
 Options:
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help
