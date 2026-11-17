@@ -2,7 +2,7 @@
 
 Larp CC manages named Claude Code and Codex profile records, distinct state directories, and explicit native executable bindings. Names are labels; immutable numeric IDs determine the directories. Renaming preserves both. Forgetting removes metadata and keeps the directory.
 
-**Provider execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]`, `status NAME` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. Binding a path does not qualify a provider, version, installation or account-isolation claim.
+**Provider execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]`, human `status NAME` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. Binding a path does not qualify a provider, version, installation or account-isolation claim.
 
 Requires Rust 1.89 or newer:
 
@@ -20,7 +20,9 @@ larp cc profile add work --provider claude
 larp cc profile add personal --provider codex
 larp cc profile list
 larp cc profile show work
-larp cc profile rename work job
+larp cc profile surface work desktop on
+larp cc profile list --json
+larp cc profile rename work job --expected-revision 3
 larp cc profile forget personal --yes
 larp cc provider bind claude /absolute/path/to/native-executable
 larp cc provider list
@@ -28,9 +30,23 @@ larp cc provider list
 
 Use `provider bind … --replace` to change a binding. An identical binding is a no-op, even if the executable has subsequently disappeared. Provider list revalidates paths and reports `ok`, `unbound` or `invalid: …`; `ok` means path validation only. Binding never runs an executable or probes its version. Paths and diagnostics escape terminal controls and the specified Unicode format controls.
 
-Names contain 1–32 lowercase ASCII letters, digits, hyphens or underscores, starting with a letter. Windows device names are reserved on all platforms. Providers are exactly `claude` and `codex`. Profile list sorts by name and reports each home as `ok`, `missing` or `unsafe`. Unsafe or missing homes remain diagnosable and can be renamed or forgotten without reading their contents. `forget` requires `--yes` and never deletes a home.
+Names contain 1–32 lowercase ASCII letters, digits, hyphens or underscores, starting with a letter. `larp` and Windows device names are reserved on all platforms. Providers are exactly `claude` and `codex`. Profile list sorts by name and reports each home as `ok`, `missing` or `unsafe`. Unsafe or missing homes remain diagnosable and can be renamed or forgotten without reading their contents. `forget` requires `--yes` and never deletes a home.
 
-Help and version exit 0. Usage errors and rebinds missing `--replace` exit 2; local operational failures exit 1. Errors go to stderr. Reading a missing registry does not create it.
+Help and version exit 0. Usage errors and rebinds missing `--replace` exit 2; local operational failures exit 1. Human errors go to stderr. Reading a missing registry does not create it.
+
+`--json` is global before the child `--` separator. It emits exactly one schema-1
+[JSON envelope](docs/contracts/cli-v1.md) to stdout, with empty stderr and exit
+0/1/2. Errors contain fixed safe messages, without supplied values or raw OS
+errors. Help/version work without root IO. JSON run/login/logout refuse
+`json_native_io` before root IO; JSON status is local metadata only, with
+`native_auth: not_observed`. It never queries an account. Unsupported future
+commands remain parser errors.
+
+Registry commands accept `--expected-revision REV`. The registry lock protects
+comparison before name resolution or mutation effects; a stale revision returns
+`conflict`, preventing a stale name from selecting a newly created profile.
+Receipts contain the committed revision and affected immutable ID. Native closed
+gates take precedence. Help/version reject revision preconditions.
 
 The data root is non-empty `LARPCC_HOME`, otherwise:
 
@@ -40,7 +56,17 @@ The data root is non-empty `LARPCC_HOME`, otherwise:
 | macOS | `$HOME/Library/Application Support/larpcc` |
 | Windows | `%LOCALAPPDATA%\larpcc` |
 
-The root must be absolute with no `..` component, and its immediate parent must exist. Metadata comprises `registry.json`, `registry.lock`, transient `registry.json.tmp`, and `profiles/<id>`. Reads accept schema v1 unchanged. Every actual mutation writes schema v2, including bindings; older v1-only Larp binaries refuse v2. Failed operations and no-ops do not migrate or increment the revision. Complete serialized output is limited to 1 MiB.
+The root must be absolute with no `..` component, and its immediate parent must exist. Metadata comprises `registry.json`, `registry.lock`, transient `registry.json.tmp`,
+and `profiles/<id>/{cli,desktop}`. New roots use schema v3. CLI defaults on and
+desktop off; toggling a surface never qualifies native launch. JSON profile
+list/show include both surfaces, provider, lifecycle state, aliases and desktop
+binding slots. Alias commands and desktop binding/dispatch are not shipped.
+Existing v1/v2 registries remain readable without migration; mutations refuse
+`recovery_required`. Explicit migration, folder deletion and recovery are pending
+the next Stage04 slice. No old profile directory is automatically moved, copied
+or adopted. `forget` still retains the folder and refuses alias references or
+tombstones. Older binaries refuse v3. Failed operations and binding no-ops do not
+increment the revision. Registry and JSON envelopes are limited to 1 MiB.
 
 On Unix, managed objects require the current owner and no group/other access. Ancestors must be root/current-user owned without group/other write access, even for sticky directories such as `/tmp`. Files are created 0600 and directories 0700. macOS requires native extended-security support and a successful descriptor security query; an explicitly absent ACL property is accepted, while extended allow ACLs and query errors are refused without repair. The x86_64 ACL ABI branch is not native-qualified. Unsafe lock/temp objects block reads and writes; safe stale temp files are ignored by reads and removed only after successful write preflight. Provider directory contents are never inspected.
 

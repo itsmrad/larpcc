@@ -1,4 +1,6 @@
+mod json;
 mod render;
+use json::{execute_json, json_error, json_or_usage, json_success};
 
 use crate::launch::admission::{self, Operation};
 use crate::registry::{Error, ProfileName, Provider, Registry};
@@ -18,6 +20,12 @@ use std::{
     disable_help_subcommand = true
 )]
 struct Cli {
+    /// Emit one local metadata JSON envelope
+    #[arg(long, global = true)]
+    json: bool,
+    /// Refuse if the registry revision has changed
+    #[arg(long, global = true)]
+    expected_revision: Option<u64>,
     #[command(subcommand)]
     command: RootAction,
 }
@@ -56,7 +64,7 @@ enum CcAction {
     #[command(about = "Authenticate a profile", after_help = admission::AUTH_HELP)]
     Login {
         name: ProfileName,
-        #[arg(long)]
+        #[arg(long, help = "Confirm the authentication operation")]
         yes: bool,
     },
     #[command(about = "Show native authentication status", after_help = admission::AUTH_HELP)]
@@ -64,7 +72,7 @@ enum CcAction {
     #[command(about = "Log out a profile", after_help = admission::AUTH_HELP)]
     Logout {
         name: ProfileName,
-        #[arg(long)]
+        #[arg(long, help = "Confirm the authentication operation")]
         yes: bool,
     },
     #[command(
@@ -85,7 +93,7 @@ enum ProviderAction {
         #[arg(value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
         provider: Provider,
         executable: std::path::PathBuf,
-        #[arg(long)]
+        #[arg(long, help = "Replace an existing provider binding")]
         replace: bool,
     },
     #[command(about = "List provider bindings")]
@@ -94,6 +102,14 @@ enum ProviderAction {
 
 #[derive(Subcommand)]
 enum ProfileAction {
+    /// Enable or disable a profile surface (does not qualify native launch)
+    Surface {
+        name: ProfileName,
+        #[arg(value_parser = ["cli", "desktop"])]
+        surface: String,
+        #[arg(value_parser = ["on", "off"])]
+        enabled: String,
+    },
     /// Register a profile and create its empty state directory
     Add {
         /// Profile name: 1-32 characters from a-z, 0-9, '-', '_', starting with a letter
@@ -129,9 +145,47 @@ enum ProfileAction {
 use clap::builder::TypedValueParser;
 
 pub fn run() -> ExitCode {
-    let cli = match Cli::try_parse() {
+    let args: Vec<_> = std::env::args_os().collect();
+    let early_json = args
+        .iter()
+        .skip(1)
+        .take_while(|a| *a != "--")
+        .any(|a| a == "--json");
+    let expected_present = args.iter().skip(1).take_while(|a| *a != "--").any(|a| {
+        a == "--expected-revision"
+            || a.to_str()
+                .is_some_and(|s| s.starts_with("--expected-revision="))
+    });
+    let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(mut error) => {
+            use clap::error::ErrorKind;
+            let informational = matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            );
+            if informational && expected_present {
+                return json_or_usage(
+                    early_json,
+                    "parse",
+                    "usage",
+                    "Help and version do not accept a revision precondition.",
+                );
+            }
+            if early_json {
+                if informational {
+                    let (command, data) = if error.kind() == ErrorKind::DisplayVersion {
+                        (
+                            "version",
+                            serde_json::json!({"version":env!("CARGO_PKG_VERSION")}),
+                        )
+                    } else {
+                        ("help", serde_json::json!({"text":error.to_string()}))
+                    };
+                    return json_success(command, None, data);
+                }
+                return json_error("parse", "usage", "Invalid command or arguments.", 2);
+            }
             escape_error_values(&mut error);
             if !error.use_stderr() {
                 return write_output(
@@ -145,6 +199,10 @@ pub fn run() -> ExitCode {
         }
     };
     let RootAction::Cc { command } = cli.command;
+    if cli.json {
+        return execute_json(command, cli.expected_revision);
+    }
+    let expected = cli.expected_revision;
     let command = match command {
         CcAction::Run { name, args } => return operation(Operation::Run, name, args, false),
         CcAction::Login { name, yes } => return operation(Operation::Login, name, vec![], yes),
@@ -152,12 +210,13 @@ pub fn run() -> ExitCode {
         CcAction::Logout { name, yes } => return operation(Operation::Logout, name, vec![], yes),
         CcAction::Provider { command } => {
             return match Registry::locate().and_then(|r| match command {
-                ProviderAction::List => r.bindings().map(render::bindings),
+                ProviderAction::List => r.expecting(expected).bindings().map(render::bindings),
                 ProviderAction::Bind {
                     provider,
                     executable,
                     replace,
                 } => r
+                    .expecting(expected)
                     .bind(provider, executable.clone(), replace)
                     .map(|outcome| render::bound(provider, &executable, outcome)),
             }) {
@@ -172,7 +231,7 @@ pub fn run() -> ExitCode {
         CcAction::Profile { command } => command,
     };
     let registry = match Registry::locate() {
-        Ok(registry) => registry,
+        Ok(registry) => registry.expecting(expected),
         Err(error) => return operational_error(error),
     };
     // Confirmation is read-only, including when the selected profile is missing.
@@ -227,6 +286,22 @@ fn escape_error_values(error: &mut clap::Error) {
 
 fn execute(command: ProfileAction, registry: &Registry) -> Result<String, Error> {
     Ok(match command {
+        ProfileAction::Surface {
+            name,
+            surface,
+            enabled,
+        } => {
+            let entry = registry.surface(
+                name,
+                if surface == "cli" {
+                    crate::registry::Surface::Cli
+                } else {
+                    crate::registry::Surface::Desktop
+                },
+                enabled == "on",
+            )?;
+            render::show(&entry)
+        }
         ProfileAction::Add { name, provider } => render::added(&registry.add(name, provider)?),
         ProfileAction::List => render::list(registry.list()?),
         ProfileAction::Show { name } => render::show(&registry.get(&name)?),

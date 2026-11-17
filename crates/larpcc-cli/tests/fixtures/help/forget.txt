@@ -6,5 +6,7 @@ Arguments:
   <NAME>  Profile name
 
 Options:
-      --yes   Confirm removing the profile from the registry
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --yes                                    Confirm removing the profile from the registry
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

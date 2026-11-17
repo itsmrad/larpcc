@@ -1,12 +1,14 @@
 Launch a profile (qualification pending; disabled in this build)
 
-Usage: larp cc run <NAME> [-- <ARGS>...]
+Usage: larp cc run [OPTIONS] <NAME> [-- <ARGS>...]
 
 Arguments:
   <NAME>     
   [ARGS]...  
 
 Options:
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help
 
 Profiles select native state, not a verified account, model or endpoint. Native project, configuration and administrator policy still apply. Provider restrictions remain possible.

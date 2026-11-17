@@ -42,7 +42,7 @@ fn binders_serialize_and_noop_does_not_revalidate_or_increment() {
     let before = fs::read(f.root.join("registry.json")).unwrap();
     let data: serde_json::Value = serde_json::from_slice(&before).unwrap();
     assert_eq!(data["revision"], 1);
-    assert_eq!(data["version"], 2);
+    assert_eq!(data["version"], 3);
     fs::remove_file(&native).unwrap();
     assert_eq!(
         stdout(&f.run(&["cc", "provider", "bind", "claude", path], 0)),

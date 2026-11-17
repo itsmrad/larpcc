@@ -562,7 +562,7 @@ mod tests {
                     }
                 }
                 "home" => {
-                    let home = registry.root().join("profiles/1");
+                    let home = registry.root().join("profiles/1/cli");
                     std::fs::rename(&home, temp.path().join("old-home")).unwrap();
                     platform::create_directory(&home).unwrap();
                 }
@@ -610,7 +610,7 @@ mod tests {
             kind: ObjectKind::File,
             may_be_absent: true,
         }];
-        let private = registry.root().join("profiles/1/private");
+        let private = registry.root().join("profiles/1/cli/private");
         let name = "work".parse().unwrap();
         assert!(
             admit(
@@ -668,7 +668,7 @@ mod tests {
     fn native_socket_is_refused_without_connecting_or_treating_it_as_absent() {
         use std::os::unix::net::UnixListener;
         let (_temp, registry, mut row) = fixture();
-        let socket_path = registry.root().join("profiles/1/endpoint");
+        let socket_path = registry.root().join("profiles/1/cli/endpoint");
         let listener = UnixListener::bind(&socket_path).unwrap();
         listener.set_nonblocking(true).unwrap();
         for kind in [ObjectKind::File, ObjectKind::Directory] {
@@ -707,7 +707,7 @@ mod tests {
     fn unrelated_rows_close_before_selected_home_and_artifact_access() {
         use std::os::unix::fs::symlink;
         let (temp, registry, mut row) = fixture();
-        let home = registry.root().join("profiles/1");
+        let home = registry.root().join("profiles/1/cli");
         std::fs::remove_dir(&home).unwrap();
         symlink(temp.path().join("missing"), &home).unwrap();
         row.provider = Provider::Claude;

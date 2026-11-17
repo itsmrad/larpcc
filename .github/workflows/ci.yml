@@ -38,6 +38,7 @@ jobs:
         run: cargo +stable fmt --all -- --check
       - run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo +stable test --workspace --locked
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
       - if: runner.os == 'Windows'
         run: |
           cargo +stable test --bin larp --locked platform::windows::tests::w01_w03_existing_security_refuses_without_changing_contents_or_acl -- --exact --nocapture 2>&1 | Tee-Object -Variable cleanupEvidence
@@ -103,5 +104,6 @@ jobs:
       - run: python crates/larpcc-cli/tests/support/prepare_parent.py
       - run: rustup toolchain install 1.89 --profile minimal
       - run: cargo +1.89 test --workspace --locked
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
       - run: cargo +1.89 test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
       - run: cargo +1.89 test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked

@@ -118,6 +118,7 @@ fn p01_l01_four_homes_exact_wtf16_argv_cwd_and_unchanged_registry() {
                 .root
                 .join("profiles")
                 .join((index + 1).to_string())
+                .join("cli")
                 .as_os_str())
         );
         homes.insert(value[selected].as_str().unwrap().to_owned());
@@ -413,7 +414,7 @@ fn l07_bounded_grandchild_inherits_exact_selected_home() {
         assert_ne!(parent["pid"], grandchild["pid"]);
         assert_eq!(
             parent[selected],
-            hex(f.root.join("profiles").join(id).as_os_str())
+            hex(f.root.join("profiles").join(id).join("cli").as_os_str())
         );
         assert_eq!(grandchild[selected], parent[selected]);
         for key in [
@@ -583,7 +584,7 @@ fn stage3_all_operations_checked_hash_binary_io_u32_and_stable_private_locks() {
         ("claude", "claudea", "CLAUDE_CONFIG_DIR", "1"),
         ("codex", "codexa", "CODEX_HOME", "3"),
     ] {
-        let home = f.root.join("profiles").join(id);
+        let home = f.root.join("profiles").join(id).join("cli");
         let sentinel = home.join("invented-home-sentinel");
         create_file(&sentinel, b"synthetic home unchanged");
         let mut lock_id = None;

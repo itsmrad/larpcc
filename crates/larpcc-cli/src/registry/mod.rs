@@ -1,25 +1,51 @@
 pub mod display;
 mod error;
+mod json;
 mod model;
 mod paths;
 mod store;
 #[cfg(test)]
 mod tests;
 pub use error::{Error, NameError};
-pub use model::LaunchTarget;
 pub use model::{
     BindOutcome, Binding, BindingState, DirStatus, Profile, ProfileEntry, ProfileId, ProfileName,
     Provider,
 };
+pub use model::{LaunchTarget, ProfileState, Surface};
 use std::path::{Path, PathBuf};
 pub struct Registry {
     root: PathBuf,
+    expected: Option<u64>,
+    observed: std::cell::Cell<Option<u64>>,
 }
 impl Registry {
+    pub fn expecting(mut self, revision: Option<u64>) -> Self {
+        self.expected = revision;
+        self
+    }
+    pub fn surface(
+        &self,
+        name: ProfileName,
+        surface: Surface,
+        enabled: bool,
+    ) -> Result<ProfileEntry, Error> {
+        store::mutate_checked(
+            self.root(),
+            store::Mutation::Surface(name, surface, enabled),
+            std::time::Duration::from_secs(10),
+            self.expected,
+        )
+        .map(|(entry, revision)| {
+            self.observed.set(Some(revision));
+            entry
+        })
+    }
+
     pub fn bindings(&self) -> Result<Vec<(Provider, BindingState)>, Error> {
         let _ancestors = crate::platform::anchor(self.root())?.ancestors;
         let _fixed = store::fixed(self.root())?;
-        let data = store::load(self.root())?;
+        let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        self.observed.set(Some(data.revision));
         Ok(Provider::ALL
             .into_iter()
             .map(|provider| {
@@ -45,7 +71,10 @@ impl Registry {
             .collect())
     }
     pub fn bind(&self, p: Provider, exe: PathBuf, replace: bool) -> Result<BindOutcome, Error> {
-        store::bind(self.root(), p, exe, replace)
+        store::bind(self.root(), p, exe, replace, self.expected).map(|(outcome, revision)| {
+            self.observed.set(Some(revision));
+            outcome
+        })
     }
     pub(crate) fn launch_target(
         &self,
@@ -62,6 +91,7 @@ impl Registry {
         let mut held = store::fixed(self.root())?;
         held.extend(_ancestors);
         let data = store::load(self.root())?;
+        self.observed.set(Some(data.revision));
         let profile = data
             .profiles
             .iter()
@@ -70,6 +100,10 @@ impl Registry {
             .ok_or_else(|| Error::NotFound { name: name.clone() })?;
         if !candidate(profile.provider) {
             return Err(Error::QualificationPending);
+        }
+        store::require_v3(&data)?;
+        if profile.state != Some(ProfileState::Active) || !profile.surfaces.is_some_and(|s| s.cli) {
+            return Err(Error::RecoveryRequired);
         }
         let entries = paths::entries(self.root(), &data.profiles)?;
         for entry in &entries {
@@ -80,7 +114,11 @@ impl Registry {
                 });
             }
         }
-        let state_dir = self.root().join("profiles").join(profile.id.to_string());
+        let state_dir = self
+            .root()
+            .join("profiles")
+            .join(profile.id.to_string())
+            .join("cli");
         if !entries
             .iter()
             .any(|e| e.profile.id == profile.id && e.status == DirStatus::Ok)
@@ -92,6 +130,7 @@ impl Registry {
         }
         let mut homes = Vec::new();
         for entry in &entries {
+            held.extend(crate::platform::anchor(&entry.state_dir)?.ancestors);
             if let Some(object) =
                 crate::platform::inspect(&entry.state_dir, crate::platform::ObjectKind::Directory)?
             {
@@ -135,7 +174,12 @@ impl Registry {
         // Lexical components remove trailing separators/dots that hide a root symlink.
         Ok(Self {
             root: root.components().collect(),
+            expected: None,
+            observed: std::cell::Cell::new(None),
         })
+    }
+    pub fn revision(&self) -> Option<u64> {
+        self.observed.get()
     }
     pub fn root(&self) -> &Path {
         &self.root
@@ -143,7 +187,8 @@ impl Registry {
     pub fn list(&self) -> Result<Vec<ProfileEntry>, Error> {
         let _ancestors = crate::platform::anchor(self.root())?.ancestors;
         let _fixed = store::fixed(self.root())?;
-        let data = store::load(self.root())?;
+        let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        self.observed.set(Some(data.revision));
         let mut entries = paths::entries(&self.root, &data.profiles)?;
         entries.sort_by(|a, b| a.profile.name.cmp(&b.profile.name));
         Ok(entries)
@@ -155,24 +200,39 @@ impl Registry {
             .ok_or_else(|| Error::NotFound { name: name.clone() })
     }
     pub fn add(&self, name: ProfileName, provider: Provider) -> Result<ProfileEntry, Error> {
-        store::mutate(
+        store::mutate_checked(
             self.root(),
             store::Mutation::Add(name, provider),
             std::time::Duration::from_secs(10),
+            self.expected,
         )
+        .map(|(entry, revision)| {
+            self.observed.set(Some(revision));
+            entry
+        })
     }
     pub fn rename(&self, from: &ProfileName, to: ProfileName) -> Result<ProfileEntry, Error> {
-        store::mutate(
+        store::mutate_checked(
             self.root(),
             store::Mutation::Rename(from.clone(), to),
             std::time::Duration::from_secs(10),
+            self.expected,
         )
+        .map(|(entry, revision)| {
+            self.observed.set(Some(revision));
+            entry
+        })
     }
     pub fn forget(&self, name: &ProfileName) -> Result<ProfileEntry, Error> {
-        store::mutate(
+        store::mutate_checked(
             self.root(),
             store::Mutation::Forget(name.clone()),
             std::time::Duration::from_secs(10),
+            self.expected,
         )
+        .map(|(entry, revision)| {
+            self.observed.set(Some(revision));
+            entry
+        })
     }
 }

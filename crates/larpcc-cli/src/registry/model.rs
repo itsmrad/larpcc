@@ -62,7 +62,7 @@ impl ProfileName {
         {
             return Err(NameError::Invalid { input: s.into() });
         }
-        if matches!(s, "con" | "prn" | "aux" | "nul")
+        if matches!(s, "con" | "prn" | "aux" | "nul" | "larp")
             || (s.len() == 4
                 && (s.starts_with("com") || s.starts_with("lpt"))
                 && matches!(s.as_bytes()[3], b'1'..=b'9'))
@@ -97,6 +97,52 @@ pub struct Profile {
     pub id: ProfileId,
     pub name: ProfileName,
     pub provider: Provider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surfaces: Option<Surfaces>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<ProfileState>,
+    #[serde(default)]
+    pub deletion_transaction: Option<String>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Surfaces {
+    pub cli: bool,
+    pub desktop: bool,
+}
+impl Default for Surfaces {
+    fn default() -> Self {
+        Self {
+            cli: true,
+            desktop: false,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfileState {
+    Active,
+    Deleting,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Surface {
+    Cli,
+    Desktop,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Alias {
+    pub name: ProfileName,
+    pub profile_id: ProfileId,
+    pub surface: Surface,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopBinding {
+    pub provider: Provider,
+    pub path: PathBuf,
+    pub recorded_version: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DirStatus {
