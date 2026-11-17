@@ -1,4 +1,11 @@
 #![allow(dead_code, unused_imports)]
+#![cfg_attr(
+    windows,
+    allow(
+        clippy::duplicate_mod,
+        reason = "Existing platform unit tests and integration fixtures each own the Windows private ACL fixture"
+    )
+)]
 mod common;
 #[path = "../src/desktop/mod.rs"]
 mod desktop;

@@ -124,6 +124,12 @@ pub(crate) struct ValidatedDesktopTarget {
     app: CheckedApp,
 }
 impl ValidatedDesktopTarget {
+    pub(crate) fn snapshot(&self) -> &CheckedSnapshot {
+        &self.snapshot
+    }
+    pub(crate) fn binding_path(&self) -> &Path {
+        self.app.path()
+    }
     pub(crate) fn from_checked(snapshot: CheckedSnapshot, app: CheckedApp) -> Result<Self, Error> {
         let target = Self { snapshot, app };
         target.recheck()?;
