@@ -236,6 +236,7 @@ impl Package {
     }
 }
 
+#[cfg(any(unix, test))]
 fn absent(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
