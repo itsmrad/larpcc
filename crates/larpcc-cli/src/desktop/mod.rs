@@ -14,11 +14,6 @@ pub(crate) struct DesktopReceipt {
     pub native_auth: &'static str,
 }
 
-/// Call before root lookup, environment enumeration, or binding inspection.
-pub(crate) fn open() -> Result<DesktopReceipt, Error> {
-    Err(Error::QualificationPending)
-}
-
 pub(crate) struct CheckedApp {
     path: PathBuf,
     ancestry: AnchoredPath,
@@ -60,13 +55,6 @@ pub(crate) enum Activity {
     Inactive,
     KnownActive,
     Unknown(InspectionCode),
-}
-
-/// Use under the per-ID lifecycle guard. Unknown must block deletion/recovery.
-/// No argv/environment/auth data is inspected by this conservative native boundary.
-pub(crate) fn activity_check() -> Activity {
-    // KERN_PROCARGS2 also returns environment bytes; do not read it then discard secrets.
-    Activity::Unknown(InspectionCode::Unavailable)
 }
 
 /// CORE supplies these paths and handles from ONE locked, checked v3 snapshot.

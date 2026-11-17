@@ -21,8 +21,9 @@ use desktop::{synthetic::*, *};
 use std::{ffi::OsString, path::PathBuf};
 
 struct Fixture {
-    base: common::Fixture,
+    // Retained Windows handles must close before TempDir removes the fixture.
     target: ValidatedDesktopTarget,
+    base: common::Fixture,
 }
 impl Fixture {
     fn new(provider: registry::Provider) -> Self {
@@ -130,11 +131,8 @@ fn dispatch_ok(
     )
 }
 #[test]
-fn desktop_closed_admission_and_binding_before_effects() {
-    assert!(matches!(
-        desktop::open(),
-        Err(registry::Error::QualificationPending)
-    ));
+fn desktop_unsupported_admission_and_binding_before_effects() {
+    assert_eq!(preflight().is_ok(), cfg!(target_os = "macos"));
     for p in registry::Provider::ALL {
         for path in [
             "relative.app",
@@ -144,10 +142,6 @@ fn desktop_closed_admission_and_binding_before_effects() {
             assert!(desktop::validate_binding(p, std::path::Path::new(path)).is_err());
         }
     }
-    assert_eq!(
-        activity_check(),
-        Activity::Unknown(InspectionCode::Unavailable)
-    );
 }
 #[test]
 fn desktop_synthetic_launch_focus_receipt_and_environment_names() {
