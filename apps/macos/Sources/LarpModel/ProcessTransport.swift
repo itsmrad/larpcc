@@ -38,17 +38,8 @@ private struct FileIdentity: Equatable, Sendable {
         let allowed: [[UInt8]] = [[0xcf,0xfa,0xed,0xfe], [0xce,0xfa,0xed,0xfe], [0xca,0xfe,0xba,0xbe], [0xca,0xfe,0xba,0xbf]]
         guard allowed.contains(Array(magic)) else { throw ClientError.invalidExecutable }
         try file.seek(toOffset: 0)
-        var hash = SHA256(), tail = Data()
-        let markers = ["Named Claude Code and Codex account profiles", "Manage profile records (no login, no provider launch)"].map { Data($0.utf8) }
-        var found = [false, false]
-        while let bytes = try file.read(upToCount: 65_536), !bytes.isEmpty {
-            hash.update(data: bytes)
-            let window = tail + bytes
-            for index in markers.indices where window.range(of: markers[index]) != nil { found[index] = true }
-            tail = Data(window.suffix(128))
-        }
-        // Identify Larp statically before any Process invocation, including help.
-        guard found.allSatisfy({ $0 }) else { throw ClientError.invalidExecutable }
+        var hash = SHA256()
+        while let bytes = try file.read(upToCount: 65_536), !bytes.isEmpty { hash.update(data: bytes) }
         digest = Data(hash.finalize())
         device = dev.uint64Value; inode = ino.uint64Value; self.size = size.uint64Value; modified = date; changed = created
     }
