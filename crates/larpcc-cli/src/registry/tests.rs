@@ -1336,7 +1336,7 @@ fn stage09_desktop_recheck_revision_binding_surface_and_pending_gate() {
     r.add(name("codex-45"), Provider::Codex).unwrap();
     r.surface(name("codex-45"), Surface::Desktop, true).unwrap();
     let mut data = store::load(r.root()).unwrap();
-    let binding = PathBuf::from("/Applications/ChatGPT.app");
+    let binding = r.root().parent().unwrap().join("ChatGPT.app");
     data.desktop_bindings.push(model::DesktopBinding {
         provider: Provider::Codex,
         path: binding.clone(),
@@ -1363,7 +1363,7 @@ fn stage09_desktop_recheck_revision_binding_surface_and_pending_gate() {
     };
     r.recheck_desktop(&snapshot, &binding).unwrap();
     assert!(matches!(
-        r.recheck_desktop(&snapshot, Path::new("/wrong")),
+        r.recheck_desktop(&snapshot, &r.root().parent().unwrap().join("wrong.app")),
         Err(Error::AdmissionChanged)
     ));
     crate::platform::create_file(&r.root().join("share-journal.json")).unwrap();
