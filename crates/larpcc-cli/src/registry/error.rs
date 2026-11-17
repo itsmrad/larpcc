@@ -7,6 +7,11 @@ use std::{fmt, io, path::PathBuf};
 )]
 pub enum Error {
     Conflict,
+    Drift,
+    SkillNotFound,
+    AliasNotFound,
+    /// Alias launcher, receipt or mapping ownership cannot be established.
+    AliasInvalid,
     RecoveryRequired,
     ManagedMode {
         path: PathBuf,
@@ -92,6 +97,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Drift => f.write_str("owned skills content or filesystem identity has drifted"),
+            Self::SkillNotFound => f.write_str("skill was not found"),
+            Self::AliasNotFound => f.write_str("alias was not found"),
+            Self::AliasInvalid => {
+                f.write_str("alias launcher, receipt or mapping cannot be verified")
+            }
             Self::Conflict => f.write_str("registry revision or references conflict"),
             Self::RecoveryRequired => {
                 f.write_str("explicit profile migration or recovery is required")
@@ -249,6 +260,8 @@ impl Error {
             ),
             Self::NewerSchema { .. } => "upgrade Larp CC; the file was not modified".into(),
             Self::NotFound { .. } => "run 'larp cc profile list'".into(),
+            Self::AliasNotFound => "run 'larp cc alias list'".into(),
+            Self::AliasInvalid => "run the standard larp command; reinstall the alias with 'larp cc alias remove' and 'larp cc alias add' if it is reported as drifted or incompatible".into(),
             Self::Busy { .. } => "retry when the other command finishes".into(),
             Self::TooLarge => "forget unused profiles or use a separate data root".into(),
             Self::Io {

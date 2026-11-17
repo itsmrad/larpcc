@@ -8,7 +8,8 @@ pub enum ObjectKind {
     Directory,
     File,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum FileIdentity {
     #[cfg(unix)]
     Unix { dev: u64, ino: u64 },
@@ -81,6 +82,11 @@ pub(crate) fn inspect_replaceable(path: &Path) -> Result<Option<CheckedObject>, 
 #[cfg(windows)]
 pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
     windows::open_artifact_checked(path, root)
+}
+
+#[cfg(windows)]
+pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, PathBuf), Error> {
+    windows::open_current_larp_checked(root)
 }
 
 #[cfg(windows)]

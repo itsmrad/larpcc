@@ -1,9 +1,14 @@
+mod alias;
+mod desktop;
 pub mod display;
 mod error;
 mod json;
 mod model;
 mod paths;
+mod skills;
 mod store;
+#[allow(unused_imports)]
+pub use skills::SkillsAction;
 #[cfg(test)]
 mod tests;
 pub use error::{Error, NameError};

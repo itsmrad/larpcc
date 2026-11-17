@@ -274,7 +274,8 @@ fn stage04_tombstone_and_alias_reference_refusals() {
     );
     let path = f.root.join("registry.json");
     let mut v: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    v["aliases"] = json!([{"name":"codex-45","profile_id":1,"surface":"cli"}]);
+    v["aliases"] =
+        json!([{"name":"codex-45","profile_id":1,"surface":"cli","receipt":"0".repeat(64)}]);
     fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
     assert_eq!(
         request(

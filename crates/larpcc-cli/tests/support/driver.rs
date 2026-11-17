@@ -1,5 +1,11 @@
+#[path = "../../src/aliases.rs"]
+#[allow(dead_code)]
+mod aliases;
 #[path = "../../src/cli/mod.rs"]
 mod cli;
+#[path = "../../src/desktop/mod.rs"]
+#[allow(dead_code)]
+mod desktop;
 #[path = "../../src/launch/mod.rs"]
 mod launch;
 #[path = "../../src/launch/legacy.rs"]
@@ -13,6 +19,8 @@ mod platform;
 mod provider;
 #[path = "../../src/registry/mod.rs"]
 mod registry;
+#[path = "../../src/share/mod.rs"]
+mod share;
 use clap::{Parser, Subcommand};
 use std::{
     ffi::OsString,

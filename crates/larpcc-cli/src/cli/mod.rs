@@ -1,5 +1,8 @@
+mod alias;
 mod json;
 mod render;
+#[allow(unused_imports, reason = "the synthetic driver has its own entrypoint")]
+pub use alias::gate;
 use json::{execute_json, json_error, json_or_usage, json_success};
 
 use crate::launch::admission::{self, Operation};
@@ -56,6 +59,18 @@ enum RootAction {
 
 #[derive(Subcommand)]
 enum CcAction {
+    /// Bind or open a verified desktop app (ChatGPT on macOS; Claude closed)
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    App {
+        #[command(subcommand)]
+        command: AppCommand,
+    },
+    /// Manage explicit skill packages and per-profile sharing
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
     #[command(
         about = "Manage native provider bindings",
         arg_required_else_help = true,
@@ -94,6 +109,155 @@ enum CcAction {
         #[command(subcommand)]
         command: ProfileAction,
     },
+    /// Manage root-bound alias commands (no PATH or shell edits)
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    Alias {
+        #[command(subcommand)]
+        command: AliasCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AliasCommand {
+    /// Install a Larp copy in the data directory's bin folder that launches PROFILE
+    Add {
+        /// Alias command name (profile-name grammar; `larp` and device names are reserved)
+        #[arg(value_parser = ProfileName::parse_new)]
+        name: ProfileName,
+        /// Target profile; the alias follows its ID across renames
+        profile: ProfileName,
+        /// Open the profile's desktop app instead of running its CLI
+        #[arg(long)]
+        desktop: bool,
+        /// Required for the names claude and codex; never overwrites an existing file
+        #[arg(long)]
+        shadow: bool,
+    },
+    /// List aliases
+    List,
+    /// Remove an alias after verifying its launcher and receipt
+    Remove {
+        /// Alias name
+        name: ProfileName,
+    },
+}
+impl AliasCommand {
+    fn command(&self) -> &'static str {
+        match self {
+            Self::Add { .. } => "alias.add",
+            Self::List => "alias.list",
+            Self::Remove { .. } => "alias.remove",
+        }
+    }
+    // Usage refusals precede every registry effect.
+    fn usage(&self) -> Option<&'static str> {
+        match self {
+            Self::Add {
+                name,
+                shadow: false,
+                ..
+            } if crate::aliases::shadow_required(name) => {
+                Some("Aliases named claude or codex require --shadow.")
+            }
+            _ => None,
+        }
+    }
+    fn execute(self, r: &Registry) -> Result<serde_json::Value, Error> {
+        match self {
+            Self::Add {
+                name,
+                profile,
+                desktop,
+                shadow,
+            } => {
+                // An explicit shadow intends to precede a same-named command on PATH.
+                let search_path = if shadow {
+                    None
+                } else {
+                    std::env::var_os("PATH")
+                };
+                r.alias_add(
+                    name,
+                    &profile,
+                    if desktop {
+                        crate::registry::Surface::Desktop
+                    } else {
+                        crate::registry::Surface::Cli
+                    },
+                    search_path.as_deref(),
+                )
+            }
+            Self::List => r.alias_list(),
+            Self::Remove { name } => r.alias_remove(&name),
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum AppCommand {
+    Bind {
+        #[arg(value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
+        provider: Provider,
+        path: std::path::PathBuf,
+        #[arg(long = "version")]
+        recorded_version: Option<String>,
+        #[arg(long)]
+        replace: bool,
+    },
+    Open {
+        name: ProfileName,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+enum SkillsCommand {
+    /// Copy one explicit package into the immutable managed store
+    Add {
+        path: std::path::PathBuf,
+        #[arg(long, value_parser=ProfileName::parse_new)]
+        name: ProfileName,
+    },
+    /// Remove a package after disabling all profile references
+    Remove {
+        name: ProfileName,
+    },
+    Enable {
+        name: ProfileName,
+        profile: ProfileName,
+    },
+    Disable {
+        name: ProfileName,
+        profile: ProfileName,
+    },
+    List,
+    Matrix,
+    /// Apply sharing changes or explicitly resume an interrupted transaction
+    Sync,
+}
+impl SkillsCommand {
+    fn action(&self) -> crate::registry::SkillsAction {
+        self.clone().into_action()
+    }
+    fn into_action(self) -> crate::registry::SkillsAction {
+        use crate::registry::SkillsAction as A;
+        match self {
+            Self::Add { path, name } => A::Add { source: path, name },
+            Self::Remove { name } => A::Remove { name },
+            Self::Enable { name, profile } => A::Switch {
+                name,
+                profile,
+                enabled: true,
+            },
+            Self::Disable { name, profile } => A::Switch {
+                name,
+                profile,
+                enabled: false,
+            },
+            Self::List => A::List,
+            Self::Matrix => A::Matrix,
+            Self::Sync => A::Sync,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -216,6 +380,46 @@ pub fn run() -> ExitCode {
     }
     let expected = cli.expected_revision;
     let command = match command {
+        CcAction::App { command } => {
+            if let Err(e) = crate::desktop::preflight() {
+                return operational_error(e);
+            }
+            return match Registry::locate().and_then(|r| {
+                let r = r.expecting(expected);
+                match command {
+                    AppCommand::Bind {
+                        provider,
+                        path,
+                        recorded_version,
+                        replace,
+                    } => r
+                        .bind_desktop(provider, path, recorded_version, replace)
+                        .map(|_| "Desktop binding saved.\n".to_owned()),
+                    AppCommand::Open { name } => r
+                        .open_desktop(&name, false)
+                        .map(|receipt| format!("Desktop {}.\n", receipt.outcome)),
+                }
+            }) {
+                Ok(output) => write_output(
+                    output.as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(e) => operational_error(e),
+            };
+        }
+        CcAction::Skills { command } => {
+            return match Registry::locate()
+                .and_then(|r| r.expecting(expected).skills(command.into_action()))
+            {
+                Ok(data) => write_output(
+                    format!("{}\n", data).as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
         CcAction::Run { name, args } => return operation(Operation::Run, name, args, false),
         CcAction::Login { name, yes } => return operation(Operation::Login, name, vec![], yes),
         CcAction::Status { name } => return operation(Operation::Status, name, vec![], true),
@@ -231,6 +435,25 @@ pub fn run() -> ExitCode {
                     .expecting(expected)
                     .bind(provider, executable.clone(), replace)
                     .map(|outcome| render::bound(provider, &executable, outcome)),
+            }) {
+                Ok(output) => write_output(
+                    output.as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
+        CcAction::Alias { command } => {
+            if let Some(message) = command.usage() {
+                return json_or_usage(false, command.command(), "usage", message);
+            }
+            let add = matches!(command, AliasCommand::Add { .. });
+            return match Registry::locate().and_then(|r| {
+                let r = r.expecting(expected);
+                command
+                    .execute(&r)
+                    .map(|data| render::alias(r.root(), add, &data))
             }) {
                 Ok(output) => write_output(
                     output.as_bytes(),
@@ -324,7 +547,7 @@ fn execute(command: ProfileAction, registry: &Registry) -> Result<String, Error>
     })
 }
 
-fn operational_error(error: Error) -> ExitCode {
+pub(super) fn operational_error(error: Error) -> ExitCode {
     let mut stderr = io::stderr().lock();
     let _ = writeln!(
         stderr,

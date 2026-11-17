@@ -585,12 +585,23 @@ fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> io::Result<bool> {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Own {
+    /// Provider bindings: the running Larp image is never a provider.
+    Reject,
+    /// Alias source only: exactly the running Larp image.
+    Require,
+}
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
-    let (target, checked) = executable_checked(path, root)?;
+    let (target, checked) = executable_checked(path, root, Own::Reject)?;
     Ok((target, checked.identity))
 }
 
-fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObject), Error> {
+fn executable_checked(
+    path: &Path,
+    root: &Path,
+    own: Own,
+) -> Result<(PathBuf, CheckedObject), Error> {
     use std::io::Read;
     let _parents = anchor(path)?;
     let file = open(
@@ -676,13 +687,16 @@ fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObjec
     {
         return Err(unsafe_path(path, "filesystem identity cannot be verified"));
     }
-    if checked.identity
+    let own_image = checked.identity
         == (FileIdentity::Windows {
             volume: id.VolumeSerialNumber,
             id: id.FileId.Identifier,
-        })
-    {
+        });
+    if own == Own::Reject && own_image {
         return Err(unsafe_path(path, "is Larp CC itself"));
+    }
+    if own == Own::Require && !own_image {
+        return Err(unsafe_path(path, "is not the running Larp CC executable"));
     }
     Ok((target, checked))
 }
@@ -693,8 +707,23 @@ pub(crate) fn open_artifact_checked(
     path: &Path,
     root: &Path,
 ) -> Result<(File, FileIdentity), Error> {
+    open_artifact_policy(path, root, Own::Reject)
+}
+/// Alias source: the same trusted executable pipeline, accepting only the running Larp image.
+pub(crate) fn open_current_larp_checked(
+    root: &Path,
+) -> Result<(File, FileIdentity, PathBuf), Error> {
+    let path = std::env::current_exe().map_err(|source| Error::Io {
+        action: "locate current executable",
+        path: root.into(),
+        source,
+    })?;
+    let (file, identity) = open_artifact_policy(&path, root, Own::Require)?;
+    Ok((file, identity, path))
+}
+fn open_artifact_policy(path: &Path, root: &Path, own: Own) -> Result<(File, FileIdentity), Error> {
     use std::io::{Seek, SeekFrom};
-    let (_, mut checked) = executable_checked(path, root)?;
+    let (_, mut checked) = executable_checked(path, root, own)?;
     single_link_info(&checked.file, path)?;
     checked
         .file
@@ -751,6 +780,109 @@ pub(crate) fn open_auth_lock_checked(path: &Path) -> Result<CheckedObject, Error
 
 #[cfg(test)]
 use super::fixture_private;
+
+pub(crate) fn single_link(file: &File) -> Result<(), Error> {
+    single_link_info(file, Path::new("skills")).map(|_| ())
+}
+/// Reuse the executable trusted-read ACL policy without executable qualification.
+pub(crate) fn read_skill_object(
+    path: &Path,
+    kind: ObjectKind,
+    source: bool,
+) -> Result<CheckedObject, Error> {
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(unsafe_path(path, "is missing"));
+    }
+    let file = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    .ok_or_else(|| unsafe_path(path, "is missing"))?;
+    verify(
+        file,
+        path,
+        kind,
+        if source {
+            Policy::Executable
+        } else {
+            Policy::Managed
+        },
+    )
+}
+
+/// Parents remain pinned without delete sharing through the delete-by-handle call.
+pub(crate) fn remove_skill_leaf(
+    path: &Path,
+    expected: &FileIdentity,
+    kind: ObjectKind,
+) -> Result<(), Error> {
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(unsafe_path(path, "is missing"));
+    }
+    let file = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    .ok_or_else(|| unsafe_path(path, "is missing"))?;
+    let checked = verify(file, path, kind, Policy::Managed)?;
+    if &checked.identity != expected {
+        return Err(unsafe_path(path, "filesystem identity changed"));
+    }
+    if kind == ObjectKind::File {
+        single_link(&checked.file)?;
+    }
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: live checked handle, exact initialized input structure and size.
+    if unsafe {
+        SetFileInformationByHandle(
+            checked.file.as_raw_handle(),
+            FileDispositionInfo,
+            (&info as *const FILE_DISPOSITION_INFO).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io_path(path, "remove owned skill object"));
+    }
+    Ok(())
+}
+
+pub(crate) fn append_skill_file(
+    path: &Path,
+    expected: &FileIdentity,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    use std::io::{Seek, SeekFrom, Write};
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(unsafe_path(path, "is missing"));
+    }
+    let file = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_WRITE_DATA,
+        FILE_SHARE_READ,
+    )?
+    .ok_or_else(|| unsafe_path(path, "is missing"))?;
+    let mut checked = verify(file, path, ObjectKind::File, Policy::Managed)?;
+    if &checked.identity != expected {
+        return Err(unsafe_path(path, "filesystem identity changed"));
+    }
+    single_link(&checked.file)?;
+    checked
+        .file
+        .seek(SeekFrom::End(0))
+        .and_then(|_| checked.file.write_all(bytes))
+        .and_then(|_| checked.file.sync_all())
+        .map_err(|source| Error::Io {
+            action: "write skill file",
+            path: path.into(),
+            source,
+        })
+}
 
 #[cfg(test)]
 mod tests {

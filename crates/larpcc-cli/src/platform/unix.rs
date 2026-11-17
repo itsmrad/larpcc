@@ -277,7 +277,31 @@ pub fn create_directory(path: &Path) -> Result<CheckedObject, Error> {
     }
     result
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Own {
+    /// Provider bindings: the running Larp image is never a provider.
+    Reject,
+    /// Alias source only: exactly the running Larp image.
+    Require,
+}
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
+    executable_policy(path, root, Own::Reject)
+}
+// The running image, not whatever now occupies its path, defines self.
+fn running_identity(path: &Path) -> Result<FileIdentity, Error> {
+    #[cfg(target_os = "linux")]
+    let current = fs::File::open("/proc/self/exe");
+    #[cfg(not(target_os = "linux"))]
+    let current =
+        fs::File::open(std::env::current_exe().map_err(|e| io_error("inspect", path, e))?);
+    let current = current.map_err(|e| io_error("open", path, e))?;
+    Ok(identity(
+        &current
+            .metadata()
+            .map_err(|e| io_error("inspect", path, e))?,
+    ))
+}
+fn executable_policy(path: &Path, root: &Path, own: Own) -> Result<(PathBuf, FileIdentity), Error> {
     let invalid = |reason: &str| unsafe_path(path, reason);
     let mut handles = Vec::new();
     let resolved = resolve(path, &mut 0, &mut handles)?;
@@ -322,16 +346,12 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
     if count != 4 || !native {
         return Err(invalid("is not a native executable"));
     }
-    let current =
-        fs::File::open(std::env::current_exe().map_err(|e| io_error("inspect", path, e))?)
-            .map_err(|e| io_error("open", path, e))?;
-    if identity(
-        &current
-            .metadata()
-            .map_err(|e| io_error("inspect", path, e))?,
-    ) == identity(&opened)
-    {
+    let own_image = running_identity(path)? == identity(&opened);
+    if own == Own::Reject && own_image {
         return Err(invalid("is Larp CC itself"));
+    }
+    if own == Own::Require && !own_image {
+        return Err(invalid("is not the running Larp CC executable"));
     }
     Ok((resolved, identity(&opened)))
 }
@@ -458,7 +478,16 @@ pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error> {
 }
 
 pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
-    let (resolved, expected) = executable(path, root)?;
+    open_artifact_policy(path, root, Own::Reject)
+}
+/// Alias source: the same trusted executable pipeline, accepting only the running Larp image.
+pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, PathBuf), Error> {
+    let path = std::env::current_exe().map_err(|e| io_error("inspect", root, e))?;
+    let (file, identity) = open_artifact_policy(&path, root, Own::Require)?;
+    Ok((file, identity, path))
+}
+fn open_artifact_policy(path: &Path, root: &Path, own: Own) -> Result<(File, FileIdentity), Error> {
+    let (resolved, expected) = executable_policy(path, root, own)?;
     let file = open(&resolved, ObjectKind::File, false)?;
     let meta = file.metadata().map_err(|e| io_error("inspect", path, e))?;
     trusted(&resolved, &meta)?;
@@ -834,6 +863,50 @@ pub(crate) fn terminate_by_signal(signal: i32) -> Result<u32, Error> {
             io::Error::last_os_error()
         },
     })
+}
+
+/// Read an explicitly selected package, permitting trusted 0755/0644 sources.
+pub(crate) fn read_skill_object(
+    path: &Path,
+    kind: ObjectKind,
+    source: bool,
+) -> Result<CheckedObject, Error> {
+    if !source {
+        return inspect(path, kind)?.ok_or_else(|| unsafe_path(path, "is missing"));
+    }
+    let file = open(path, kind, false)?;
+    let meta = file.metadata().map_err(|e| io_error("inspect", path, e))?;
+    if (kind == ObjectKind::Directory && !meta.is_dir())
+        || (kind == ObjectKind::File && !meta.is_file())
+    {
+        return Err(unsafe_path(path, "is not a regular package object"));
+    }
+    trusted(path, &meta)?;
+    acl_file(&file, path)?;
+    Ok(CheckedObject {
+        file,
+        identity: identity(&meta),
+    })
+}
+
+pub(crate) fn append_skill_file(
+    path: &Path,
+    expected: &FileIdentity,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    use std::io::{Seek, SeekFrom, Write};
+    let file = open(path, ObjectKind::File, true)?;
+    let mut checked = verify_opened(file, path, ObjectKind::File)?;
+    if &checked.identity != expected {
+        return Err(unsafe_path(path, "filesystem identity changed"));
+    }
+    single_link(&checked.file)?;
+    checked
+        .file
+        .seek(SeekFrom::End(0))
+        .and_then(|_| checked.file.write_all(bytes))
+        .and_then(|_| checked.file.sync_all())
+        .map_err(|e| io_error("write skill file", path, e))
 }
 
 #[cfg(test)]
