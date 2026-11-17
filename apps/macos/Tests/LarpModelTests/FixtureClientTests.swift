@@ -36,7 +36,7 @@ final class FixtureClientTests: XCTestCase {
             do {
                 _ = try await client.perform(.open(profileID: "1", surface: surface))
                 XCTFail("Launch must refuse")
-            } catch ClientError.qualificationPending {} 
+            } catch ClientError.qualificationPending {}
         }
         do {
             _ = try await client.perform(.setSurface(profileID: "999", surface: .cli, enabled: true))
