@@ -53,8 +53,7 @@ open dist/LarpCC.app --args --appearance=light
 # Quit before relaunching with --appearance=dark.
 ```
 
-The unsigned bundle includes SwiftPM's schema resource bundle beside the
-executable. No signing, notarization, installation or artifact publishing is
+The unsigned bundle includes SwiftPM's schema resource bundle at the app root. No signing, notarization, installation or artifact publishing is
 included. The dedicated macOS workflow runs synthetic tests and release bundling.
 Native manual validation still covers keyboard/VoiceOver, selection, search,
 matrix scrolling, cancellation, delete wording, and light/dark appearance.

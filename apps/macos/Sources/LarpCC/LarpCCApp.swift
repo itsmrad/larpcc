@@ -4,6 +4,12 @@ import LarpModel
 @main
 struct LarpCCApp: App {
     @StateObject private var store = AppStore(client: FixtureLarpClient())
+    init() {
+        if CommandLine.arguments.contains("--validate-contract-resource") {
+            do { try ProcessLarpClient.validateBundledContract(); exit(0) }
+            catch { exit(1) }
+        }
+    }
     private var sampleAppearance: ColorScheme? {
         if CommandLine.arguments.contains("--appearance=dark") { return .dark }
         if CommandLine.arguments.contains("--appearance=light") { return .light }

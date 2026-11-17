@@ -170,7 +170,7 @@ struct SettingsView: View {
                     ProviderGlyph(provider: profile.provider, size: 48)
                     heading(profile.name, subtitle: "\(profile.provider.rawValue) · authentication unknown")
                     Spacer(minLength: 12)
-                    Button { Task { await store.refresh() } } label: {
+                    Button { store.startRefresh() } label: {
                         Image(systemName: "arrow.clockwise")
                     }.help("Refresh local metadata").accessibilityLabel("Refresh profile")
                     Toggle("CLI enabled", isOn: surfaceBinding(profile, .cli))

@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'apps/macos/**'
+      - 'docs/contracts/**'
       - '.github/workflows/macos-app.yml'
   push:
     branches: [main]
     paths:
       - 'apps/macos/**'
+      - 'docs/contracts/**'
       - '.github/workflows/macos-app.yml'
   workflow_dispatch:
 

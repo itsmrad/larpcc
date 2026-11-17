@@ -5,6 +5,11 @@ public actor ProcessLarpClient: LarpClient {
     private var displayed: Snapshot?
     private var generation = 0
     private var verified = false
+    // Packaging smoke check, without CLI execution or provider access.
+    public static func validateBundledContract() throws {
+        let bytes = Data(#"{"schema":1,"command":"version","ok":true,"revision":null,"data":{"version":"0.1.0"}}"#.utf8) + Data([10])
+        _ = try CLIContract.decode(bytes, exit: 0)
+    }
     public init(selected: SelectedLarp) { transport = ProcessTransport(selected: selected) }
     init(transport: any CLITransport) { self.transport = transport }
 
