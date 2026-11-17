@@ -13,15 +13,36 @@ struct LarpCCApp: App {
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
-                .frame(minWidth: 760, minHeight: 520)
-                .onAppear { FixtureSnapshot.runIfRequested(isSample: store.isFixture) }
+                .frame(minWidth: 680, minHeight: 480)
+                .onAppear {
+                    fitWindowOnScreen()
+                    FixtureSnapshot.runIfRequested(isSample: store.isFixture)
+                }
         }
         .defaultSize(width: 900, height: 680)
+        .defaultPosition(.center)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 OpenSettingsWindow()
             }
+        }
+    }
+}
+
+/// Keeps the window fully on the screen it opens on, in case a restored or
+/// default frame lands partly off-screen (e.g. after a display change).
+@MainActor private func fitWindowOnScreen() {
+    DispatchQueue.main.async {
+        for window in NSApp.windows where window.isVisible && window.styleMask.contains(.titled) {
+            guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame,
+                  !visible.contains(window.frame) else { continue }
+            var frame = window.frame
+            frame.size.width = min(frame.width, visible.width)
+            frame.size.height = min(frame.height, visible.height)
+            frame.origin.x = visible.midX - frame.width / 2
+            frame.origin.y = visible.midY - frame.height / 2
+            window.setFrame(frame, display: true)
         }
     }
 }

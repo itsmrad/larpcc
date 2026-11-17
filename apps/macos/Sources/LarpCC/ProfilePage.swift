@@ -49,6 +49,7 @@ struct ProfilePage: View {
                     .disabled(!profile.desktopEnabled)
                     Spacer()
                     Button("Delete…", role: .destructive) { confirmingDelete = true }
+                        .foregroundStyle(.red)
                 }
                 .labelStyle(.titleAndIcon)
             } footer: {

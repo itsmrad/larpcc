@@ -155,7 +155,7 @@ private struct MatrixGrid: View {
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(width: column)
+                    .frame(minWidth: column, maxWidth: .infinity)
                     .padding(.bottom, 6)
                     .help(profile.name)
                 }
@@ -176,7 +176,7 @@ private struct MatrixGrid: View {
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .controlSize(.mini)
-                        .frame(width: column)
+                        .frame(minWidth: column, maxWidth: .infinity)
                     }
                 }
             }

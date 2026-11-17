@@ -114,6 +114,7 @@ struct SettingsView: View {
                         Spacer()
                         Text("\(snapshot.enabledCount) on").monospacedDigit()
                     }
+                    .padding(.trailing, 10)
                 }
             }
         }
