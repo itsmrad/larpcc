@@ -157,6 +157,16 @@ pub(crate) mod synthetic;
 
 impl CheckedApp {
     fn recheck(&self) -> Result<(), Error> {
+        #[cfg(target_os = "macos")]
+        {
+            #[cfg(test)]
+            let fixture = self.path != Path::new("/Applications/ChatGPT.app");
+            #[cfg(not(test))]
+            let fixture = false;
+            if !fixture {
+                macos::verify_signature(&self.path)?;
+            }
+        }
         let exe = self.path.join("Contents/MacOS/ChatGPT");
         let now = platform::anchor(&exe)?;
         if now.ancestors.len() != self.ancestry.ancestors.len()
@@ -192,16 +202,7 @@ impl CheckedApp {
                 return Err(Error::AdmissionChanged);
             }
         }
-        #[cfg(target_os = "macos")]
-        {
-            #[cfg(test)]
-            let fixture = self.path != Path::new("/Applications/ChatGPT.app");
-            #[cfg(not(test))]
-            let fixture = false;
-            if !fixture {
-                macos::verify_signature(&self.path)?;
-            }
-        }
+
         Ok(())
     }
 }
