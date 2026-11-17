@@ -43,8 +43,28 @@ strings in JSON (registry persistence keeps numeric u64). Validate numeric range
 in addition to the schema regex. Names also exclude Windows device names and
 `larp`. Paths are display strings only; non-Unicode paths use the existing
 escaped display representation and must never be round-tripped as command
-arguments. GUI targets profiles by name from a freshly fetched ID/name snapshot;
-rename races refuse or refresh, never select a different ID silently.
+arguments.
+
+### Request precondition
+
+`--expected-revision REV` is a global option before the child `--` separator.
+REV is a canonical decimal u64. GUI mutations and app-open requests MUST supply
+it from the displayed snapshot; human callers may omit it. It is supported by
+all registry-backed commands, including read-only list/show/status/doctor.
+Under the same registry lock used to resolve names and prepare the operation,
+compare REV to the current revision **before name resolution or any mutation,
+probe, prompt or dispatch**. A missing registry has revision 0. Mismatch returns
+`conflict`, exit 1, without effects; the GUI refreshes and requires renewed user
+intent, never automatically retries a destructive action. Retain existing
+snapshot revalidation through apply/dispatch. Help/version reject this option
+with `usage`, exit 2; closed native-operation and JSON-native-IO gates retain
+precedence and must not gain root IO to check a precondition.
+
+For example, after reading revision 7 and `codex-45` ID 2, the GUI sends
+`larp cc profile delete codex-45 --yes --expected-revision 7 --json`.
+If another client renames ID 2 and reuses its name for ID 3, the revision has
+changed and deletion refuses before selecting ID 3. Matrix toggles and alias
+mutations use the same precondition, including operations spanning all profiles.
 
 List order: profiles by ASCII name, aliases by ASCII name, MCP/skills by ASCII
 name, switches by numeric ID, detections by provider (`claude`,`codex`) then
@@ -89,7 +109,15 @@ and recorded version are included in profile list/show through desktop_binding.
 Space-separated command paths map to dotted `command` values. Existing profile
 and provider mutations and all stage 04–09 metadata mutations use the common
 `changed,profile_id,name,warnings` result (null where no profile/name applies).
-Deletion/recovery receipts carry the deleted ID even after its record disappears.
+Profile add/rename/forget/delete/recover/surface receipts always carry the
+non-null affected ID and profile name (post-rename name for rename). Deletion
+and recovery retain these from the tombstone even after record removal.
+Alias add/remove and per-profile skills enable/disable receipts carry the
+non-null target profile ID; their `name` is the alias/skill name. MCP
+single-profile enable/disable carries its target ID and server name; `--all`
+uses null ID and server name. Global catalog mutations use null ID and the
+catalog entry name; all-profile sync/mode/provider/app-bind operations use null
+ID/name. `changed:false` keeps the same command-specific identity requirements.
 `profile migrate` is explicit and has null ID/name. CLI surface toggles use
 `profile surface PROFILE cli|desktop on|off`. No toggling qualifies a launch.
 `mcp sync` and `skills sync` render/apply all profiles without starting anything.

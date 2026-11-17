@@ -60,6 +60,20 @@ def semantic(value):
         if value.get('command') in ('profile.list', 'alias.list') and value.get('ok'):
             rows = value['data'].get('profiles', value['data'].get('aliases'))
             assert [x['name'] for x in rows] == sorted(set(x['name'] for x in rows))
+            if value['command'] == 'profile.list':
+                assert len({x['id'] for x in rows}) == len(rows)
+        if value.get('ok') and 'changed' in value.get('data', {}):
+            command, data = value['command'], value['data']
+            if command in {'profile.add', 'profile.rename', 'profile.forget',
+                           'profile.delete', 'profile.recover', 'profile.surface',
+                           'alias.add', 'alias.remove', 'skills.enable', 'skills.disable'}:
+                assert data['profile_id'] is not None and data['name'] is not None
+            if command in {'mcp.enable', 'mcp.disable', 'mcp.add', 'mcp.remove',
+                           'skills.add', 'skills.remove'}:
+                assert data['name'] is not None
+            if command in {'profile.migrate', 'provider.bind', 'app.bind',
+                           'skills.sync', 'mcp.sync', 'mcp.sync-all'}:
+                assert data['profile_id'] is None and data['name'] is None
     elif isinstance(value, list):
         for v in value:
             semantic(v)
@@ -102,4 +116,24 @@ else:
 commands = {x['command'] for x in fixtures if x['ok']}
 expected = {x['properties']['command']['const'] for x in SCHEMA['oneOf'][:-1]}
 assert commands == expected, (expected - commands, commands - expected)
-print(f'{len(fixtures)} valid envelopes; all {len(expected)} success variants; 6 negative checks passed')
+negative_checks = 6
+invalid = copy.deepcopy(fixtures[0])
+duplicate = copy.deepcopy(invalid['data']['profiles'][0])
+duplicate['name'] = 'other'
+invalid['data']['profiles'].append(duplicate)
+invalid_mutations = [invalid]
+for command in ('profile.add', 'profile.rename', 'profile.forget',
+                'profile.delete', 'profile.recover', 'profile.surface',
+                'alias.add', 'alias.remove', 'skills.enable', 'skills.disable'):
+    invalid = copy.deepcopy(next(x for x in fixtures if x['command'] == command and x['ok']))
+    invalid['data']['profile_id'] = None
+    invalid_mutations.append(invalid)
+for invalid in invalid_mutations:
+    check(invalid, SCHEMA)  # Structurally valid; semantic validation must refuse.
+    try:
+        semantic(invalid)
+    except AssertionError:
+        negative_checks += 1
+    else:
+        raise AssertionError('invalid identity accepted')
+print(f'{len(fixtures)} valid envelopes; all {len(expected)} success variants; {negative_checks} negative checks passed')

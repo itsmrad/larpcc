@@ -26,3 +26,7 @@ confinement claims; unavailable handle-relative safety stays refused. Abnormal
 exit and same-user interference limits must appear in future shipped docs, not
 be hidden by a passing synthetic test. Reviewers independently check actual
 implementation and per-file coverage before merge; no review pass claimed here.
+
+Stale GUI intent: require `--expected-revision` on GUI mutation/open requests,
+checked under the resolution lock before effects. Name reuse after rename must
+fail with conflict; internal post-resolution revalidation alone is insufficient.

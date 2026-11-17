@@ -145,3 +145,10 @@ implemented and actually executed with `cargo test --workspace --locked stage04_
 Every fixture uses private temporary LARPCC_HOME and names claude-work/codex-45,
 synthetic children only, bounded waits and finally cleanup of all test artifacts.
 No existing homes/wrappers/skills touched. No cargo is needed for this planning PR.
+
+All registry-backed commands accept global `--expected-revision REV` as frozen in
+[CLI JSON v1](../contracts/cli-v1.md#request-precondition). Check atomically under
+the registry lock before resolving profile names or preparing effects; mismatch
+is exit-1 `conflict`. GUI mutations supply the displayed revision. Acceptance
+includes rename ID 2, reuse old name for ID 3, then stale-revision delete/recover
+refusal with neither profile changed. Recovery receipts retain tombstoned ID/name.

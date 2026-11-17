@@ -70,3 +70,8 @@ finally cleanup; `stage08_injection` invented rows exact argv/cli homes and
 changed render/refs refusal; `stage08_closed` ordinary debug/release/all-features
 operations closed and JSON native IO has zero child/root effects. Retain all
 stage-3 A01–A08 tests. Zero matches fails. Temporary fixtures only; clean all homes.
+
+The global `--expected-revision REV` precondition follows CLI JSON v1: atomic
+comparison before name resolution/effects, mismatch exit-1 `conflict`; preserve
+early closed-operation gates. Fixture coverage includes stale GUI revision after
+rename/name reuse, matrix toggles, and non-null profile mutation/recovery IDs.

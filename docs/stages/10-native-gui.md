@@ -29,3 +29,8 @@ MAC's macos-app.yml, shared CLI registration to CORE. Synthetic fixture CLI only
 no vendor/account execution, use temporary app data and delete it after testing.
 Final independent QA/OCR and lead merge required; native qualification remains a
 separate gate even if the GUI builds.
+
+Every GUI mutation and app-open request passes `--expected-revision REV` from
+the displayed snapshot. On conflict refresh and obtain renewed user intent; no
+automatic destructive retry. Test a rename plus old-name reuse between list and
+delete: the stale request must refuse without acting on the replacement ID.

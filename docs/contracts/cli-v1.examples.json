@@ -370,8 +370,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "codex-45",
       "warnings": []
     }
   },
@@ -382,8 +382,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "codex-45",
       "warnings": []
     }
   },
@@ -394,8 +394,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "codex-45",
       "warnings": []
     }
   },
@@ -423,8 +423,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "codex-45",
       "warnings": []
     }
   },
@@ -447,8 +447,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "codex-45",
       "warnings": []
     }
   },
@@ -471,8 +471,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "codex-45",
       "warnings": []
     }
   },
@@ -483,8 +483,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "codex-45",
       "warnings": []
     }
   },
@@ -496,7 +496,7 @@
     "data": {
       "changed": true,
       "profile_id": null,
-      "name": null,
+      "name": "example",
       "warnings": []
     }
   },
@@ -508,7 +508,7 @@
     "data": {
       "changed": true,
       "profile_id": null,
-      "name": null,
+      "name": "example",
       "warnings": []
     }
   },
@@ -519,8 +519,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "example",
       "warnings": []
     }
   },
@@ -531,8 +531,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "example",
       "warnings": []
     }
   },
@@ -556,7 +556,7 @@
     "data": {
       "changed": true,
       "profile_id": null,
-      "name": null,
+      "name": "example",
       "warnings": []
     }
   },
@@ -568,7 +568,7 @@
     "data": {
       "changed": true,
       "profile_id": null,
-      "name": null,
+      "name": "example",
       "warnings": []
     }
   },
@@ -579,8 +579,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "example",
       "warnings": []
     }
   },
@@ -591,8 +591,8 @@
     "revision": "7",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "2",
+      "name": "example",
       "warnings": []
     }
   },
@@ -666,6 +666,15 @@
     "error": {
       "code": "busy",
       "message": "Profile activity must be quiesced."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.delete",
+    "ok": false,
+    "error": {
+      "code": "conflict",
+      "message": "Registry revision changed; refresh before retrying."
     }
   }
 ]
