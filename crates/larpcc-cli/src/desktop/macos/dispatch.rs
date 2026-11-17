@@ -263,8 +263,8 @@ pub(in crate::desktop) fn open(
         return Err(Error::AdmissionChanged);
     }
     if !super::tested_version(&target.app.path) {
-        eprintln!(
-            "warning: desktop version has not been tested; native authentication and isolation are unverified"
+        notice(
+            "desktop version has not been tested; native authentication and isolation are unverified",
         );
     }
     let outcome = if let Some(process) = process {
@@ -391,11 +391,6 @@ fn launch(
         || Instant::now() >= deadline
     {
         return Err(Error::AdmissionChanged);
-    }
-    if !super::tested_version(&target.app.path) {
-        eprintln!(
-            "warning: desktop version has not been tested; native authentication and isolation are unverified"
-        );
     }
     revalidate()?;
     if Instant::now() >= deadline {

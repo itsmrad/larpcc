@@ -71,11 +71,7 @@ impl Fixture {
                 "invented-app".into(),
                 format!(
                     "--user-data-dir={}",
-                    self.base
-                        .temp
-                        .path()
-                        .join("LARPCC_HOME/profiles/1/desktop")
-                        .display()
+                    self.target.snapshot().desktop.path.display()
                 )
                 .into(),
             ],
@@ -263,7 +259,7 @@ fn desktop_process_reuse_wrong_pid_and_identity_refuse() {
 fn desktop_exact_data_dir_arguments_and_unknowns() {
     let f = Fixture::new(registry::Provider::Claude);
     let p = f.process();
-    let exact = f.base.temp.path().join("LARPCC_HOME/profiles/1/desktop");
+    let exact = &f.target.snapshot().desktop.path;
     let exact = exact.to_str().unwrap();
     for (args, expected) in [
         (
