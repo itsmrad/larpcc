@@ -1854,6 +1854,42 @@
           "const": 1
         },
         "command": {
+          "const": "app.bind"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
           "enum": [
             "profile.list",
             "profile.show",
@@ -1892,7 +1928,8 @@
             "run",
             "login",
             "logout",
-            "parse"
+            "parse",
+            "app.bind"
           ]
         },
         "ok": {

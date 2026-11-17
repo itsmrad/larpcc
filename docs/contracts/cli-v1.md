@@ -58,14 +58,15 @@ overflow fails `too_large` before any mutation commits.
 ## Local status and desktop coordination
 
 Bindings expose `path`, `recorded_version`, `detected_version`, `state`,
-`qualified`. A detected version is **not** obtained by invoking installed
-providers: only a previously reviewed local metadata source is permitted;
-otherwise null. Recorded version is a user-supplied label, not qualification.
-No source is approved by this contract. `native_rows:[]`,
+`qualified`. A detected version comes only from an explicitly requested bounded version-only
+probe or reviewed reliable static metadata; otherwise null. Recorded version is a user-supplied label, not qualification.
+An explicit `doctor --detect-versions` uses the bounded version-only preparation
+path in [stage 08](../stages/08-json-launch-doctor.md); no artifact descriptor is
+approved by this planning PR. Default doctor remains read-only. `native_rows:[]`,
 `native_auth:"not_observed"`, and `qualified:false` remain fixed until a separately
-reviewed qualification/schema amendment. Doctor is metadata-only and never
+reviewed qualification/schema amendment. Default doctor is metadata-only and never
 reads auth/config/session contents, keychain, process argv or endpoints.
-`doctor [PROFILE]` and JSON `status PROFILE` expose the same status shape;
+`doctor [PROFILE] [--detect-versions]` and JSON `status PROFILE` expose the same status shape;
 doctor without a profile returns null profile and all binding diagnostics.
 Missing/unsafe homes are diagnostic states, not evidence of being signed out.
 
@@ -85,7 +86,7 @@ and recorded version are included in profile list/show through desktop_binding.
 ## Command map and examples
 
 Space-separated command paths map to dotted `command` values. Existing profile
-and provider mutations and all stage 04–08 metadata mutations use the common
+and provider mutations and all stage 04–09 metadata mutations use the common
 `changed,profile_id,name,warnings` result (null where no profile/name applies).
 Deletion/recovery receipts carry the deleted ID even after its record disappears.
 `profile migrate` is explicit and has null ID/name. CLI surface toggles use

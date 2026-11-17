@@ -1,0 +1,671 @@
+[
+  {
+    "schema": 1,
+    "command": "profile.list",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profiles": [
+        {
+          "id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "state": "active",
+          "surfaces": {
+            "cli": {
+              "enabled": true,
+              "path": "/fixture/root/profiles/2/cli",
+              "state": "ok"
+            },
+            "desktop": {
+              "enabled": false,
+              "path": "/fixture/root/profiles/2/desktop",
+              "state": "ok"
+            }
+          },
+          "aliases": [
+            {
+              "name": "codex-45",
+              "profile_id": "2",
+              "surface": "cli",
+              "path": "/fixture/root/bin/codex-45",
+              "state": "ok"
+            }
+          ],
+          "desktop_binding": {
+            "path": null,
+            "recorded_version": null,
+            "detected_version": null,
+            "state": "unbound",
+            "qualified": false
+          }
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.show",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "id": "2",
+      "name": "codex-45",
+      "provider": "codex",
+      "state": "active",
+      "surfaces": {
+        "cli": {
+          "enabled": true,
+          "path": "/fixture/root/profiles/2/cli",
+          "state": "ok"
+        },
+        "desktop": {
+          "enabled": false,
+          "path": "/fixture/root/profiles/2/desktop",
+          "state": "ok"
+        }
+      },
+      "aliases": [
+        {
+          "name": "codex-45",
+          "profile_id": "2",
+          "surface": "cli",
+          "path": "/fixture/root/bin/codex-45",
+          "state": "ok"
+        }
+      ],
+      "desktop_binding": {
+        "path": null,
+        "recorded_version": null,
+        "detected_version": null,
+        "state": "unbound",
+        "qualified": false
+      }
+    }
+  },
+  {
+    "schema": 1,
+    "command": "alias.list",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "aliases": [
+        {
+          "name": "codex-45",
+          "profile_id": "2",
+          "surface": "cli",
+          "path": "/fixture/root/bin/codex-45",
+          "state": "ok"
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "provider.list",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "bindings": [
+        {
+          "provider": "codex",
+          "surface": "cli",
+          "binding": {
+            "path": "/fixture/vendor/codex",
+            "recorded_version": "1.2.3",
+            "detected_version": "1.2.3",
+            "state": "ok",
+            "qualified": false
+          }
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "mcp.list",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "sync_all": false,
+      "servers": [
+        {
+          "name": "example",
+          "transport": "stdio",
+          "secret_refs": [
+            {
+              "kind": "env",
+              "name": "EXAMPLE_TOKEN"
+            }
+          ],
+          "switches": [
+            {
+              "profile_id": "2",
+              "enabled": true
+            }
+          ],
+          "state": "ok"
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "mcp.matrix",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profiles": [
+        {
+          "id": "2",
+          "name": "codex-45",
+          "provider": "codex"
+        }
+      ],
+      "rows": [
+        {
+          "name": "example",
+          "enabled": [
+            true
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "skills.list",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "skills": [
+        {
+          "name": "example",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "switches": [
+            {
+              "profile_id": "2",
+              "enabled": true
+            }
+          ],
+          "state": "ok"
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "skills.matrix",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profiles": [
+        {
+          "id": "2",
+          "name": "codex-45",
+          "provider": "codex"
+        }
+      ],
+      "rows": [
+        {
+          "name": "example",
+          "enabled": [
+            true
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "status",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profile": {
+        "id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "state": "active",
+        "surfaces": {
+          "cli": {
+            "enabled": true,
+            "path": "/fixture/root/profiles/2/cli",
+            "state": "ok"
+          },
+          "desktop": {
+            "enabled": false,
+            "path": "/fixture/root/profiles/2/desktop",
+            "state": "ok"
+          }
+        },
+        "aliases": [
+          {
+            "name": "codex-45",
+            "profile_id": "2",
+            "surface": "cli",
+            "path": "/fixture/root/bin/codex-45",
+            "state": "ok"
+          }
+        ],
+        "desktop_binding": {
+          "path": null,
+          "recorded_version": null,
+          "detected_version": null,
+          "state": "unbound",
+          "qualified": false
+        }
+      },
+      "detected_versions": [
+        {
+          "provider": "codex",
+          "surface": "cli",
+          "binding": {
+            "path": "/fixture/vendor/codex",
+            "recorded_version": "1.2.3",
+            "detected_version": "1.2.3",
+            "state": "ok",
+            "qualified": false
+          }
+        }
+      ],
+      "native_auth": "not_observed",
+      "native_rows": [],
+      "diagnostics": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profile": {
+        "id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "state": "active",
+        "surfaces": {
+          "cli": {
+            "enabled": true,
+            "path": "/fixture/root/profiles/2/cli",
+            "state": "ok"
+          },
+          "desktop": {
+            "enabled": false,
+            "path": "/fixture/root/profiles/2/desktop",
+            "state": "ok"
+          }
+        },
+        "aliases": [
+          {
+            "name": "codex-45",
+            "profile_id": "2",
+            "surface": "cli",
+            "path": "/fixture/root/bin/codex-45",
+            "state": "ok"
+          }
+        ],
+        "desktop_binding": {
+          "path": null,
+          "recorded_version": null,
+          "detected_version": null,
+          "state": "unbound",
+          "qualified": false
+        }
+      },
+      "detected_versions": [
+        {
+          "provider": "codex",
+          "surface": "cli",
+          "binding": {
+            "path": "/fixture/vendor/codex",
+            "recorded_version": "1.2.3",
+            "detected_version": "1.2.3",
+            "state": "ok",
+            "qualified": false
+          }
+        }
+      ],
+      "native_auth": "not_observed",
+      "native_rows": [],
+      "diagnostics": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "app.open",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profile_id": "2",
+      "provider": "codex",
+      "surface": "desktop",
+      "outcome": "launched",
+      "native_auth": "not_observed"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "help",
+    "ok": true,
+    "revision": null,
+    "data": {
+      "text": "Usage: larp cc ..."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "version",
+    "ok": true,
+    "revision": null,
+    "data": {
+      "version": "0.1.0"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.add",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.rename",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.forget",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.delete",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": "2",
+      "name": "codex-45",
+      "warnings": [
+        {
+          "code": "keychain_retained",
+          "message": "Keychain items and remote grants may remain."
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.recover",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.migrate",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.surface",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "provider.bind",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "alias.add",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "alias.remove",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "skills.add",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "skills.remove",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "skills.enable",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "skills.disable",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "skills.sync",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "mcp.add",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "mcp.remove",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "mcp.enable",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "mcp.disable",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "mcp.sync-all",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "mcp.sync",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "app.bind",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "parse",
+    "ok": false,
+    "error": {
+      "code": "usage",
+      "message": "Invalid command arguments."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "app.open",
+    "ok": false,
+    "error": {
+      "code": "qualification_pending",
+      "message": "Desktop operation is not qualified."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "run",
+    "ok": false,
+    "error": {
+      "code": "json_native_io",
+      "message": "Native output is unavailable in JSON mode."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.delete",
+    "ok": false,
+    "error": {
+      "code": "busy",
+      "message": "Profile activity must be quiesced."
+    }
+  }
+]
