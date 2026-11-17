@@ -6,8 +6,8 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [.executable(name: "LarpCC", targets: ["LarpCC"])],
     targets: [
-        .target(name: "LarpModel"),
+        .target(name: "LarpModel", resources: [.copy("Resources/cli-v1.schema.json")]),
         .executableTarget(name: "LarpCC", dependencies: ["LarpModel"]),
-        .testTarget(name: "LarpModelTests", dependencies: ["LarpModel"])
+        .testTarget(name: "LarpModelTests", dependencies: ["LarpModel"], resources: [.copy("Resources/cli-v1.examples.json")])
     ]
 )
