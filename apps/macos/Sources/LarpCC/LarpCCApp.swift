@@ -4,10 +4,17 @@ import LarpModel
 @main
 struct LarpCCApp: App {
     @StateObject private var store = AppStore(client: FixtureLarpClient())
+    private var sampleAppearance: ColorScheme? {
+        if CommandLine.arguments.contains("--appearance=dark") { return .dark }
+        if CommandLine.arguments.contains("--appearance=light") { return .light }
+        return nil
+    }
+
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
                 .frame(minWidth: 900, minHeight: 650)
+                .preferredColorScheme(sampleAppearance)
         }
         .defaultSize(width: 1040, height: 760)
         .windowToolbarStyle(.unified)

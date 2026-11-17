@@ -15,6 +15,9 @@ swift test
 swift run LarpCC
 ./scripts/bundle.sh
 open dist/LarpCC.app
+# App-only appearance overrides for manual screenshots:
+open dist/LarpCC.app --args --appearance=light
+# Quit before relaunching with --appearance=dark.
 ```
 
 The script builds an unsigned release bundle under `dist/`. No signing,
