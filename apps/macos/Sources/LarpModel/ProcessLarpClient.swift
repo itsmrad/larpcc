@@ -76,6 +76,10 @@ public actor ProcessLarpClient: LarpClient {
         displayed = state
         return state
     }
+    /// Not wired until the `larp cc usage` contract merges.
+    public func usage(source: UsageSource) async throws -> [String: UsageReport] {
+        throw ClientError.commandUnavailable
+    }
     /// Display-only: `<root>/profiles/<id>/cli` yields `<root>`. Never used as a path.
     static func dataFolder(cliPath: String, id: String) -> String? {
         let suffix = "/profiles/\(id)/cli"

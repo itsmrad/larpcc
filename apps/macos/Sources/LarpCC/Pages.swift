@@ -21,6 +21,8 @@ struct GeneralPage: View {
                 .disabled(AppearanceMode.launchOverride != nil)
             }
 
+            UsageSettingsSection(store: store)
+
             Section("Command-line tool") {
                 LabeledContent {
                     HStack(spacing: 8) {

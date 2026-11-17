@@ -58,6 +58,12 @@ final class AppStore: ObservableObject {
     @Published var message: String?
     @Published private(set) var isFixture = true
     @Published private(set) var selectedPath: String?
+    /// Usage limits keyed by profile ID, from the last usage read.
+    @Published private(set) var usage: [String: UsageReport] = [:]
+    @Published private(set) var usageError: String?
+    @Published private(set) var usageLoading = false
+    private var usageTask: Task<Void, Never>?
+    private var liveRefresh: Task<Void, Never>?
     var modeTitle: String { isFixture ? "Sample mode" : "Local Larp CLI" }
     private var client: any LarpClient
     private var operation: Task<Void, Never>?
@@ -90,6 +96,39 @@ final class AppStore: ObservableObject {
             }
         }
     }
+    /// Reads usage for every profile from the current source.
+    func refreshUsage() {
+        let source = UsagePreferences.source
+        usageTask?.cancel()
+        usageLoading = true
+        usageTask = Task {
+            do {
+                let value = try await client.usage(source: source)
+                guard !Task.isCancelled else { return }
+                usage = value; usageError = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                usage = [:]
+                usageError = (error as? ClientError)?.errorDescription ?? "Usage is unavailable."
+            }
+            usageLoading = false
+        }
+    }
+
+    /// Restarts the optional Live refresh. Nothing repeats in Local mode or when the interval is Off.
+    func scheduleLiveRefresh() {
+        liveRefresh?.cancel(); liveRefresh = nil
+        let minutes = UsagePreferences.intervalMinutes
+        guard UsagePreferences.source == .live, minutes > 0 else { return }
+        liveRefresh = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(minutes) * 60_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.refreshUsage()
+            }
+        }
+    }
+
     func useFixture() {
         cancel()
         isFixture = true; selectedPath = nil; snapshot = nil
@@ -101,6 +140,7 @@ final class AppStore: ObservableObject {
         operation?.cancel(); operation = nil
         busy = false
         snapshot = nil
+        usageTask?.cancel(); usage = [:]; usageLoading = false
         message = "Cancelled. Refresh before choosing another action."
     }
     func startRefresh() { operation = Task { await refresh() } }
@@ -114,6 +154,9 @@ final class AppStore: ObservableObject {
             let value = try await client.snapshot()
             guard generation == token, !Task.isCancelled else { return }
             snapshot = value
+            // Local usage is data already on this Mac, so it follows every refresh.
+            // Live usage is only read on request or on the user's chosen interval.
+            if UsagePreferences.source == .local { refreshUsage() }
         } catch {
             guard generation == token else { return }
             snapshot = nil

@@ -81,7 +81,7 @@ struct SettingsView: View {
                 .toolbar { toolbar }
                 .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
         }
-        .task { store.startRefresh() }
+        .task { store.startRefresh(); store.scheduleLiveRefresh() }
         .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply() }
         .onChange(of: appearance) { _, value in (AppearanceMode(rawValue: value) ?? .system).apply() }
         .onChange(of: store.snapshot?.profiles.map(\.id)) { _, ids in
@@ -112,7 +112,7 @@ struct SettingsView: View {
             if let snapshot = store.snapshot {
                 Section {
                     ForEach(snapshot.profiles.filter { matches($0.name + " " + $0.provider.title + " " + $0.aliases.joined(separator: " ")) }) { profile in
-                        ProfileSidebarRow(profile: profile)
+                        ProfileSidebarRow(profile: profile, usage: store.usage[profile.id])
                             .tag(Selection.profile(profile.id))
                     }
                 } header: {
@@ -274,12 +274,14 @@ struct SettingsView: View {
 
 private struct ProfileSidebarRow: View {
     let profile: Profile
+    let usage: UsageReport?
     var body: some View {
         HStack(spacing: 10) {
             // Not a Label: the sidebar restyles Label icons, which washes out the marks.
             ProviderGlyph(provider: profile.provider)
             Text(profile.name).lineLimit(1)
             Spacer(minLength: 4)
+            UsageHint(report: usage)
             if profile.readiness != .off {
                 StatusDot(color: profile.readiness.color)
             }
