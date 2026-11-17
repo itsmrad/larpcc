@@ -1,0 +1,38 @@
+name: macOS App
+
+on:
+  pull_request:
+    paths:
+      - 'apps/macos/**'
+      - '.github/workflows/macos-app.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/macos/**'
+      - '.github/workflows/macos-app.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-app:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/macos
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift toolchain
+        run: swift --version
+      - name: Synthetic model tests and debug build
+        run: swift test --parallel
+      - name: Unsigned release bundle
+        run: ./scripts/bundle.sh
+      - name: Validate bundle executable
+        run: test -x dist/LarpCC.app/Contents/MacOS/LarpCC
