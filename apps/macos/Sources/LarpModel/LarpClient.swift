@@ -18,13 +18,31 @@ public struct Profile: Identifiable, Sendable, Equatable {
     public var cliEnabled: Bool
     public var desktopEnabled: Bool
     public let needsAttention: Bool
-    public let aliases: [String]
+    public var aliases: [String]
     public var readiness: Readiness {
         if !cliEnabled && !desktopEnabled { return .off }
         return needsAttention ? .attention : .ready
     }
     public var displayFolder: String? = nil
     public var folder: String { displayFolder ?? "<root>/profiles/\(id)" }
+    public var desktopBinding: DesktopBinding? = nil
+}
+
+// Display-only desktop app binding metadata reported by Larp. Never a launch path.
+public struct DesktopBinding: Sendable, Equatable {
+    public enum State: String, Sendable { case unbound, ok, invalid }
+    public let state: State
+    public let displayPath: String?
+    public let detectedVersion: String?
+    public let recordedVersion: String?
+}
+
+public enum LarpNames {
+    /// Alias names follow the profile-name grammar. Provider command names need an
+    /// explicit shadow flag that the GUI does not offer.
+    public static func isValidAlias(_ name: String) -> Bool {
+        CLIContract.name(name) && !["claude", "codex"].contains(name)
+    }
 }
 
 public enum CatalogKind: Sendable { case mcp, skill }
@@ -41,6 +59,8 @@ public struct Snapshot: Sendable {
     public var servers: [CatalogItem]
     public var skills: [CatalogItem]
     public var syncNewServers: Bool
+    /// Display-only data folder derived from Larp metadata; nil when unknown.
+    public var dataFolder: String? = nil
     public var enabledCount: Int { profiles.filter { $0.cliEnabled || $0.desktopEnabled }.count }
 }
 
@@ -51,12 +71,15 @@ public enum LarpAction: Sendable {
     case setSyncNewServers(Bool)
     case open(profileID: String, surface: Surface)
     case delete(profileID: String)
+    case addAlias(name: String, profileID: String)
+    case removeAlias(name: String)
 }
 
 public enum ClientError: Error, LocalizedError, Sendable {
-    case staleSelection, commandUnavailable, qualificationPending, invalidResponse, invalidExecutable, timedOut, outputLimit, conflict, operationRefused
+    case staleSelection, commandUnavailable, qualificationPending, invalidResponse, invalidExecutable, timedOut, outputLimit, conflict, operationRefused, invalidName
     public var errorDescription: String? {
         switch self {
+        case .invalidName: return "Use a new lowercase name: letters, digits, - or _, up to 32 characters."
         case .invalidResponse: return "Larp returned an unsupported or invalid response."
         case .invalidExecutable: return "Select a local executable named larp. The selected file must remain unchanged."
         case .timedOut: return "Larp timed out. Refresh before trying again."
@@ -78,18 +101,20 @@ public protocol LarpClient: Sendable {
 // Sample mode has no filesystem, process, provider or network access.
 public actor FixtureLarpClient: LarpClient {
     private var state: Snapshot
+    private static let claudeApp = DesktopBinding(state: .ok, displayPath: "/Applications/Claude.app", detectedVersion: nil, recordedVersion: nil)
+    private static let chatGPTApp = DesktopBinding(state: .unbound, displayPath: nil, detectedVersion: nil, recordedVersion: nil)
     public init() {
         let profiles = [
             Profile(id: "1", name: "personal", provider: .claude, cliEnabled: true, desktopEnabled: true,
-                    needsAttention: false, aliases: ["claude-personal"]),
+                    needsAttention: false, aliases: ["claude-personal"], desktopBinding: Self.claudeApp),
             Profile(id: "2", name: "work", provider: .claude, cliEnabled: true, desktopEnabled: false,
-                    needsAttention: true, aliases: ["work-agent", "review"]),
+                    needsAttention: true, aliases: ["work-agent", "review"], desktopBinding: Self.claudeApp),
             Profile(id: "3", name: "studio", provider: .codex, cliEnabled: true, desktopEnabled: true,
-                    needsAttention: false, aliases: ["studio"]),
+                    needsAttention: false, aliases: ["studio"], desktopBinding: Self.chatGPTApp),
             Profile(id: "4", name: "research", provider: .codex, cliEnabled: true, desktopEnabled: false,
-                    needsAttention: true, aliases: []),
+                    needsAttention: true, aliases: [], desktopBinding: Self.chatGPTApp),
             Profile(id: "5", name: "sandbox", provider: .claude, cliEnabled: false, desktopEnabled: false,
-                    needsAttention: false, aliases: [])
+                    needsAttention: false, aliases: [], desktopBinding: Self.claudeApp)
         ].sorted { $0.name < $1.name }
         state = Snapshot(profiles: profiles, servers: [
             CatalogItem(id: "documentation", subtitle: "HTTP · definition only", profileIDs: ["1", "2", "3", "4"]),
@@ -126,6 +151,14 @@ public actor FixtureLarpClient: LarpClient {
             state.profiles.removeAll { $0.id == id }
             for index in state.servers.indices { state.servers[index].profileIDs.remove(id) }
             for index in state.skills.indices { state.skills[index].profileIDs.remove(id) }
+        case let .addAlias(name, id):
+            guard LarpNames.isValidAlias(name) else { throw ClientError.invalidName }
+            guard let index = state.profiles.firstIndex(where: { $0.id == id }) else { throw ClientError.staleSelection }
+            guard !state.profiles.contains(where: { $0.aliases.contains(name) }) else { throw ClientError.operationRefused }
+            state.profiles[index].aliases = (state.profiles[index].aliases + [name]).sorted()
+        case let .removeAlias(name):
+            guard let index = state.profiles.firstIndex(where: { $0.aliases.contains(name) }) else { throw ClientError.staleSelection }
+            state.profiles[index].aliases.removeAll { $0 == name }
         }
         return "Sample updated in memory. No files were changed."
     }

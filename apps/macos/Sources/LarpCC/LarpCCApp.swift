@@ -10,24 +10,35 @@ struct LarpCCApp: App {
             catch { exit(1) }
         }
     }
-    private var sampleAppearance: ColorScheme? {
-        if CommandLine.arguments.contains("--appearance=dark") { return .dark }
-        if CommandLine.arguments.contains("--appearance=light") { return .light }
-        return nil
-    }
-
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
-                .frame(minWidth: 900, minHeight: 650)
-                .preferredColorScheme(sampleAppearance)
+                .onAppear { fitWindowOnScreen() }
         }
-        .defaultSize(width: 1040, height: 760)
+        .defaultSize(width: 900, height: 680)
+        .defaultPosition(.center)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 OpenSettingsWindow()
             }
+        }
+    }
+}
+
+/// Keeps the window fully on the screen it opens on, in case a restored or
+/// default frame lands partly off-screen (e.g. after a display change).
+@MainActor private func fitWindowOnScreen() {
+    DispatchQueue.main.async {
+        for window in NSApp.windows where window.isVisible && window.styleMask.contains(.titled) {
+            guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame,
+                  !visible.contains(window.frame) else { continue }
+            var frame = window.frame
+            frame.size.width = min(frame.width, visible.width)
+            frame.size.height = min(frame.height, visible.height)
+            frame.origin.x = visible.midX - frame.width / 2
+            frame.origin.y = visible.midY - frame.height / 2
+            window.setFrame(frame, display: true)
         }
     }
 }

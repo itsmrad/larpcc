@@ -1,10 +1,14 @@
 # LarpCC for macOS
 
 Native SwiftUI settings window, macOS 14+, Swift 5.9+. It starts in explicitly
-labelled **Sample mode**: changes stay in memory and reset on restart. This
-preserves fixture screenshots (`--appearance=light` / `--appearance=dark`).
+labelled **sample data** mode: changes stay in memory and reset on restart. This
+preserves fixture screenshots (`--appearance=light` / `--appearance=dark`, plus
+`--page=general|mcp|skills|aliases|desktop|about|profile-<id>` to open a page).
+Pages are grouped forms: General, MCP Servers, Skills, Aliases, Desktop Apps,
+About, then one page per profile. The appearance is a local view preference in
+UserDefaults; nothing else is persisted.
 
-**Choose Larp…** explicitly selects a trusted local native executable named `larp`.
+**General › larp executable › Choose…** explicitly selects a trusted local native executable named `larp`.
 Live mode clears the samples immediately; failed operations never simulate success.
 Selection rejects scripts, symlinks, directories, non-executables and non-Mach-O
 files. A bounded SHA-256 fingerprint, file identity and resolved path are rechecked
@@ -58,4 +62,4 @@ without opening a window or invoking a CLI. Verify relocation with the original
 `.build` directory absent. No signing, notarization, installation or artifact publishing is
 included. The dedicated macOS workflow runs synthetic tests and release bundling.
 Native manual validation still covers keyboard/VoiceOver, selection, search,
-matrix scrolling, cancellation, delete wording, and light/dark appearance.
+catalog switches, cancellation, delete wording, and light/dark appearance.
