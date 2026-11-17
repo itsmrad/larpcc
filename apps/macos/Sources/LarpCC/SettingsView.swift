@@ -82,6 +82,16 @@ struct SettingsView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
         }
         .task { store.startRefresh() }
+        .sheet(item: $store.sheet) { sheet in
+            switch sheet {
+            case .addProfile:
+                AddProfileSheet(store: store) { name in
+                    if let id = store.snapshot?.profiles.first(where: { $0.name == name })?.id { selection = .profile(id) }
+                }
+            case .addServer: AddServerSheet(store: store)
+            case .addSkill: AddSkillSheet(store: store)
+            }
+        }
         .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply() }
         .onChange(of: appearance) { _, value in (AppearanceMode(rawValue: value) ?? .system).apply() }
         .onChange(of: store.snapshot?.profiles.map(\.id)) { _, ids in
@@ -120,8 +130,14 @@ struct SettingsView: View {
                         Text("Profiles")
                         Spacer()
                         Text("\(snapshot.enabledCount) on").monospacedDigit()
+                        Button { store.sheet = .addProfile } label: { Image(systemName: "plus") }
+                            .buttonStyle(.borderless)
+                            .help("New Profile (⌘N)")
+                            .accessibilityLabel("New Profile")
+                            .disabled(store.busy)
                     }
                     .padding(.trailing, 10)
+                    .accessibilityElement(children: .contain)
                 }
             }
         }
@@ -217,6 +233,13 @@ struct SettingsView: View {
                 Button("Cancel") { store.cancel() }
                     .keyboardShortcut(.cancelAction)
             } else {
+                if selection == .page(.mcp) || selection == .page(.skills) {
+                    Button { store.sheet = selection == .page(.mcp) ? .addServer : .addSkill } label: {
+                        Label(selection == .page(.mcp) ? "Add Server" : "Add Skill", systemImage: "plus")
+                    }
+                    .help(selection == .page(.mcp) ? "Add an MCP server" : "Add a skill folder")
+                    .disabled(store.snapshot == nil)
+                }
                 Button { store.startRefresh() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .keyboardShortcut("r", modifiers: .command)
                     .help("Reload local metadata")
