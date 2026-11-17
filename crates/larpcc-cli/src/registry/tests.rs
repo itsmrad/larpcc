@@ -1213,6 +1213,8 @@ fn fixed_guards_pin_real_root_and_profiles_without_querying_sentinel_leaf() {
     let (temporary, registry) = fixture();
     initialize(&registry);
     let home = registry.root().join("profiles/1");
+    fs::remove_dir(home.join("cli")).unwrap();
+    fs::remove_dir(home.join("desktop")).unwrap();
     fs::remove_dir(&home).unwrap();
     fixture_file(&home, b"synthetic non-directory sentinel leaf");
     let root = registry.root();
