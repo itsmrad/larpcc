@@ -7,6 +7,8 @@ use std::{fmt, io, path::PathBuf};
 )]
 pub enum Error {
     Conflict,
+    Drift,
+    SkillNotFound,
     RecoveryRequired,
     ManagedMode {
         path: PathBuf,
@@ -92,6 +94,8 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Drift => f.write_str("owned skills content or filesystem identity has drifted"),
+            Self::SkillNotFound => f.write_str("skill was not found"),
             Self::Conflict => f.write_str("registry revision or references conflict"),
             Self::RecoveryRequired => {
                 f.write_str("explicit profile migration or recovery is required")

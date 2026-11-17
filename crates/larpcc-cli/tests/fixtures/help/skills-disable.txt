@@ -1,0 +1,10 @@
+Usage: larp cc skills disable [OPTIONS] <NAME> <PROFILE>
+
+Arguments:
+  <NAME>     
+  <PROFILE>  
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

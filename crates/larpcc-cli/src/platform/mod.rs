@@ -8,7 +8,8 @@ pub enum ObjectKind {
     Directory,
     File,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum FileIdentity {
     #[cfg(unix)]
     Unix { dev: u64, ino: u64 },

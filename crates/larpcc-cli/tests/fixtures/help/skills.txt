@@ -1,0 +1,17 @@
+Manage explicit skill packages and per-profile sharing
+
+Usage: larp cc skills [OPTIONS] <COMMAND>
+
+Commands:
+  add      Copy one explicit package into the immutable managed store
+  remove   Remove a package after disabling all profile references
+  enable   
+  disable  
+  list     
+  matrix   
+  sync     Apply sharing changes or explicitly resume an interrupted transaction
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

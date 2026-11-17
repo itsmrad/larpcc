@@ -56,6 +56,18 @@ enum RootAction {
 
 #[derive(Subcommand)]
 enum CcAction {
+    /// Bind or open a verified desktop app (ChatGPT on macOS; Claude closed)
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    App {
+        #[command(subcommand)]
+        command: AppCommand,
+    },
+    /// Manage explicit skill packages and per-profile sharing
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
     #[command(
         about = "Manage native provider bindings",
         arg_required_else_help = true,
@@ -94,6 +106,73 @@ enum CcAction {
         #[command(subcommand)]
         command: ProfileAction,
     },
+}
+
+#[derive(Subcommand)]
+enum AppCommand {
+    Bind {
+        #[arg(value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
+        provider: Provider,
+        path: std::path::PathBuf,
+        #[arg(long = "version")]
+        recorded_version: Option<String>,
+        #[arg(long)]
+        replace: bool,
+    },
+    Open {
+        name: ProfileName,
+    },
+}
+
+#[derive(Clone, Subcommand)]
+enum SkillsCommand {
+    /// Copy one explicit package into the immutable managed store
+    Add {
+        path: std::path::PathBuf,
+        #[arg(long, value_parser=ProfileName::parse_new)]
+        name: ProfileName,
+    },
+    /// Remove a package after disabling all profile references
+    Remove {
+        name: ProfileName,
+    },
+    Enable {
+        name: ProfileName,
+        profile: ProfileName,
+    },
+    Disable {
+        name: ProfileName,
+        profile: ProfileName,
+    },
+    List,
+    Matrix,
+    /// Apply sharing changes or explicitly resume an interrupted transaction
+    Sync,
+}
+impl SkillsCommand {
+    fn action(&self) -> crate::registry::SkillsAction {
+        self.clone().into_action()
+    }
+    fn into_action(self) -> crate::registry::SkillsAction {
+        use crate::registry::SkillsAction as A;
+        match self {
+            Self::Add { path, name } => A::Add { source: path, name },
+            Self::Remove { name } => A::Remove { name },
+            Self::Enable { name, profile } => A::Switch {
+                name,
+                profile,
+                enabled: true,
+            },
+            Self::Disable { name, profile } => A::Switch {
+                name,
+                profile,
+                enabled: false,
+            },
+            Self::List => A::List,
+            Self::Matrix => A::Matrix,
+            Self::Sync => A::Sync,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -216,6 +295,46 @@ pub fn run() -> ExitCode {
     }
     let expected = cli.expected_revision;
     let command = match command {
+        CcAction::App { command } => {
+            if let Err(e) = crate::desktop::preflight() {
+                return operational_error(e);
+            }
+            return match Registry::locate().and_then(|r| {
+                let r = r.expecting(expected);
+                match command {
+                    AppCommand::Bind {
+                        provider,
+                        path,
+                        recorded_version,
+                        replace,
+                    } => r
+                        .bind_desktop(provider, path, recorded_version, replace)
+                        .map(|_| "Desktop binding saved.\n".to_owned()),
+                    AppCommand::Open { name } => r
+                        .open_desktop(&name, false)
+                        .map(|receipt| format!("Desktop {}.\n", receipt.outcome)),
+                }
+            }) {
+                Ok(output) => write_output(
+                    output.as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(e) => operational_error(e),
+            };
+        }
+        CcAction::Skills { command } => {
+            return match Registry::locate()
+                .and_then(|r| r.expecting(expected).skills(command.into_action()))
+            {
+                Ok(data) => write_output(
+                    format!("{}\n", data).as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
         CcAction::Run { name, args } => return operation(Operation::Run, name, args, false),
         CcAction::Login { name, yes } => return operation(Operation::Login, name, vec![], yes),
         CcAction::Status { name } => return operation(Operation::Status, name, vec![], true),
