@@ -1,3 +1,4 @@
+mod alias;
 mod desktop;
 pub mod display;
 mod error;

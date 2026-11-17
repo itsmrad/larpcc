@@ -7,6 +7,9 @@
         reason = "Platform tests and common fixtures each own their private Windows ACL fixture"
     )
 )]
+#[path = "../src/aliases.rs"]
+#[allow(dead_code)]
+mod aliases;
 #[path = "../src/desktop/mod.rs"]
 mod desktop;
 #[path = "../src/launch/mod.rs"]

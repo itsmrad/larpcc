@@ -585,12 +585,23 @@ fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> io::Result<bool> {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Own {
+    /// Provider bindings: the running Larp image is never a provider.
+    Reject,
+    /// Alias source only: exactly the running Larp image.
+    Require,
+}
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
-    let (target, checked) = executable_checked(path, root)?;
+    let (target, checked) = executable_checked(path, root, Own::Reject)?;
     Ok((target, checked.identity))
 }
 
-fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObject), Error> {
+fn executable_checked(
+    path: &Path,
+    root: &Path,
+    own: Own,
+) -> Result<(PathBuf, CheckedObject), Error> {
     use std::io::Read;
     let _parents = anchor(path)?;
     let file = open(
@@ -676,13 +687,16 @@ fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObjec
     {
         return Err(unsafe_path(path, "filesystem identity cannot be verified"));
     }
-    if checked.identity
+    let own_image = checked.identity
         == (FileIdentity::Windows {
             volume: id.VolumeSerialNumber,
             id: id.FileId.Identifier,
-        })
-    {
+        });
+    if own == Own::Reject && own_image {
         return Err(unsafe_path(path, "is Larp CC itself"));
+    }
+    if own == Own::Require && !own_image {
+        return Err(unsafe_path(path, "is not the running Larp CC executable"));
     }
     Ok((target, checked))
 }
@@ -693,8 +707,23 @@ pub(crate) fn open_artifact_checked(
     path: &Path,
     root: &Path,
 ) -> Result<(File, FileIdentity), Error> {
+    open_artifact_policy(path, root, Own::Reject)
+}
+/// Alias source: the same trusted executable pipeline, accepting only the running Larp image.
+pub(crate) fn open_current_larp_checked(
+    root: &Path,
+) -> Result<(File, FileIdentity, PathBuf), Error> {
+    let path = std::env::current_exe().map_err(|source| Error::Io {
+        action: "locate current executable",
+        path: root.into(),
+        source,
+    })?;
+    let (file, identity) = open_artifact_policy(&path, root, Own::Require)?;
+    Ok((file, identity, path))
+}
+fn open_artifact_policy(path: &Path, root: &Path, own: Own) -> Result<(File, FileIdentity), Error> {
     use std::io::{Seek, SeekFrom};
-    let (_, mut checked) = executable_checked(path, root)?;
+    let (_, mut checked) = executable_checked(path, root, own)?;
     single_link_info(&checked.file, path)?;
     checked
         .file

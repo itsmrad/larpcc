@@ -1,3 +1,6 @@
+#[path = "../../src/aliases.rs"]
+#[allow(dead_code)]
+mod aliases;
 #[path = "../../src/cli/mod.rs"]
 mod cli;
 #[path = "../../src/desktop/mod.rs"]

@@ -36,10 +36,16 @@ impl Registry {
             };
             Ok(json!({"enabled":enabled,"path":super::display::path(&path),"state":state}))
         };
-        // Alias ownership belongs to Stage05. Refuse populated references until its checked renderer exists.
-        if data.aliases.iter().any(|a| a.profile_id == p.id) {
-            return Err(Error::RecoveryRequired);
-        }
+        let mut aliases: Vec<_> = data
+            .aliases
+            .iter()
+            .filter(|a| a.profile_id == p.id)
+            .collect();
+        aliases.sort_by(|a, b| a.name.cmp(&b.name));
+        let aliases: Vec<_> = aliases
+            .into_iter()
+            .map(|a| super::alias::alias_json(self.root(), a))
+            .collect();
         let desktop = data
             .desktop_bindings
             .iter()
@@ -47,7 +53,7 @@ impl Registry {
         let enabled = p.surfaces.unwrap_or_default();
         Ok(
             json!({"id":p.id.to_string(),"name":p.name,"provider":p.provider,"state":p.state.unwrap_or(super::ProfileState::Active),
-            "surfaces":{"cli":surface("cli",enabled.cli)?,"desktop":surface("desktop",enabled.desktop)?},"aliases":[],
+            "surfaces":{"cli":surface("cli",enabled.cli)?,"desktop":surface("desktop",enabled.desktop)?},"aliases":aliases,
             "desktop_binding":binding(desktop.map(|b| b.path.as_path()),desktop.and_then(|b| b.recorded_version.as_deref()),desktop_state(desktop))}),
         )
     }

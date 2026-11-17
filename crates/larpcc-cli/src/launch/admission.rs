@@ -97,7 +97,40 @@ pub(crate) fn invoke(
     if !rows.iter().any(|r| candidate(r, op)) {
         return Err(Error::QualificationPending);
     }
-    let registry = Registry::locate()?;
+    invoke_with(Registry::locate()?, None, op, name, args, yes, rows)
+}
+/// Alias dispatch: the root comes from the validated receipt (never LARPCC_HOME) and
+/// admission must observe the same registry revision as the validated alias mapping.
+/// An alias is no unlock: the same qualification gate and argument policy apply.
+pub(crate) fn invoke_pinned(
+    registry: Registry,
+    revision: u64,
+    name: &ProfileName,
+    args: Vec<OsString>,
+    rows: &[ArtifactRow],
+) -> Result<u32, Error> {
+    if !rows.iter().any(|r| candidate(r, Operation::Run)) {
+        return Err(Error::QualificationPending);
+    }
+    invoke_with(
+        registry,
+        Some(revision),
+        Operation::Run,
+        name,
+        args,
+        false,
+        rows,
+    )
+}
+fn invoke_with(
+    registry: Registry,
+    revision: Option<u64>,
+    op: Operation,
+    name: &ProfileName,
+    args: Vec<OsString>,
+    yes: bool,
+    rows: &[ArtifactRow],
+) -> Result<u32, Error> {
     let admitted = admit(
         &registry,
         op,
@@ -106,6 +139,9 @@ pub(crate) fn invoke(
         rows,
         &std::env::vars_os().map(|(k, _)| k).collect::<Vec<_>>(),
     )?;
+    if revision.is_some_and(|r| r != admitted.snapshot.revision) {
+        return Err(Error::AdmissionChanged);
+    }
     let guard = if op == Operation::Run {
         None
     } else {

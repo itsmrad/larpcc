@@ -2,6 +2,8 @@
 #[path = "../src/aliases.rs"]
 mod aliases;
 mod common;
+#[path = "../src/desktop/mod.rs"]
+mod desktop;
 #[path = "../src/launch/mod.rs"]
 mod launch;
 #[path = "../src/platform/mod.rs"]
@@ -10,6 +12,8 @@ mod platform;
 mod provider;
 #[path = "../src/registry/mod.rs"]
 mod registry;
+#[path = "../src/share/mod.rs"]
+mod share;
 use aliases::*;
 use common::*;
 use registry::{ProfileName, Provider, Registry, Surface};
@@ -76,19 +80,14 @@ fn stage05_dispatch_receipt_identity_hash_root_and_rename() {
     let source_dir = f.temp.path().join("Larp source ü space");
     create_directory(&source_dir);
     let source_path = source_dir.join(if cfg!(windows) { "larp.exe" } else { "larp" });
-    fs::copy(env!("CARGO_BIN_EXE_larp"), &source_path).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&source_path, fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    copy_executable(Path::new(env!("CARGO_BIN_EXE_larp")), &source_path);
     // Source::current deliberately cannot accept an arbitrary binding; fixture
     // uses a test-only helper to retain exactly this checked Larp copy.
     let source = aliases::test_source(&source_path, &f.root);
     create_directory(&f.root.join("bin"));
     let alias = name("codex-45", false).unwrap();
     let executable = launcher_path(&f.root, &alias);
-    fs::copy(&source_path, &executable).unwrap();
+    copy_executable(&source_path, &executable);
     let receipt = Receipt::prepare(
         &f.root,
         alias.clone(),
@@ -142,7 +141,7 @@ fn stage05_dispatch_receipt_identity_hash_root_and_rename() {
         .unwrap();
     // Identical bytes at a new inode are still drift.
     let replacement = f.root.join("bin/replacement");
-    fs::copy(&executable, &replacement).unwrap();
+    copy_executable(&executable, &replacement);
     fs::remove_file(&executable).unwrap();
     fs::rename(&replacement, &executable).unwrap();
     assert!(

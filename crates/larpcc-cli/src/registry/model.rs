@@ -144,6 +144,8 @@ pub struct Alias {
     pub name: ProfileName,
     pub profile_id: ProfileId,
     pub surface: Surface,
+    /// Lowercase SHA-256 of the exact adjacent receipt bytes, owned independently of `<root>/bin`.
+    pub receipt: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

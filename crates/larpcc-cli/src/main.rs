@@ -1,3 +1,4 @@
+mod aliases;
 mod cli;
 #[cfg_attr(any(test, not(target_os = "macos")), allow(dead_code))]
 mod desktop;
@@ -7,5 +8,9 @@ mod provider;
 mod registry;
 mod share;
 fn main() -> std::process::ExitCode {
+    // argv[0] classification precedes every parser and early gate.
+    if let Some(code) = cli::gate() {
+        return code;
+    }
     cli::run()
 }

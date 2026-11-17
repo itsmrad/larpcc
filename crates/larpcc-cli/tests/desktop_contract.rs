@@ -6,6 +6,9 @@
         reason = "Existing platform unit tests and integration fixtures each own the Windows private ACL fixture"
     )
 )]
+#[path = "../src/aliases.rs"]
+#[allow(dead_code)]
+mod aliases;
 mod common;
 #[path = "../src/desktop/mod.rs"]
 mod desktop;
