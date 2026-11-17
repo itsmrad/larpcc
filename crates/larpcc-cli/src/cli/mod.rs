@@ -56,6 +56,12 @@ enum RootAction {
 
 #[derive(Subcommand)]
 enum CcAction {
+    /// Bind or open a verified desktop app (ChatGPT on macOS; Claude closed)
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    App {
+        #[command(subcommand)]
+        command: AppCommand,
+    },
     /// Manage explicit skill packages and per-profile sharing
     #[command(arg_required_else_help = true, disable_help_subcommand = true)]
     Skills {
@@ -99,6 +105,22 @@ enum CcAction {
     Profile {
         #[command(subcommand)]
         command: ProfileAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AppCommand {
+    Bind {
+        #[arg(value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
+        provider: Provider,
+        path: std::path::PathBuf,
+        #[arg(long = "version")]
+        recorded_version: Option<String>,
+        #[arg(long)]
+        replace: bool,
+    },
+    Open {
+        name: ProfileName,
     },
 }
 
@@ -273,6 +295,34 @@ pub fn run() -> ExitCode {
     }
     let expected = cli.expected_revision;
     let command = match command {
+        CcAction::App { command } => {
+            if let Err(e) = crate::desktop::preflight() {
+                return operational_error(e);
+            }
+            return match Registry::locate().and_then(|r| {
+                let r = r.expecting(expected);
+                match command {
+                    AppCommand::Bind {
+                        provider,
+                        path,
+                        recorded_version,
+                        replace,
+                    } => r
+                        .bind_desktop(provider, path, recorded_version, replace)
+                        .map(|_| "Desktop binding saved.\n".to_owned()),
+                    AppCommand::Open { name } => r
+                        .open_desktop(&name, false)
+                        .map(|receipt| format!("Desktop {}.\n", receipt.outcome)),
+                }
+            }) {
+                Ok(output) => write_output(
+                    output.as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(e) => operational_error(e),
+            };
+        }
         CcAction::Skills { command } => {
             return match Registry::locate()
                 .and_then(|r| r.expecting(expected).skills(command.into_action()))

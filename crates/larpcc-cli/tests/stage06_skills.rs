@@ -1,5 +1,7 @@
 // Temporary path harness until CORE registers share after the v3 seed handoff.
 #![allow(dead_code)]
+#[path = "../src/desktop/mod.rs"]
+mod desktop;
 #[path = "../src/launch/mod.rs"]
 mod launch;
 #[path = "../src/platform/mod.rs"]

@@ -1,3 +1,4 @@
+mod desktop;
 pub mod display;
 mod error;
 mod json;

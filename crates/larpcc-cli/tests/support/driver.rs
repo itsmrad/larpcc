@@ -1,5 +1,8 @@
 #[path = "../../src/cli/mod.rs"]
 mod cli;
+#[path = "../../src/desktop/mod.rs"]
+#[allow(dead_code)]
+mod desktop;
 #[path = "../../src/launch/mod.rs"]
 mod launch;
 #[path = "../../src/launch/legacy.rs"]

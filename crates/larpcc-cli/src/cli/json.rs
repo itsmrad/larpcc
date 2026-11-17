@@ -91,6 +91,10 @@ fn receipt(entry: &crate::registry::ProfileEntry) -> Value {
 }
 pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode {
     let command = match &action {
+        CcAction::App {
+            command: AppCommand::Bind { .. },
+        } => "app.bind",
+        CcAction::App { .. } => "app.open",
         CcAction::Skills { command } => command.action().command(),
         CcAction::Run { .. } => "run",
         CcAction::Login { .. } => "login",
@@ -128,11 +132,18 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
     ) {
         return json_error(command, "usage", "This operation requires --yes.", 2);
     }
+    if matches!(action, CcAction::App { .. })
+        && let Err(e) = crate::desktop::preflight()
+    {
+        return failure(command, e);
+    }
     let r = match Registry::locate() {
         Ok(r) => r.expecting(expected),
         Err(e) => return failure(command, e),
     };
     let result = match action {
+        CcAction::App {command:AppCommand::Bind {provider,path,recorded_version,replace}} => r.bind_desktop(provider,path,recorded_version,replace).map(|changed| json!({"changed":changed,"profile_id":null,"name":null,"warnings":[]})),
+        CcAction::App {command:AppCommand::Open {name}} => r.open_desktop(&name,true).map(|receipt| json!({"profile_id":receipt.profile_id.to_string(),"provider":receipt.provider,"surface":receipt.surface,"outcome":receipt.outcome,"native_auth":receipt.native_auth})),
         CcAction::Skills {command} => r.skills(command.into_action()),
         CcAction::Status {name} => r.metadata_json(command,Some(&name)),
         CcAction::Provider {command:ProviderAction::List} => r.metadata_json(command,None),
