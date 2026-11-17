@@ -6,7 +6,7 @@ on:
       - 'apps/macos/**'
       - '.github/workflows/macos-app.yml'
   push:
-    branches: [main, stage/6-macos-app]
+    branches: [main]
     paths:
       - 'apps/macos/**'
       - '.github/workflows/macos-app.yml'
@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   native-app:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 15
     defaults:
       run:
