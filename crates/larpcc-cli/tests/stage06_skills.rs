@@ -8,8 +8,9 @@ mod platform;
 mod provider;
 #[path = "../src/registry/mod.rs"]
 mod registry;
-#[path = "../src/share/skills/mod.rs"]
-mod skills;
+#[path = "../src/share/mod.rs"]
+mod share;
+use share::skills;
 
 #[cfg(unix)]
 mod cases {
@@ -252,4 +253,157 @@ mod cases {
         assert_eq!(receipt.remove(&source), Err(skills::Error::Drift));
         drop(original);
     }
+}
+
+mod common;
+fn request(f: &common::Fixture, args: &[&str], code: i32) -> serde_json::Value {
+    let out = common::capture(f.command(args)).unwrap();
+    assert_eq!(out.status.code(), Some(code), "{}", common::stderr(&out));
+    assert!(out.stderr.is_empty());
+    assert_eq!(out.stdout.iter().filter(|b| **b == b'\n').count(), 1);
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+#[test]
+fn stage06_cli_schema1_expected_revision_and_complete_lifecycle() {
+    use serde_json::json;
+    let f = common::Fixture::new();
+    let source = f.temp.path().join("source");
+    common::create_directory(&source);
+    common::create_file(&source.join("SKILL.md"), b"example\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(
+            source.join("SKILL.md"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
+    let before = f.outside_snapshot();
+    let empty = request(&f, &["cc", "skills", "list", "--json"], 0);
+    assert_eq!(
+        empty,
+        json!({"schema":1,"command":"skills.list","ok":true,"revision":"0","data":{"skills":[]}})
+    );
+    assert!(!f.root.exists());
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "claude-work",
+            "--provider",
+            "claude",
+            "--json",
+        ],
+        0,
+    );
+    let added = request(
+        &f,
+        &[
+            "cc",
+            "skills",
+            "add",
+            source.to_str().unwrap(),
+            "--name",
+            "example",
+            "--json",
+            "--expected-revision",
+            "1",
+        ],
+        0,
+    );
+    assert_eq!(
+        added,
+        json!({"schema":1,"command":"skills.add","ok":true,"revision":"2","data":{"changed":true,"profile_id":null,"name":"example","warnings":[]}})
+    );
+    let list = request(&f, &["cc", "skills", "list", "--json"], 0);
+    assert_eq!(
+        list["data"]["skills"][0]["switches"],
+        json!([{"profile_id":"1","enabled":true}])
+    );
+    assert_eq!(list["data"]["skills"][0]["state"], "ok");
+    let matrix = request(&f, &["cc", "skills", "matrix", "--json"], 0);
+    assert_eq!(
+        matrix,
+        json!({"schema":1,"command":"skills.matrix","ok":true,"revision":"2","data":{"profiles":[{"id":"1","name":"claude-work","provider":"claude"}],"rows":[{"name":"example","enabled":[true]}]}})
+    );
+    let stale = request(
+        &f,
+        &[
+            "cc",
+            "skills",
+            "disable",
+            "missing",
+            "missing",
+            "--expected-revision",
+            "1",
+            "--json",
+        ],
+        1,
+    );
+    assert_eq!(stale["error"]["code"], "conflict");
+    assert_eq!(
+        request(&f, &["cc", "skills", "remove", "example", "--json"], 1)["error"]["code"],
+        "conflict"
+    );
+    let disabled = request(
+        &f,
+        &[
+            "cc",
+            "skills",
+            "disable",
+            "example",
+            "claude-work",
+            "--json",
+        ],
+        0,
+    );
+    assert_eq!(
+        disabled,
+        json!({"schema":1,"command":"skills.disable","ok":true,"revision":"3","data":{"changed":true,"profile_id":"1","name":"example","warnings":[]}})
+    );
+    let noop = request(
+        &f,
+        &[
+            "cc",
+            "skills",
+            "disable",
+            "example",
+            "claude-work",
+            "--json",
+        ],
+        0,
+    );
+    assert_eq!(noop["data"]["changed"], false);
+    assert_eq!(noop["revision"], "3");
+    request(
+        &f,
+        &["cc", "skills", "enable", "example", "claude-work", "--json"],
+        0,
+    );
+    request(
+        &f,
+        &[
+            "cc",
+            "skills",
+            "disable",
+            "example",
+            "claude-work",
+            "--json",
+        ],
+        0,
+    );
+    request(&f, &["cc", "skills", "remove", "example", "--json"], 0);
+    assert_eq!(
+        request(&f, &["cc", "skills", "sync", "--json"], 0)["data"]["changed"],
+        false
+    );
+    assert_eq!(
+        request(&f, &["cc", "skills", "list", "--json"], 0)["data"],
+        json!({"skills":[]})
+    );
+    assert_eq!(f.outside_snapshot(), before);
 }

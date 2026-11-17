@@ -47,6 +47,12 @@ pub(super) fn json_or_usage(is_json: bool, command: &str, code: &str, message: &
 }
 fn failure(command: &str, error: Error) -> ExitCode {
     let (code, message, exit) = match error {
+        Error::Drift => (
+            "drift",
+            "Owned content or filesystem identity has changed.",
+            1,
+        ),
+        Error::SkillNotFound => ("not_found", "Skill was not found.", 1),
         Error::Conflict | Error::NameTaken { .. } => {
             ("conflict", "Registry revision or references conflict.", 1)
         }
@@ -85,6 +91,7 @@ fn receipt(entry: &crate::registry::ProfileEntry) -> Value {
 }
 pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode {
     let command = match &action {
+        CcAction::Skills { command } => command.action().command(),
         CcAction::Run { .. } => "run",
         CcAction::Login { .. } => "login",
         CcAction::Logout { .. } => "logout",
@@ -126,6 +133,7 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         Err(e) => return failure(command, e),
     };
     let result = match action {
+        CcAction::Skills {command} => r.skills(command.into_action()),
         CcAction::Status {name} => r.metadata_json(command,Some(&name)),
         CcAction::Provider {command:ProviderAction::List} => r.metadata_json(command,None),
         CcAction::Provider {command:ProviderAction::Bind {provider,executable,replace}} => r.bind(provider,executable,replace).map(|outcome| json!({"changed":outcome != crate::registry::BindOutcome::Unchanged,"profile_id":null,"name":null,"warnings":[]})),

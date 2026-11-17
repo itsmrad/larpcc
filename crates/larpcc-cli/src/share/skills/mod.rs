@@ -4,11 +4,12 @@ use crate::{
     platform::{self, CheckedObject, FileIdentity, ObjectKind},
     registry::ProfileName,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs::{self, File},
-    io::{Read, Write},
+    io::Read,
     path::{Component, Path, PathBuf},
 };
 
@@ -26,13 +27,15 @@ pub enum Error {
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Entry {
     path: String,
     bytes: Vec<u8>,
 }
 /// Bounded snapshot; never rereads a source during installation.
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Package {
     files: Vec<Entry>,
     directories: Vec<String>,
@@ -74,16 +77,7 @@ fn ancestry(path: &Path) -> Result<platform::AnchoredPath> {
 }
 
 fn single_link(file: &File) -> Result<()> {
-    #[cfg(unix)]
-    {
-        platform::single_link(file).map_err(|_| Error::Unsafe)
-    }
-    #[cfg(windows)]
-    {
-        // Integration will expose the existing checked-handle platform query.
-        let _ = file;
-        Err(Error::Unsafe)
-    }
+    platform::single_link(file).map_err(|_| Error::Unsafe)
 }
 
 // Portable spelling prevents ADS/device paths and case-insensitive collisions.
@@ -112,15 +106,27 @@ fn component(name: &str) -> Result<()> {
 
 impl Package {
     pub fn read(source: &Path) -> Result<Self> {
+        Self::read_with(source, false)
+    }
+    pub fn source(source: &Path) -> Result<Self> {
+        Self::read_with(source, true)
+    }
+    fn read_with(source: &Path, trusted_source: bool) -> Result<Self> {
         let _ancestors = ancestry(source)?;
         let source: PathBuf = source.components().collect();
+        let _root = platform::read_skill_object(&source, ObjectKind::Directory, trusted_source)
+            .map_err(|_| Error::Unsafe)?;
+        let entry =
+            platform::read_skill_object(&source.join("SKILL.md"), ObjectKind::File, trusted_source)
+                .map_err(|_| Error::Unsafe)?;
+        single_link(&entry.file)?;
         let mut package = Self {
             files: Vec::new(),
             directories: Vec::new(),
             sha256: String::new(),
         };
         let mut total = 0;
-        package.walk(&source, "", 0, &mut total)?;
+        package.walk(&source, "", 0, &mut total, trusted_source)?;
         if !package.files.iter().any(|f| f.path == "SKILL.md") {
             return Err(Error::Unsafe);
         }
@@ -137,13 +143,21 @@ impl Package {
         Ok(package)
     }
 
-    fn walk(&mut self, root: &Path, relative: &str, depth: usize, total: &mut u64) -> Result<()> {
+    fn walk(
+        &mut self,
+        root: &Path,
+        relative: &str,
+        depth: usize,
+        total: &mut u64,
+        trusted_source: bool,
+    ) -> Result<()> {
         let path = if relative.is_empty() {
             root.to_path_buf()
         } else {
             root.join(relative)
         };
-        let _directory = checked(&path, ObjectKind::Directory)?;
+        let _directory = platform::read_skill_object(&path, ObjectKind::Directory, trusted_source)
+            .map_err(|_| Error::Unsafe)?;
         let mut names = BTreeSet::new();
         for entry in fs::read_dir(&path).map_err(|_| Error::Io)? {
             let entry = entry.map_err(|_| Error::Io)?;
@@ -168,12 +182,13 @@ impl Package {
                     return Err(Error::TooLarge);
                 }
                 self.directories.push(relative.clone());
-                self.walk(root, &relative, depth + 1, total)?;
+                self.walk(root, &relative, depth + 1, total, trusted_source)?;
             } else {
                 if self.files.len() >= MAX_FILES {
                     return Err(Error::TooLarge);
                 }
-                let object = checked(&path, ObjectKind::File)?;
+                let object = platform::read_skill_object(&path, ObjectKind::File, trusted_source)
+                    .map_err(|_| Error::Unsafe)?;
                 single_link(&object.file)?;
                 let len = object.file.metadata().map_err(|_| Error::Io)?.len();
                 if len > MAX_BYTES - *total {
@@ -200,7 +215,10 @@ impl Package {
 
     /// Destination must be absent and its parent prepared by the transaction.
     /// Failure leaves only journal-owned partial output for explicit recovery.
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn copy_new(&self, destination: &Path) -> Result<FileIdentity> {
+        use std::io::Write;
         let _ancestors = ancestry(destination)?;
         absent(destination)?;
         let directory = platform::create_directory(destination).map_err(|_| Error::Io)?;
@@ -231,10 +249,11 @@ pub fn store_path(root: &Path, name: &ProfileName) -> PathBuf {
 }
 
 /// Copy ownership includes each regular file identity as well as its digest.
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct OwnedCopy {
     identity: FileIdentity,
-    files: Vec<(String, FileIdentity)>,
+    files: Vec<(String, FileIdentity, String, u64)>,
     directories: Vec<(String, FileIdentity)>,
     sha256: String,
 }
@@ -249,6 +268,8 @@ impl OwnedCopy {
             files.push((
                 entry.path.clone(),
                 checked(&path.join(&entry.path), ObjectKind::File)?.identity,
+                format!("{:x}", Sha256::digest(&entry.bytes)),
+                entry.bytes.len() as u64,
             ));
         }
         let mut directories = Vec::new();
@@ -266,16 +287,12 @@ impl OwnedCopy {
         })
     }
     pub fn verify(&self, path: &Path) -> Result<()> {
-        let current = Self::capture(path, &self.sha256).map_err(|_| Error::Drift)?;
-        if current.identity != self.identity
-            || current.files != self.files
-            || current.directories != self.directories
-        {
-            return Err(Error::Drift);
-        }
-        Ok(())
+        self.verify_contents(path, false).map_err(|_| Error::Drift)
     }
+
     /// Unlink exact proven leaves; never recursive deletion or following a target.
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn remove(&self, path: &Path) -> Result<()> {
         self.verify(path)?;
         #[cfg(unix)]
@@ -284,7 +301,7 @@ impl OwnedCopy {
         }
         #[cfg(windows)]
         {
-            Err(Error::Unsafe)
+            self.remove_windows(path)
         }
     }
 }
@@ -335,14 +352,19 @@ impl OwnedCopy {
                     if directory { libc::AT_REMOVEDIR } else { 0 },
                 )
             } != 0
+                && std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound
             {
                 return Err(Error::Io);
             }
+            io_phase("unlink")?;
             Ok(())
         }
         let _ancestors = ancestry(path)?;
         let parent = checked(path.parent().ok_or(Error::Unsafe)?, ObjectKind::Directory)?.file;
         let leaf = path.file_name().ok_or(Error::Unsafe)?;
+        if !path.try_exists().map_err(|_| Error::Io)? {
+            return Ok(());
+        }
         let root = open_directory(&parent, leaf)?;
         if identity(&root)? != self.identity {
             return Err(Error::Drift);
@@ -355,6 +377,9 @@ impl OwnedCopy {
                 .parent()
                 .and_then(Path::to_str)
                 .ok_or(Error::Unsafe)?;
+            if !path.join(relative).try_exists().map_err(|_| Error::Io)? {
+                continue;
+            }
             let directory = open_directory(
                 held.get(parent_name).ok_or(Error::Unsafe)?,
                 relative_path.file_name().ok_or(Error::Unsafe)?,
@@ -364,7 +389,10 @@ impl OwnedCopy {
             }
             held.insert(relative.clone(), directory);
         }
-        for (relative, _) in &self.files {
+        for (relative, _, _, _) in &self.files {
+            if !path.join(relative).try_exists().map_err(|_| Error::Io)? {
+                continue;
+            }
             let relative_path = Path::new(relative);
             let parent_name = relative_path
                 .parent()
@@ -377,6 +405,9 @@ impl OwnedCopy {
             )?;
         }
         for (relative, _) in self.directories.iter().rev() {
+            if !path.join(relative).try_exists().map_err(|_| Error::Io)? {
+                continue;
+            }
             let relative_path = Path::new(relative);
             let parent_name = relative_path
                 .parent()
@@ -393,9 +424,11 @@ impl OwnedCopy {
 }
 
 #[cfg(unix)]
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct OwnedLink {
     identity: FileIdentity,
+    #[serde(with = "native_path")]
     target: PathBuf,
 }
 #[cfg(unix)]
@@ -437,4 +470,375 @@ impl OwnedLink {
         self.verify(path)?;
         fs::remove_file(path).map_err(|_| Error::Io)
     }
+}
+
+impl Package {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.files.len() > MAX_FILES || self.directories.len() > MAX_FILES {
+            return Err(Error::TooLarge);
+        }
+        let mut total = 0u64;
+        let mut paths = BTreeSet::new();
+        for path in self
+            .directories
+            .iter()
+            .map(String::as_str)
+            .chain(self.files.iter().map(|f| f.path.as_str()))
+        {
+            relative(path)?;
+            if !paths.insert(path.to_ascii_lowercase()) {
+                return Err(Error::Collision);
+            }
+        }
+        let mut digest = Sha256::new();
+        let mut previous = None;
+        for f in &self.files {
+            if previous.is_some_and(|p: &str| p >= f.path.as_str()) {
+                return Err(Error::Unsafe);
+            }
+            previous = Some(&f.path);
+            total = total
+                .checked_add(f.bytes.len() as u64)
+                .ok_or(Error::TooLarge)?;
+            if total > MAX_BYTES {
+                return Err(Error::TooLarge);
+            }
+            digest.update((f.path.len() as u64).to_be_bytes());
+            digest.update(f.path.as_bytes());
+            digest.update((f.bytes.len() as u64).to_be_bytes());
+            digest.update(&f.bytes);
+        }
+        if !self.files.iter().any(|f| f.path == "SKILL.md")
+            || format!("{:x}", digest.finalize()) != self.sha256
+        {
+            return Err(Error::Unsafe);
+        }
+        Ok(())
+    }
+    /// Only for a journaled, preflight-absent destination. Resume exact prefixes;
+    /// unrelated entries or changed bytes are never overwritten.
+    pub(crate) fn resume_copy(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let _ancestors = ancestry(path)?;
+        if fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+            platform::create_directory(path).map_err(|_| Error::Io)?;
+        }
+        io_phase("directory")?;
+        let mut held = vec![checked(path, ObjectKind::Directory)?];
+        for relative in &self.directories {
+            let child = path.join(relative);
+            if fs::symlink_metadata(&child).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                platform::create_directory(&child).map_err(|_| Error::Io)?;
+            }
+            held.push(checked(&child, ObjectKind::Directory)?);
+        }
+        // Enumerate names only; never read an unplanned file's contents.
+        for dir in std::iter::once("").chain(self.directories.iter().map(String::as_str)) {
+            for child in fs::read_dir(path.join(dir)).map_err(|_| Error::Io)? {
+                let child = child.map_err(|_| Error::Io)?;
+                let relative = child
+                    .path()
+                    .strip_prefix(path)
+                    .map_err(|_| Error::Unsafe)?
+                    .to_str()
+                    .ok_or(Error::Unsafe)?
+                    .replace('\\', "/");
+                if !self.files.iter().any(|f| f.path == relative)
+                    && !self.directories.contains(&relative)
+                {
+                    return Err(Error::Drift);
+                }
+            }
+        }
+        for entry in &self.files {
+            let child = path.join(&entry.path);
+            if fs::symlink_metadata(&child).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                platform::create_file(&child).map_err(|_| Error::Io)?;
+            }
+            io_phase("file_created")?;
+            let object = platform::read_skill_object(&child, ObjectKind::File, false)
+                .map_err(|_| Error::Unsafe)?;
+            single_link(&object.file)?;
+            let mut bytes = Vec::new();
+            (&object.file)
+                .take(entry.bytes.len() as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| Error::Io)?;
+            if !entry.bytes.starts_with(&bytes) {
+                return Err(Error::Drift);
+            }
+            let identity = object.identity;
+            drop(object.file);
+            platform::append_skill_file(&child, &identity, &entry.bytes[bytes.len()..])
+                .map_err(|_| Error::Unsafe)?;
+            io_phase("file_written")?;
+        }
+        #[cfg(unix)]
+        {
+            for object in held.iter().rev() {
+                object.file.sync_all().map_err(|_| Error::Io)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn relative(path: &str) -> Result<()> {
+    if path.is_empty() || path.split('/').count() > MAX_DEPTH {
+        return Err(Error::Unsafe);
+    }
+    for part in path.split('/') {
+        component(part)?;
+    }
+    Ok(())
+}
+impl OwnedCopy {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.files.len() > MAX_FILES || self.directories.len() > MAX_FILES {
+            return Err(Error::TooLarge);
+        }
+        let mut names = BTreeSet::new();
+        for path in self
+            .files
+            .iter()
+            .map(|f| &f.0)
+            .chain(self.directories.iter().map(|d| &d.0))
+        {
+            relative(path)?;
+            if !names.insert(path.to_ascii_lowercase()) {
+                return Err(Error::Unsafe);
+            }
+        }
+        if self
+            .files
+            .iter()
+            .map(|f| f.3)
+            .try_fold(0u64, u64::checked_add)
+            .is_none_or(|n| n > MAX_BYTES)
+        {
+            return Err(Error::TooLarge);
+        }
+        if !self.files.iter().any(|f| f.0 == "SKILL.md")
+            || self.files.windows(2).any(|w| w[0].0 >= w[1].0)
+            || self.directories.windows(2).any(|w| w[0].0 >= w[1].0)
+        {
+            return Err(Error::Unsafe);
+        }
+        for path in self
+            .files
+            .iter()
+            .map(|f| &f.0)
+            .chain(self.directories.iter().map(|d| &d.0))
+        {
+            if let Some(parent) = path.rsplit_once('/').map(|p| p.0)
+                && !self.directories.iter().any(|d| d.0 == parent)
+            {
+                return Err(Error::Unsafe);
+            }
+        }
+        Ok(())
+    }
+    /// Verify remaining entries against the journaled manifest; missing leaves
+    /// represent completed unlinks. No unknown entry is read or removed.
+    fn verify_contents(&self, path: &Path, allow_missing: bool) -> Result<()> {
+        self.validate()?;
+        let _ancestors = ancestry(path)?;
+        match fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && allow_missing => return Ok(()),
+            Err(_) => return Err(Error::Drift),
+            Ok(_) => (),
+        }
+        if checked(path, ObjectKind::Directory)?.identity != self.identity {
+            return Err(Error::Drift);
+        }
+        for (relative, id) in &self.directories {
+            let exists = fs::symlink_metadata(path.join(relative)).is_ok();
+            if (!exists && !allow_missing)
+                || (exists && checked(&path.join(relative), ObjectKind::Directory)?.identity != *id)
+            {
+                return Err(Error::Drift);
+            }
+        }
+        for dir in std::iter::once("").chain(self.directories.iter().map(|d| d.0.as_str())) {
+            let directory = path.join(dir);
+            if !directory.try_exists().map_err(|_| Error::Io)? {
+                continue;
+            }
+            for child in fs::read_dir(directory).map_err(|_| Error::Io)? {
+                let child = child.map_err(|_| Error::Io)?;
+                let relative = child
+                    .path()
+                    .strip_prefix(path)
+                    .map_err(|_| Error::Unsafe)?
+                    .to_str()
+                    .ok_or(Error::Unsafe)?
+                    .replace('\\', "/");
+                if !self.files.iter().any(|f| f.0 == relative)
+                    && !self.directories.iter().any(|d| d.0 == relative)
+                {
+                    return Err(Error::Drift);
+                }
+            }
+        }
+        for (relative, id, digest, len) in &self.files {
+            let child = path.join(relative);
+            if fs::symlink_metadata(&child).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                if allow_missing {
+                    continue;
+                } else {
+                    return Err(Error::Drift);
+                }
+            }
+            let object = platform::read_skill_object(&child, ObjectKind::File, false)
+                .map_err(|_| Error::Unsafe)?;
+            single_link(&object.file)?;
+            if object.identity != *id {
+                return Err(Error::Drift);
+            }
+            let mut bytes = Vec::new();
+            (&object.file)
+                .take(*len + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| Error::Io)?;
+            if bytes.len() as u64 != *len || format!("{:x}", Sha256::digest(bytes)) != *digest {
+                return Err(Error::Drift);
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn resume_remove(&self, path: &Path) -> Result<()> {
+        self.verify_contents(path, true)?;
+        if fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+            return Ok(());
+        }
+        #[cfg(unix)]
+        {
+            self.remove_unix(path)
+        }
+        #[cfg(windows)]
+        {
+            self.remove_windows(path)
+        }
+    }
+    #[cfg(windows)]
+    fn remove_windows(&self, path: &Path) -> Result<()> {
+        let _ancestors = ancestry(path)?;
+        let root = checked(path, ObjectKind::Directory)?;
+        if root.identity != self.identity {
+            return Err(Error::Drift);
+        }
+        let mut held = Vec::new();
+        for (relative, identity) in &self.directories {
+            let child = path.join(relative);
+            if fs::symlink_metadata(&child).is_ok() {
+                let object = checked(&child, ObjectKind::Directory)?;
+                if object.identity != *identity {
+                    return Err(Error::Drift);
+                }
+                held.push((relative, object));
+            }
+        }
+        for (relative, identity, _, _) in &self.files {
+            let child = path.join(relative);
+            if fs::symlink_metadata(&child).is_ok() {
+                platform::remove_skill_leaf(&child, identity, ObjectKind::File)
+                    .map_err(|_| Error::Unsafe)?;
+                io_phase("unlink")?;
+            }
+        }
+        while let Some((relative, object)) = held.pop() {
+            let identity = object.identity;
+            drop(object.file);
+            platform::remove_skill_leaf(&path.join(relative), &identity, ObjectKind::Directory)
+                .map_err(|_| Error::Unsafe)?;
+        }
+        drop(root.file);
+        platform::remove_skill_leaf(path, &self.identity, ObjectKind::Directory)
+            .map_err(|_| Error::Unsafe)
+    }
+}
+
+#[cfg(unix)]
+impl OwnedLink {
+    pub(crate) fn validate_internal(&self, root: &Path, name: &ProfileName) -> Result<()> {
+        if self.target != store_path(root, name) {
+            return Err(Error::Unsafe);
+        }
+        Ok(())
+    }
+    pub(crate) fn capture_internal(root: &Path, name: &ProfileName, path: &Path) -> Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let target = store_path(root, name);
+        let meta = fs::symlink_metadata(path).map_err(|_| Error::Io)?;
+        if !meta.file_type().is_symlink() || fs::read_link(path).map_err(|_| Error::Io)? != target {
+            return Err(Error::Drift);
+        }
+        let receipt = Self {
+            identity: FileIdentity::Unix {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            },
+            target,
+        };
+        receipt.verify(path)?;
+        Ok(receipt)
+    }
+}
+
+impl Package {
+    pub(crate) fn manifest_bound(&self) -> Result<usize> {
+        let paths = serde_json::to_vec(
+            &self
+                .files
+                .iter()
+                .map(|f| &f.path)
+                .chain(self.directories.iter())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|_| Error::Unsafe)?
+        .len();
+        // Each receipt adds bounded identity, hash and length fields to each path.
+        Ok(paths + (self.files.len() + self.directories.len()) * 256 + 1024)
+    }
+}
+
+// Persist the exact native link target, including non-Unicode managed roots.
+#[cfg(unix)]
+mod native_path {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::{os::unix::ffi::OsStringExt, path::PathBuf};
+    pub fn serialize<S: Serializer>(
+        path: &std::path::Path,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        path.as_os_str().as_encoded_bytes().serialize(serializer)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<PathBuf, D::Error> {
+        Ok(std::ffi::OsString::from_vec(Vec::<u8>::deserialize(deserializer)?).into())
+    }
+}
+
+impl OwnedCopy {
+    pub(crate) fn digest(&self) -> &str {
+        &self.sha256
+    }
+}
+
+#[cfg(test)]
+thread_local! {static IO_FAULT:std::cell::RefCell<Option<&'static str>>=const{std::cell::RefCell::new(None)};}
+#[cfg(test)]
+pub(crate) fn set_io_fault(phase: Option<&'static str>) {
+    IO_FAULT.with(|f| *f.borrow_mut() = phase);
+}
+fn io_phase(_phase: &str) -> Result<()> {
+    #[cfg(test)]
+    if IO_FAULT.with(|f| f.borrow().is_some_and(|v| v == _phase)) {
+        return Err(Error::Io);
+    }
+    Ok(())
 }

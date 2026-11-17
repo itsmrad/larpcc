@@ -56,6 +56,12 @@ enum RootAction {
 
 #[derive(Subcommand)]
 enum CcAction {
+    /// Manage explicit skill packages and per-profile sharing
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
     #[command(
         about = "Manage native provider bindings",
         arg_required_else_help = true,
@@ -94,6 +100,57 @@ enum CcAction {
         #[command(subcommand)]
         command: ProfileAction,
     },
+}
+
+#[derive(Clone, Subcommand)]
+enum SkillsCommand {
+    /// Copy one explicit package into the immutable managed store
+    Add {
+        path: std::path::PathBuf,
+        #[arg(long, value_parser=ProfileName::parse_new)]
+        name: ProfileName,
+    },
+    /// Remove a package after disabling all profile references
+    Remove {
+        name: ProfileName,
+    },
+    Enable {
+        name: ProfileName,
+        profile: ProfileName,
+    },
+    Disable {
+        name: ProfileName,
+        profile: ProfileName,
+    },
+    List,
+    Matrix,
+    /// Apply sharing changes or explicitly resume an interrupted transaction
+    Sync,
+}
+impl SkillsCommand {
+    fn action(&self) -> crate::registry::SkillsAction {
+        self.clone().into_action()
+    }
+    fn into_action(self) -> crate::registry::SkillsAction {
+        use crate::registry::SkillsAction as A;
+        match self {
+            Self::Add { path, name } => A::Add { source: path, name },
+            Self::Remove { name } => A::Remove { name },
+            Self::Enable { name, profile } => A::Switch {
+                name,
+                profile,
+                enabled: true,
+            },
+            Self::Disable { name, profile } => A::Switch {
+                name,
+                profile,
+                enabled: false,
+            },
+            Self::List => A::List,
+            Self::Matrix => A::Matrix,
+            Self::Sync => A::Sync,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -216,6 +273,18 @@ pub fn run() -> ExitCode {
     }
     let expected = cli.expected_revision;
     let command = match command {
+        CcAction::Skills { command } => {
+            return match Registry::locate()
+                .and_then(|r| r.expecting(expected).skills(command.into_action()))
+            {
+                Ok(data) => write_output(
+                    format!("{}\n", data).as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
         CcAction::Run { name, args } => return operation(Operation::Run, name, args, false),
         CcAction::Login { name, yes } => return operation(Operation::Login, name, vec![], yes),
         CcAction::Status { name } => return operation(Operation::Status, name, vec![], true),

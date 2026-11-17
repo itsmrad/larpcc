@@ -3,6 +3,7 @@ Manage Claude Code and Codex profiles
 Usage: larp cc [OPTIONS] <COMMAND>
 
 Commands:
+  skills    Manage explicit skill packages and per-profile sharing
   provider  Manage native provider bindings
   run       Launch a profile (qualification pending; disabled in this build)
   login     Authenticate a profile
