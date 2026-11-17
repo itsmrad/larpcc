@@ -49,19 +49,11 @@ impl Drop for Owned {
         }
     }
 }
-pub(super) fn verify_signature(path: &Path) -> Result<(), Error> {
+fn requirement() -> Result<Owned, Error> {
     // Reviewed current ChatGPT identity; no Claude identity or launch row is inferred.
     let requirement = br#"identifier "com.openai.codex" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "2DC432GLL2""#;
-    let bytes = path.as_os_str().as_bytes();
-    // SAFETY: input slices live across calls; lengths are exact, outputs initialized;
-    // CoreFoundation/Security ownership follows their Create rule.
+    // SAFETY: fixed byte slice is live and its exact length is supplied.
     unsafe {
-        let url = Owned::new(CFURLCreateFromFileSystemRepresentation(
-            std::ptr::null(),
-            bytes.as_ptr(),
-            bytes.len() as isize,
-            1,
-        ))?;
         let text = Owned::new(CFStringCreateWithBytes(
             std::ptr::null(),
             requirement.as_ptr(),
@@ -73,7 +65,20 @@ pub(super) fn verify_signature(path: &Path) -> Result<(), Error> {
         if SecRequirementCreateWithString(text.0, 0, &mut req) != 0 {
             return Err(Error::ArtifactInvalid);
         }
-        let req = Owned::new(req)?;
+        Owned::new(req)
+    }
+}
+pub(super) fn verify_signature(path: &Path) -> Result<(), Error> {
+    let bytes = path.as_os_str().as_bytes();
+    let req = requirement()?;
+    // SAFETY: checked path bytes live across the call; initialized outputs follow Create ownership.
+    unsafe {
+        let url = Owned::new(CFURLCreateFromFileSystemRepresentation(
+            std::ptr::null(),
+            bytes.as_ptr(),
+            bytes.len() as isize,
+            1,
+        ))?;
         let mut code = std::ptr::null();
         if SecStaticCodeCreateWithPath(url.0, 0, &mut code) != 0 {
             return Err(Error::ArtifactInvalid);
@@ -137,4 +142,58 @@ pub(super) fn validate(path: &Path) -> Result<CheckedApp, Error> {
     };
     app.recheck()?;
     Ok(app)
+}
+
+pub(super) mod dispatch;
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFBundleCreate(allocator: Ref, url: Ref) -> Ref;
+    fn CFBundleGetValueForInfoDictionaryKey(bundle: Ref, key: Ref) -> Ref;
+    fn CFStringGetTypeID() -> usize;
+    fn CFGetTypeID(value: Ref) -> usize;
+    fn CFStringGetCString(value: Ref, buffer: *mut i8, size: isize, encoding: u32) -> u8;
+}
+fn tested_version(path: &Path) -> bool {
+    let bytes = path.as_os_str().as_bytes();
+    // SAFETY: exact valid slice lengths, Create outputs uniquely owned; borrowed
+    // Info.plist value stays within bundle lifetime. No native user state is read.
+    unsafe {
+        let Ok(url) = Owned::new(CFURLCreateFromFileSystemRepresentation(
+            std::ptr::null(),
+            bytes.as_ptr(),
+            bytes.len() as isize,
+            1,
+        )) else {
+            return false;
+        };
+        let Ok(bundle) = Owned::new(CFBundleCreate(std::ptr::null(), url.0)) else {
+            return false;
+        };
+        let key = b"CFBundleShortVersionString";
+        let Ok(key) = Owned::new(CFStringCreateWithBytes(
+            std::ptr::null(),
+            key.as_ptr(),
+            key.len() as isize,
+            0x08000100,
+            0,
+        )) else {
+            return false;
+        };
+        let value = CFBundleGetValueForInfoDictionaryKey(bundle.0, key.0);
+        if value.is_null() || CFGetTypeID(value) != CFStringGetTypeID() {
+            return false;
+        }
+        let mut buffer = [0i8; 128];
+        if CFStringGetCString(
+            value,
+            buffer.as_mut_ptr(),
+            buffer.len() as isize,
+            0x08000100,
+        ) == 0
+        {
+            return false;
+        }
+        std::ffi::CStr::from_ptr(buffer.as_ptr()).to_bytes() == b"26.1111.21308"
+    }
 }

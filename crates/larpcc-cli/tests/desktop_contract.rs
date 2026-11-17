@@ -356,3 +356,70 @@ fn desktop_bounds_large_arguments_names_and_cleanup() {
     drop(f);
     assert!(!path.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn desktop_singleton_metadata_is_bounded_and_never_followed() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new(registry::Provider::Codex);
+    let dir = f.base.temp.path().join("LARPCC_HOME/profiles/1/desktop");
+    let lock = dir.join("SingletonLock");
+    assert_eq!(
+        singleton_pid(&dir, b"invented-host"),
+        Err(InspectionCode::Missing)
+    );
+    symlink("invented-host-424242", &lock).unwrap();
+    assert_eq!(singleton_pid(&dir, b"invented-host"), Ok(424242));
+    assert_eq!(
+        singleton_pid(&dir, b"other-host"),
+        Err(InspectionCode::ForeignHost)
+    );
+    std::fs::remove_file(&lock).unwrap();
+    let outside = f.base.temp.path().join("outside-never-read");
+    common::create_file(&outside, b"invented authentication sentinel, never consume");
+    symlink(&outside, &lock).unwrap();
+    assert!(singleton_pid(&dir, b"invented-host").is_err());
+    assert!(outside.is_file());
+    std::fs::remove_file(&lock).unwrap();
+    common::create_file(&lock, b"not a symlink");
+    assert_eq!(
+        singleton_pid(&dir, b"invented-host"),
+        Err(InspectionCode::Malformed)
+    );
+}
+#[cfg(unix)]
+#[test]
+fn desktop_singleton_rejects_malformed_or_oversized_names_without_pid_output() {
+    for target in [
+        b"host-0".as_slice(),
+        b"host-01",
+        b"host--1",
+        b"host-2147483648",
+        b"host-",
+        b"host-1\0auth",
+        b"host-+1",
+    ] {
+        assert!(singleton_parse(target, b"host").is_err());
+    }
+    assert!(singleton_parse(&vec![b'x'; 512], b"host").is_err());
+    assert_eq!(
+        singleton_parse(b"host-with-dashes-123", b"host-with-dashes"),
+        Ok(123)
+    );
+}
+
+#[test]
+fn desktop_native_entry_never_executes_invented_targets_or_closed_claude() {
+    for provider in registry::Provider::ALL {
+        let f = Fixture::new(provider);
+        let mut checks = 0;
+        assert!(
+            open_target(&f.target, || {
+                checks += 1;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(checks, 0);
+    }
+}

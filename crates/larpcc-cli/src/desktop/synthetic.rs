@@ -218,3 +218,15 @@ impl CheckedApp {
         self.executable.identity.clone()
     }
 }
+#[cfg(unix)]
+pub(crate) fn singleton_pid(path: &Path, hostname: &[u8]) -> Result<i32, InspectionCode> {
+    super::singleton::read(
+        &fixture_directory(path).map_err(|_| InspectionCode::IdentityChanged)?,
+        hostname,
+    )
+    .map(|lock| lock.pid)
+}
+#[cfg(unix)]
+pub(crate) fn singleton_parse(target: &[u8], hostname: &[u8]) -> Result<i32, InspectionCode> {
+    super::singleton::parse(target, hostname)
+}

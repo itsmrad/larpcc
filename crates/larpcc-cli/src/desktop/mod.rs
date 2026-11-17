@@ -1,4 +1,4 @@
-//! Desktop admission is deliberately closed. Fixture machinery never qualifies a vendor app.
+//! Explicit desktop dispatch; native account state is never inspected or asserted.
 use crate::{
     platform::{self, AnchoredPath, CheckedObject, ObjectKind},
     registry::{Error, ProfileId, Provider},
@@ -45,6 +45,9 @@ pub(crate) fn validate_binding(provider: Provider, path: &Path) -> Result<Checke
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InspectionCode {
     Unavailable,
+    Missing,
+    ForeignHost,
+    Stale,
     Denied,
     Malformed,
     Truncated,
@@ -156,6 +159,9 @@ impl ValidatedDesktopTarget {
 pub(crate) mod synthetic;
 
 impl CheckedApp {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
     pub(crate) fn recheck(&self) -> Result<(), Error> {
         #[cfg(target_os = "macos")]
         {
@@ -208,3 +214,37 @@ impl CheckedApp {
 }
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(unix)]
+mod singleton;
+
+/// Initial OS gate before registry or environment access. Claude remains closed at target admission.
+pub(crate) fn preflight() -> Result<(), Error> {
+    if cfg!(target_os = "macos") {
+        Ok(())
+    } else {
+        Err(Error::QualificationPending)
+    }
+}
+pub(crate) fn activity_for(target: &ValidatedDesktopTarget) -> Activity {
+    #[cfg(target_os = "macos")]
+    return macos::dispatch::activity(target);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = target;
+        Activity::Unknown(InspectionCode::Unavailable)
+    }
+}
+/// CORE retains the per-ID lifecycle guard across this entire call.
+pub(crate) fn open_target(
+    target: &ValidatedDesktopTarget,
+    revalidate: impl FnMut() -> Result<(), Error>,
+) -> Result<DesktopReceipt, Error> {
+    #[cfg(target_os = "macos")]
+    return macos::dispatch::open(target, revalidate);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (target, revalidate);
+        Err(Error::QualificationPending)
+    }
+}
