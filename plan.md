@@ -1,4 +1,123 @@
-# Larp CC plan
+# Larp CC plan — current Phase 0 amendment (2026-11-17)
+
+This section is authoritative for prospective work. The earlier plan is retained
+below as historical delivery context; its stage 4/5 ordering, sharing deferral,
+no-live-links rule, flat homes, unconditional shadow refusal and library extraction
+proposal are superseded only as specified here. Historical docs/stages/01–03 are
+unchanged. Their launch/ACL/permission/admission/qualification gates still apply.
+This planning PR ships no behavior; README remains unchanged.
+
+## Current requirements and boundary
+
+1. Claude and Codex only, one unmodified official install per provider; CLI then
+   macOS Claude.app/ChatGPT.app then native SwiftUI GUI over CLI subprocess JSON.
+2. Every profile has distinct CLI and desktop surfaces under one immutable ID.
+3. Any valid command name maps to an explicit profile; `claude`/`codex` shadowing
+   requires --shadow and never overwrites existing installs/wrappers.
+4. Central MCP catalog, matrix, per-profile switches and sync-all inheritance;
+   later GUI toggles use exactly the same commands.
+5. Central skill packages shared by owned links (Windows junction/copy fallback),
+   independent switches; no clobbering existing directories.
+6. Delete removes the entire profile folder; forget remains metadata-only.
+7. Account safety is primary; metadata labels/receipts are never verified accounts.
+8. Desktop reference research informs proof requirements, never permission to
+   clone/re-sign vendor apps or infer runtime isolation.
+
+**OUT OF SCOPE:** profile import/adoption, migrating existing real accounts,
+existing user homes/wrappers/global skills, token access, account automation,
+rotation/pooling, provider installs/updates, network proxies, daemons/polling,
+live MCP OAuth, ACP, menu bar, Linux/Windows GUI and production publication.
+Fresh profiles only. GUI scaffolding is allowed before CLI delivery; shipped
+GUI behavior waits CLI then desktop contracts. Windows CLI remains a native
+engineering goal; unsupported combinations are unadvertised. Real-account tests
+remain unauthorized. Signed-out probes only within RULES and finite reviewed
+version descriptors; ROWS stays empty. Synthetic tests never need installed vendors.
+
+## Binding account safety invariants (handoff §5)
+
+1. Only unmodified official binary/app; retain SHA-256 admission, never patch,
+   clone, swap executable or re-sign a vendor app.
+2. Never read/copy/refresh/log/transmit credentials or tokens; login/refresh/logout
+   stay inside official clients. No usage meter reading tokens.
+3. Larp makes no network requests to Anthropic/OpenAI; no proxy or harness.
+4. User chooses profile explicitly; no automatic switching, limit rotation/pooling.
+5. No background jobs, schedules or unattended runs started by Larp.
+6. Never copy login state across folders/machines. Handoff's proposed import
+   exception is superseded: import is OUT OF SCOPE, fresh profiles only.
+7. Reject Claude Console keyless mode (shared ~/.config/anthropic).
+8. Any future ACP/Agent SDK scope must use API-key auth, never subscription OAuth;
+   it is outside this delivery and does not authorize reading API keys now.
+9. Future profile creation shows: "one person's own accounts only; LarpCC cannot
+   guarantee a provider won't restrict an account." README notice is a later
+   implementation responsibility, not an unshipped claim in this docs PR.
+
+Test what can be proved synthetically: closed gates, no credential-content IO,
+no provider network by Larp, no fallback/profile rotation, no scheduling,
+reference-only renders and fixed redacted output. Provider account restrictions
+cannot be ruled out. Native identity/refresh/logout support requires separately
+authorized finite stage-3 sheets; names/status/desktop receipts prove none of it.
+
+## Data and ownership amendments
+
+Registry v3 adds surfaces, aliases and desktop bindings in **one** bump; derive
+profiles/<id>/{cli,desktop}, never user-selected paths. Explicit v2 empty/synthetic
+migration is journaled; unknown nonempty real data refuses. MCP catalog and skill
+index live separately under the same lock. Registry remains <=1 MiB identity-only.
+Delete uses tombstone + confined no-follow recursive removal + explicit recovery;
+optional native --logout is gated, keychain/grant retention warning mandatory.
+
+Owned-file manifests narrowly amend the old no-provider-writes rule: only
+allowlisted Larp render files/links/launchers, independently verified ownership
+and hashes; drift refuses. No auth/history/session reads, native config merge,
+arbitrary manifest cleanup, permission repair or launch unlock. Whole-profile
+confirmed delete alone removes native-created data inside the confined folder.
+
+CORE serializes shared CLI/main/registry/platform/Cargo/test/CI registration and
+merges a validated v3 seed before dependent work. MAC owns desktop/**,
+tests/desktop*.rs, apps/macos/** and macos-app.yml; CORE resolves validated
+profile/provider/cli/desktop/binding input, MAC retains/revalidates app paths and
+returns local launched/focused outcomes. No exact Rust signature frozen here.
+MAC waits merged v3 seed for CLI integration; SwiftUI scaffolding is independent.
+SwiftUI shells out to stable JSON; no library extraction or Tauri.
+
+## Ordered slices and gates
+
+| Slice | Contract and order | Deliverable / failure boundary |
+|---|---|---|
+| Phase 0 | This PR | docs/contracts only, schema/examples/threat review, independent review before freeze |
+| 04 | [v3 and delete](docs/stages/04-layout-and-delete.md) | validated seed/JSON framing, migration/surfaces, tombstone/delete/recovery, manifest; unsafe/running/drift refuses |
+| 05 | [aliases](docs/stages/05-aliases.md), after 04 | add/list/remove + argv[0] dispatch, root-pinned copies; collisions/modified receipts refuse |
+| 06 | [skills](docs/stages/06-skills.md), after 04 | store/links/junction/copies, switches/matrix; occupied paths/drift refuse |
+| 07 | [MCP](docs/stages/07-mcp.md), after 04 | catalog/switches/sync-all/render manifests; secrets/unknown references/drift refuse |
+| 08 | [JSON/doctor/injection](docs/stages/08-json-launch-doctor.md), completes CLI | frozen schema:1, version-only detection, invented-row injection; native ROWS empty |
+| 09 | [desktop](docs/stages/09-desktop.md), after CLI | MAC local dispatch interface and separate native proof; uncertain binding/focus/qualification refuses |
+| 10 | [native GUI](docs/stages/10-native-gui.md), after CLI/desktop | SwiftUI consumes CLI JSON, explicit toggles; stale/unknown schema fails safely |
+
+Stages 05–07 can be independently implemented after the exact seed if lead
+allocates disjoint files; shared changes serialize through CORE. Contracts freeze
+commands, persistence, ownership, failure cases and named executable synthetic
+acceptance. Zero matching tests is failure. Native three-OS + MSRV, retained
+stage-3 gates, independent QA and OCR delegate per-file review apply before code
+merge. No more than two AWS cargo builds; planning runs none. All temporary
+profiles/aliases/render/store/app fixtures finally deleted; only temporary
+LARPCC_HOME and names claude-work/codex-45. Never test existing ~/.claude*,
+~/.codex*, ~/.local/bin wrappers/installs or ~/.agents/skills.
+
+[CLI JSON contract](docs/contracts/cli-v1.md) and
+[schema](docs/contracts/cli-v1.schema.json) are the SwiftUI boundary. JSON status
+is local metadata; human native status is still gated pass-through. JSON never
+mixes native output with envelopes. Doctor --detect-versions permits only bounded
+version-specific output in isolated fresh homes, separately from auth qualification.
+[Threat review](docs/contracts/threats.md) covers DELETE and MCP SECRETS; import is
+OUT OF SCOPE. Native desktop/account rows remain empty until concrete reviewed
+qualification, regardless of successful engineering/UI checks. Packaging/release,
+signing/distribution and credentials/spending require later scoped gates; old
+stage-5 release goals are retained as future requirements, not this PR's completion.
+
+---
+
+## Historical plan (superseded prospectively as above)
+
 
 Baseline: `14e299f` (Cargo workspace, placeholder `larp` binary). Plan adopted 2026-11-11 from the master draft. The section "Changes from the master draft" lists every material edit. Detailed stage contracts live in `docs/stages/`. Stage 1: [`docs/stages/01-profiles.md`](docs/stages/01-profiles.md). Stage 2: [docs/stages/02-native-launch.md](docs/stages/02-native-launch.md). Stage 3: [docs/stages/03-account-qualification.md](docs/stages/03-account-qualification.md).
 
