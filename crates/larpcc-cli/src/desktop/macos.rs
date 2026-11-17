@@ -84,9 +84,34 @@ pub(super) fn verify_signature(path: &Path) -> Result<(), Error> {
             return Err(Error::ArtifactInvalid);
         }
     }
+    spelling(path)
+}
+fn spelling(path: &Path) -> Result<(), Error> {
+    for directory in [
+        path.to_path_buf(),
+        path.join("Contents"),
+        path.join("Contents/MacOS"),
+    ] {
+        if !std::fs::symlink_metadata(directory)
+            .map_err(|_| Error::ArtifactInvalid)?
+            .file_type()
+            .is_dir()
+        {
+            return Err(Error::ArtifactInvalid);
+        }
+    }
+    let exe = path.join("Contents/MacOS/ChatGPT");
+    if !std::fs::symlink_metadata(&exe)
+        .map_err(|_| Error::ArtifactInvalid)?
+        .file_type()
+        .is_file()
+    {
+        return Err(Error::ArtifactInvalid);
+    }
     Ok(())
 }
 pub(super) fn validate(path: &Path) -> Result<CheckedApp, Error> {
+    spelling(path)?;
     let exe = path.join("Contents/MacOS/ChatGPT");
     let ancestry = platform::anchor(&exe)?;
     let (_, identity) =

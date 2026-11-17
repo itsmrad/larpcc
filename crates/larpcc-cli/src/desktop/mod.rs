@@ -156,7 +156,7 @@ impl ValidatedDesktopTarget {
 pub(crate) mod synthetic;
 
 impl CheckedApp {
-    fn recheck(&self) -> Result<(), Error> {
+    pub(crate) fn recheck(&self) -> Result<(), Error> {
         #[cfg(target_os = "macos")]
         {
             #[cfg(test)]
