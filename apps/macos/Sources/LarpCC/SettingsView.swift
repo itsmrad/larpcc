@@ -37,7 +37,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
     /// Extra words matched by the sidebar search.
     var keywords: String {
         switch self {
-        case .general: return "terminal appearance dark light executable larp data folder sample"
+        case .general: return "appearance dark light executable larp data folder sample"
         case .mcp: return "servers matrix catalog"
         case .skills: return "matrix catalog"
         case .aliases: return "commands launcher name"
@@ -84,6 +84,10 @@ struct SettingsView: View {
         .task { store.startRefresh() }
         .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply() }
         .onChange(of: appearance) { _, value in (AppearanceMode(rawValue: value) ?? .system).apply() }
+        .onChange(of: store.snapshot?.profiles.map(\.id)) { _, ids in
+            // Leave a profile page only once the profile is really gone (e.g. after Delete).
+            if case let .profile(id) = selection, let ids, !ids.contains(id) { selection = .page(.general) }
+        }
         .onChange(of: selection) { old, _ in
             if historyMove { historyMove = false; return }
             if let old { backStack.append(old) }
@@ -167,10 +171,8 @@ struct SettingsView: View {
             case let .profile(id):
                 if let snapshot = store.snapshot {
                     if let profile = snapshot.profiles.first(where: { $0.id == id }) {
-                        ProfilePage(store: store, snapshot: snapshot, profile: profile) {
-                            selection = .page(.general)
-                        }
-                        .id(profile.id)
+                        ProfilePage(store: store, snapshot: snapshot, profile: profile)
+                            .id(profile.id)
                     } else {
                         UnavailablePane(title: "Profile unavailable", symbol: "person.crop.circle.badge.questionmark",
                                         message: "This profile is no longer in the current snapshot.")

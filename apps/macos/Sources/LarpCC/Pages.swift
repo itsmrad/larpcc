@@ -6,17 +6,10 @@ import LarpModel
 struct GeneralPage: View {
     @ObservedObject var store: AppStore
     @Binding var appearance: String
-    @AppStorage(PreferenceKey.terminal) private var terminal = TerminalChoice.terminal.rawValue
 
     var body: some View {
         Form {
             Section("System") {
-                Picker(selection: $terminal) {
-                    ForEach(TerminalChoice.allCases) { Text($0.rawValue).tag($0.rawValue) }
-                } label: {
-                    Text("Default terminal")
-                    Text("Terminal used by Open in Terminal.")
-                }
                 Picker(selection: $appearance) {
                     ForEach(AppearanceMode.allCases) { Text($0.title).tag($0.rawValue) }
                 } label: {

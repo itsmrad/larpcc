@@ -13,10 +13,7 @@ struct LarpCCApp: App {
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
-                .onAppear {
-                    fitWindowOnScreen()
-                    FixtureSnapshot.runIfRequested(isSample: store.isFixture)
-                }
+                .onAppear { fitWindowOnScreen() }
         }
         .defaultSize(width: 900, height: 680)
         .defaultPosition(.center)

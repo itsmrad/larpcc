@@ -25,14 +25,8 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum TerminalChoice: String, CaseIterable, Identifiable {
-    case terminal = "Terminal", iterm = "iTerm", ghostty = "Ghostty", warp = "Warp", wezterm = "WezTerm"
-    var id: String { rawValue }
-}
-
 enum PreferenceKey {
     static let appearance = "appearance"
-    static let terminal = "defaultTerminal"
 }
 
 // MARK: - Glyphs
@@ -63,43 +57,33 @@ struct IconTile: View {
 
 extension Provider {
     var desktopApp: String { self == .claude ? "Claude.app" : "ChatGPT.app" }
+    /// Neutral SF Symbol per provider (no vendor artwork).
+    var glyphSymbol: String { self == .claude ? "sparkle" : "chevron.left.forwardslash.chevron.right" }
 }
 
-/// Monochrome provider mark, sized like a sidebar symbol.
+/// Monochrome provider glyph, sized like a sidebar symbol.
 struct ProviderGlyph: View {
     let provider: Provider
     var size: CGFloat = 16
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
-        // Explicit colors: the sidebar's vibrancy washes out thin shapes drawn in .primary.
-        ProviderMark(provider: provider)
-            .fill(prominence == .increased ? Color.white : Color(nsColor: .labelColor))
-            .frame(width: size, height: size)
+        // Explicit colors: the sidebar's vibrancy washes out glyphs drawn in .primary.
+        Image(systemName: provider.glyphSymbol)
+            .font(.system(size: size * 0.85, weight: .medium))
+            .foregroundStyle(prominence == .increased ? Color.white : Color(nsColor: .labelColor))
             .frame(width: size + 4, height: size + 4)
             .accessibilityLabel(provider.title)
     }
 }
 
-/// Provider mark in white on its rounded-square brand tile.
+/// Provider glyph on a neutral rounded-square tile.
 struct ProviderTile: View {
     let provider: Provider
     var size: CGFloat = 20
 
     var body: some View {
-        ProviderMark(provider: provider)
-            .fill(.white)
-            .padding(size * 0.2)
-            .frame(width: size, height: size)
-            .background(
-                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                    .fill(provider.tileColor)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
-            )
-            .accessibilityHidden(true)
+        IconTile(symbol: provider.glyphSymbol, color: Color(white: 0.42), size: size)
     }
 }
 

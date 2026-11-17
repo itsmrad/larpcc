@@ -5,7 +5,6 @@ struct ProfilePage: View {
     @ObservedObject var store: AppStore
     let snapshot: Snapshot
     let profile: Profile
-    let onDeleted: () -> Void
     @State private var confirmingDelete = false
 
     var body: some View {
@@ -13,18 +12,12 @@ struct ProfilePage: View {
             Section {
                 header
                 if profile.needsAttention {
-                    LabeledContent {
-                        Text("larp cc doctor")
-                            .font(.body.monospaced())
-                            .textSelection(.enabled)
-                    } label: {
-                        Label {
-                            Text("Needs attention")
-                            Text("A folder, alias or app link differs from what larp expects. Run this in Terminal.")
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .symbolRenderingMode(.multicolor)
-                        }
+                    Label {
+                        Text("Needs attention")
+                        Text("A folder, alias or app link differs from what larp expects.")
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor)
                     }
                 }
                 Toggle("Command line", isOn: surfaceBinding(.cli))
@@ -37,7 +30,6 @@ struct ProfilePage: View {
                 }
                 ValueRow("Command aliases", value: profile.aliases.isEmpty ? "None" : profile.aliases.joined(separator: ", "))
                 ValueRow("Folder", value: profile.folder, selectable: true)
-                ValueRow("Account", value: "Not observed")
             }
 
             Section {
@@ -80,7 +72,6 @@ struct ProfilePage: View {
         .confirmationDialog("Delete “\(profile.name)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button(store.isFixture ? "Delete Sample Profile" : "Delete Profile Folder", role: .destructive) {
                 store.perform(.delete(profileID: profile.id))
-                onDeleted()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
