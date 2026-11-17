@@ -14,6 +14,7 @@ struct LarpCCApp: App {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
                 .frame(minWidth: 760, minHeight: 520)
+                .onAppear { FixtureSnapshot.runIfRequested(isSample: store.isFixture) }
         }
         .defaultSize(width: 900, height: 680)
         .windowToolbarStyle(.unified)

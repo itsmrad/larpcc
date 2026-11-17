@@ -4,6 +4,9 @@ Native SwiftUI settings window, macOS 14+, Swift 5.9+. It starts in explicitly
 labelled **sample data** mode: changes stay in memory and reset on restart. This
 preserves fixture screenshots (`--appearance=light` / `--appearance=dark`, plus
 `--page=general|mcp|skills|aliases|desktop|about|profile-<id>` to open a page).
+Where window capture is unavailable, `--snapshot-to=/abs/new.png` renders the
+sample-mode window into that new file (never overwritten) about two seconds
+after launch and quits; behind-window materials are drawn as the window color.
 Pages are grouped forms: General, MCP Servers, Skills, Aliases, Desktop Apps,
 About, then one page per profile. The default terminal and appearance are local
 view preferences in UserDefaults; nothing else is persisted.
