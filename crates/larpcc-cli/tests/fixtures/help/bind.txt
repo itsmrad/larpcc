@@ -7,5 +7,7 @@ Arguments:
   <EXECUTABLE>  
 
 Options:
-      --replace  
-  -h, --help     Print help
+      --json                                   Emit one local metadata JSON envelope
+      --replace                                Replace an existing provider binding
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

@@ -6,8 +6,10 @@ Arguments:
   <NAME>  
 
 Options:
-      --yes   
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --yes                                    Confirm the authentication operation
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help
 
 Profiles select native state, not a verified account, model or endpoint. Native project, configuration and administrator policy still apply. Provider restrictions remain possible.
 Quiesce relevant sessions before authentication changes. Refresh and logout may affect grants and integrations.

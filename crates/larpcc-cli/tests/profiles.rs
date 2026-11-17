@@ -8,7 +8,7 @@ use std::{
 };
 
 fn lifecycle(f: &Fixture) {
-    let dir = |id| f.root.join("profiles").join(format!("{id}"));
+    let dir = |id| f.root.join("profiles").join(format!("{id}")).join("cli");
     assert_eq!(
         stdout(&f.profile(&["add", "work", "--provider", "claude"], 0)),
         format!(
@@ -149,7 +149,7 @@ fn registry_fixtures_preserved_on_failure() {
                         assert_eq!(
                             err,
                             format!(
-                                "error: registry {} uses schema version 3; this Larp CC supports version 2\nhint: upgrade Larp CC; the file was not modified\n",
+                                "error: registry {} uses schema version 4; this Larp CC supports version 3\nhint: upgrade Larp CC; the file was not modified\n",
                                 f.root.join("registry.json").display()
                             )
                         );
@@ -352,7 +352,7 @@ fn default_root_resolution() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
-    let state_dir = root.join("profiles").join("1");
+    let state_dir = root.join("profiles").join("1").join("cli");
     assert_eq!(
         stdout(&out),
         format!(
@@ -466,7 +466,7 @@ fn junction_root_rejected() {
 fn missing_and_unsafe_state_are_informational() {
     let f = Fixture::new();
     f.profile(&["add", "work", "--provider", "claude"], 0);
-    let state = f.root.join("profiles/1");
+    let state = f.root.join("profiles/1/cli");
     fs::remove_dir(&state).unwrap();
     assert!(stdout(&f.profile(&["show", "work"], 0)).ends_with("State:     missing\n"));
     assert_eq!(

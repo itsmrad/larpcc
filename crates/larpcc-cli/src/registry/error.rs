@@ -6,6 +6,8 @@ use std::{fmt, io, path::PathBuf};
     reason = "The shared catalog includes synthetic-only and OS-specific errors, never reachable from ordinary run."
 )]
 pub enum Error {
+    Conflict,
+    RecoveryRequired,
     ManagedMode {
         path: PathBuf,
         mode: u32,
@@ -90,6 +92,10 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Conflict => f.write_str("registry revision or references conflict"),
+            Self::RecoveryRequired => {
+                f.write_str("explicit profile migration or recovery is required")
+            }
             Self::ManagedMode { path, mode, .. } => write!(
                 f,
                 "unsafe data path {}: has mode {mode:04o}; group and other access must be removed",
@@ -167,7 +173,7 @@ impl fmt::Display for Error {
             }
             Self::NewerSchema { path, found } => write!(
                 f,
-                "registry {} uses schema version {found}; this Larp CC supports version 2",
+                "registry {} uses schema version {found}; this Larp CC supports version 3",
                 crate::registry::display::path(path)
             ),
             Self::NotFound { name } => write!(f, "no profile named {name}"),

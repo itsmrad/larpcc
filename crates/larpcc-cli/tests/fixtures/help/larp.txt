@@ -1,10 +1,12 @@
 Named Claude Code and Codex account profiles
 
-Usage: larp <COMMAND>
+Usage: larp [OPTIONS] <COMMAND>
 
 Commands:
   cc  Manage Claude Code and Codex profiles
 
 Options:
-  -h, --help     Print help
-  -V, --version  Print version
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help
+  -V, --version                                Print version

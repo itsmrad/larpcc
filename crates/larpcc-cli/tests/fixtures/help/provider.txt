@@ -1,10 +1,12 @@
 Manage native provider bindings
 
-Usage: larp cc provider <COMMAND>
+Usage: larp cc provider [OPTIONS] <COMMAND>
 
 Commands:
   bind  Bind an absolute native executable
   list  List provider bindings
 
 Options:
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

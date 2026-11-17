@@ -71,6 +71,14 @@ impl ProfileName {
         }
         Ok(Self(s.into()))
     }
+    // Existing names remain addressable, including legacy registries using `larp`.
+    pub fn parse_new(s: &str) -> Result<Self, NameError> {
+        let name = Self::parse(s)?;
+        if s == "larp" {
+            return Err(NameError::Reserved { input: s.into() });
+        }
+        Ok(name)
+    }
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -97,6 +105,52 @@ pub struct Profile {
     pub id: ProfileId,
     pub name: ProfileName,
     pub provider: Provider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surfaces: Option<Surfaces>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<ProfileState>,
+    #[serde(default)]
+    pub deletion_transaction: Option<String>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Surfaces {
+    pub cli: bool,
+    pub desktop: bool,
+}
+impl Default for Surfaces {
+    fn default() -> Self {
+        Self {
+            cli: true,
+            desktop: false,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfileState {
+    Active,
+    Deleting,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Surface {
+    Cli,
+    Desktop,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Alias {
+    pub name: ProfileName,
+    pub profile_id: ProfileId,
+    pub surface: Surface,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopBinding {
+    pub provider: Provider,
+    pub path: PathBuf,
+    pub recorded_version: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DirStatus {

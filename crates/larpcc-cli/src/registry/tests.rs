@@ -183,14 +183,14 @@ fn r04_invalid_unchanged() {
         format!("\u{feff}{valid}"),
         format!("{valid} trailing"),
         "[]".into(),
-        valid.replace("\"version\": 2,", ""),
-        valid.replace("\"version\": 2", "\"version\": 0"),
-        valid.replace("\"version\": 2", "\"version\": \"1\""),
-        valid.replace("\"version\": 2", "\"version\": 1.0"),
-        valid.replace("\"version\": 2", "\"version\": 1, \"extra\": 4"),
+        valid.replace("\"version\": 3,", ""),
+        valid.replace("\"version\": 3", "\"version\": 0"),
+        valid.replace("\"version\": 3", "\"version\": \"1\""),
+        valid.replace("\"version\": 3", "\"version\": 1.0"),
+        valid.replace("\"version\": 3", "\"version\": 1, \"extra\": 4"),
         valid.replace("\"id\": 1", "\"id\": 1, \"extra\": 4"),
         valid.replace("\"id\": 1", "\"id\": 1, \"id\": 1"),
-        valid.replace("\"version\": 2", "\"version\": 1, \"version\": 1"),
+        valid.replace("\"version\": 3", "\"version\": 1, \"version\": 1"),
         valid.replace("\"id\": 1", "\"id\": 0"),
         valid.replace("\"id\": 1", "\"id\": 2"),
         valid.replace("\"id\": 1", "\"id\": \"../x\""),
@@ -234,11 +234,11 @@ fn r04_invalid_unchanged() {
 fn r05_newer() {
     let (_t, r) = fixture();
     initialize(&r);
-    write(&r, r#"{"version":3,"future":true}"#);
+    write(&r, r#"{"version":4,"future":true}"#);
     let before = bytes(&r);
     assert!(matches!(
         r.add(name("x"), Provider::Codex),
-        Err(Error::NewerSchema { found: 3, .. })
+        Err(Error::NewerSchema { found: 4, .. })
     ));
     assert_eq!(before, bytes(&r));
 }
@@ -649,7 +649,7 @@ fn r20_errors() {
                 path: p.clone(),
                 found: 3,
             },
-            "registry /root/registry.json uses schema version 3; this Larp CC supports version 2",
+            "registry /root/registry.json uses schema version 3; this Larp CC supports version 3",
             Some("upgrade Larp CC; the file was not modified"),
         ),
         (
@@ -733,6 +733,9 @@ fn r21_limits() {
                 id: ProfileId::new(id),
                 name: name(&format!("p{id}")),
                 provider: Provider::Claude,
+                surfaces: Some(Default::default()),
+                state: Some(ProfileState::Active),
+                deletion_transaction: None,
             })
             .collect();
         d.next_id = count + 1;
@@ -747,6 +750,9 @@ fn r21_limits() {
             id: ProfileId::new(id),
             name: name(&format!("p{id}")),
             provider: Provider::Claude,
+            surfaces: Some(Default::default()),
+            state: Some(ProfileState::Active),
+            deletion_transaction: None,
         })
         .collect();
     d.next_id = low + 1;
@@ -801,6 +807,9 @@ fn r21_limits() {
         id: ProfileId::new(id),
         name: name("extra"),
         provider: Provider::Claude,
+        surfaces: Some(Default::default()),
+        state: Some(ProfileState::Active),
+        deletion_transaction: None,
     });
     let compact = serde_json::to_vec(&d).unwrap();
     assert!(compact.len() < LIMIT);
@@ -843,6 +852,7 @@ fn r23_phases_and_order() {
         vec![
             ("sync".into(), t.path().into()),
             ("sync".into(), r.root().into()),
+            ("sync".into(), r.root().join("profiles/1")),
             ("sync".into(), r.root().join("profiles")),
             ("write".into(), r.root().join("registry.json.tmp")),
             ("file sync".into(), r.root().join("registry.json.tmp")),
@@ -1008,6 +1018,12 @@ fn bindings_upgrade_noop_precedence_and_counters() {
     write(&r, v1);
     assert!(r.list().unwrap().is_empty());
     assert_eq!(bytes(&r), v1);
+    assert!(matches!(
+        r.bind(Provider::Codex, t.path().join("native-a"), false),
+        Err(Error::RecoveryRequired)
+    ));
+    assert_eq!(bytes(&r), v1);
+    write(&r, store::serialize(&Data::default()).unwrap());
     let first = native_fixture(&t, "native-a");
     let second = native_fixture(&t, "native-b");
     assert_eq!(
@@ -1015,7 +1031,7 @@ fn bindings_upgrade_noop_precedence_and_counters() {
         BindOutcome::Bound
     );
     let data = store::load(r.root()).unwrap();
-    assert_eq!(data.version, 2);
+    assert_eq!(data.version, 3);
     assert_eq!(data.revision, 1);
     assert_eq!(data.next_id, 1);
     let mut max: serde_json::Value = serde_json::from_slice(&bytes(&r)).unwrap();
@@ -1142,11 +1158,11 @@ fn binding_executable_native_type_links_containment_and_self_checks() {
 }
 
 #[test]
-fn exact_v2_first_mutation_bytes() {
+fn stage04_exact_v3_first_mutation_bytes() {
     let (_temporary, r) = fixture();
     add(&r, "work");
     let expected =
-        include_str!("../../tests/fixtures/registry/valid/v2.json").replace("\r\n", "\n");
+        include_str!("../../tests/fixtures/registry/valid/v3.json").replace("\r\n", "\n");
     assert_eq!(bytes(&r), expected.as_bytes());
     assert_eq!(
         store::serialize(&store::parse(Path::new("registry.json"), expected.as_bytes()).unwrap())
@@ -1197,6 +1213,8 @@ fn fixed_guards_pin_real_root_and_profiles_without_querying_sentinel_leaf() {
     let (temporary, registry) = fixture();
     initialize(&registry);
     let home = registry.root().join("profiles/1");
+    fs::remove_dir(home.join("cli")).unwrap();
+    fs::remove_dir(home.join("desktop")).unwrap();
     fs::remove_dir(&home).unwrap();
     fixture_file(&home, b"synthetic non-directory sentinel leaf");
     let root = registry.root();

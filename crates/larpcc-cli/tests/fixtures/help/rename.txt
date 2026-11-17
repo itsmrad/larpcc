@@ -1,10 +1,12 @@
 Rename a profile; its ID and state directory do not change
 
-Usage: larp cc profile rename <NAME> <NEW_NAME>
+Usage: larp cc profile rename [OPTIONS] <NAME> <NEW_NAME>
 
 Arguments:
   <NAME>      Profile name
   <NEW_NAME>  New profile name
 
 Options:
-  -h, --help  Print help
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

@@ -1,0 +1,21 @@
+{
+  "version": 3,
+  "revision": 1,
+  "next_id": 2,
+  "profiles": [
+    {
+      "id": 1,
+      "name": "work",
+      "provider": "claude",
+      "surfaces": {
+        "cli": true,
+        "desktop": false
+      },
+      "state": "active",
+      "deletion_transaction": null
+    }
+  ],
+  "bindings": [],
+  "aliases": [],
+  "desktop_bindings": []
+}
