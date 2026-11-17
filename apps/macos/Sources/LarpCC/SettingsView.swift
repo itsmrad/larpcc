@@ -68,7 +68,7 @@ struct SettingsView: View {
                                 Text(profile.name).lineLimit(1)
                                 Spacer()
                                 Circle().fill(statusColor(profile.readiness)).frame(width: 7, height: 7)
-                                    .accessibilityLabel("Sample \(profile.readiness.rawValue)")
+                                    .accessibilityLabel("Local configuration \(profile.readiness.rawValue)")
                             }
                             .padding(.vertical, 3).tag(Selection.profile(profile.id))
                         }
@@ -82,8 +82,8 @@ struct SettingsView: View {
                 }
                 .listStyle(.sidebar)
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Sample mode", systemImage: "testtube.2").font(.callout.weight(.medium))
-                    Text("Changes stay in memory.").font(.caption).foregroundStyle(.secondary)
+                    Label(store.modeTitle, systemImage: store.isFixture ? "testtube.2" : "terminal").font(.callout.weight(.medium))
+                    Text(store.isFixture ? "Changes stay in memory." : "Explicit local CLI access.").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
             }
             .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 280)
@@ -100,17 +100,22 @@ struct SettingsView: View {
                         case nil: emptySelection
                         }
                     } else {
-                        ProgressView("Loading sample profiles…").frame(maxWidth: .infinity)
+                        ContentUnavailableView(store.busy ? "Loading local metadata…" : "Local metadata unavailable", systemImage: "terminal", description: Text("Choose a trusted Larp CLI or sample mode."))
                     }
                 }
+                .disabled(store.busy)
                 .frame(maxWidth: 760, alignment: .leading).padding(32)
                 .frame(maxWidth: .infinity)
             }
             .background(Color(nsColor: .windowBackgroundColor))
             .navigationTitle("LarpCC")
             .toolbar {
-                ToolbarItem {
-                    Label("Sample mode", systemImage: "testtube.2").foregroundStyle(.secondary)
+                ToolbarItemGroup {
+                    Button("Choose Larp…") { store.chooseExecutable() }.disabled(store.busy || deleting != nil)
+                    Button("Sample") { store.useFixture() }.disabled(store.busy || deleting != nil)
+                    Button("Refresh") { store.startRefresh() }.disabled(store.busy || deleting != nil)
+                    if store.busy { Button("Cancel") { store.cancel() }.keyboardShortcut(.cancelAction) }
+                    Label(store.modeTitle, systemImage: store.isFixture ? "testtube.2" : "terminal").foregroundStyle(.secondary)
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -123,17 +128,16 @@ struct SettingsView: View {
                 }
             }
         }
-        .disabled(store.busy)
-        .task { await store.refresh() }
+        .task { store.startRefresh() }
         .sheet(item: $deleting) { profile in
             VStack(alignment: .leading, spacing: 18) {
                 Text("Delete \(profile.name)?").font(.title2.bold())
-                Text("This removes the sample profile and its sample assignments from memory. No folder or alias on disk will be removed.")
+                Text(store.isFixture ? "This removes the sample profile and its sample assignments from memory. No folder or alias on disk will be removed." : "This asks Larp to remove the managed profile folder and aliases. This is folder deletion, not metadata-only forget. Keychain items and remote grants may remain; no logout is performed.")
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Spacer()
                     Button("Cancel") { deleting = nil }.keyboardShortcut(.cancelAction)
-                    Button("Delete sample profile", role: .destructive) {
+                    Button(store.isFixture ? "Delete sample profile" : "Delete profile folder", role: .destructive) {
                         store.perform(.delete(profileID: profile.id))
                         deleting = nil
                         selection = .page(.general)
@@ -166,11 +170,11 @@ struct SettingsView: View {
                     ProviderGlyph(provider: profile.provider, size: 48)
                     heading(profile.name, subtitle: "\(profile.provider.rawValue) · authentication unknown")
                     Spacer(minLength: 12)
-                    Button { Task { await store.refresh() } } label: {
+                    Button { store.startRefresh() } label: {
                         Image(systemName: "arrow.clockwise")
-                    }.help("Refresh sample profile").accessibilityLabel("Refresh profile")
+                    }.help("Refresh local metadata").accessibilityLabel("Refresh profile")
                     Toggle("CLI enabled", isOn: surfaceBinding(profile, .cli))
-                        .labelsHidden().toggleStyle(.switch).help("Enable sample CLI surface")
+                        .labelsHidden().toggleStyle(.switch).help("Enable CLI surface")
                 }
             }
             Card {
@@ -185,7 +189,7 @@ struct SettingsView: View {
                 ValueRow("Surfaces", value: "CLI \(profile.cliEnabled ? "on" : "off") · Desktop \(profile.desktopEnabled ? "on" : "off")")
             }
             if profile.needsAttention {
-                Label("Sample folder or binding needs attention. Authentication is still unknown.", systemImage: "exclamationmark.triangle")
+                Label("Folder or binding needs attention. Authentication is still unknown.", systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(.secondary)
             }
             catalogCard("MCP Servers", items: snapshot.servers, profile: profile, kind: .mcp)
@@ -200,7 +204,7 @@ struct SettingsView: View {
                     }
                     Spacer()
                 }
-                Text("Sample actions only. Native launches remain unavailable pending qualification.")
+                Text(store.isFixture ? "Sample actions only. Native launches remain unavailable pending qualification." : "Desktop requests go through Larp and remain subject to qualification. Terminal launch is unavailable.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Button("Delete Profile…", role: .destructive) { deleting = profile }
@@ -241,11 +245,12 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func pageDetail(_ page: SettingsPage, snapshot: Snapshot) -> some View {
-        heading(page.rawValue, subtitle: page == .mcp ? "Choose which profiles receive each server definition." : "Local profile settings · sample mode")
+        heading(page.rawValue, subtitle: page == .mcp ? "Choose which profiles receive each server definition." : "Local profile settings · \(store.modeTitle)")
         switch page {
         case .general:
             Card {
-                ValueRow("Data source", value: "In-memory samples")
+                ValueRow("Data source", value: store.isFixture ? "In-memory samples" : "Selected local Larp CLI")
+                if let path = store.selectedPath { ValueRow("Executable", value: path) }
                 Divider()
                 ValueRow("Profiles enabled", value: "\(snapshot.enabledCount) of \(snapshot.profiles.count)")
                 Divider()
@@ -255,7 +260,7 @@ struct SettingsView: View {
                 Text("Your profiles, deliberately separate.").font(.headline)
                 Text("Each profile has its own CLI and desktop folders. Aliases can use explicit custom names. Launch qualification remains pending.")
                     .foregroundStyle(.secondary)
-                Text("All controls here edit sample data only. Restarting restores the samples.")
+                Text(store.isFixture ? "All controls here edit sample data only. Restarting restores the samples." : "Changes are requested through the selected CLI using the displayed revision. Refresh after external changes.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         case .mcp:
@@ -265,12 +270,12 @@ struct SettingsView: View {
                     get: { snapshot.syncNewServers },
                     set: { store.perform(.setSyncNewServers($0)) }
                 )).toggleStyle(.switch)
-                Text("Sample preference only. Server definitions are never executed.")
+                Text("Local metadata preference only. Server definitions are never executed by this app.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         case .skills:
             matrix(snapshot.skills, snapshot: snapshot, kind: .skill)
-            Text("Shared definitions with explicit per-profile assignments. Samples never read or copy skill files.")
+            Text("Local metadata with explicit per-profile assignments.")
                 .font(.callout).foregroundStyle(.secondary)
         case .aliases:
             Card {
@@ -280,7 +285,7 @@ struct SettingsView: View {
                 }
                 if snapshot.profiles.isEmpty { Text("No profiles") }
             }
-            Text("Aliases shown are examples. No launchers or shell settings are installed.")
+            Text("Aliases are local metadata. Authentication is not observed.")
                 .font(.callout).foregroundStyle(.secondary)
         case .desktop:
             Card {
@@ -298,7 +303,7 @@ struct SettingsView: View {
                 }
                 if snapshot.profiles.isEmpty { Text("No profiles") }
             }
-            Text("Sample desktop switches do not authorize a launch. Official, unmodified provider applications require separate qualification.")
+            Text("Desktop switches do not authorize a launch. Provider applications require separate qualification.")
                 .font(.callout).foregroundStyle(.secondary)
         case .about:
             Card {
@@ -306,8 +311,8 @@ struct SettingsView: View {
                 Text("Native profile settings for Larp.")
                 Divider()
                 ValueRow("Build", value: "Development · unsigned")
-                ValueRow("Mode", value: "Sample data only")
-                Text("No provider access, authentication inspection, background jobs or network requests.")
+                ValueRow("Mode", value: store.modeTitle)
+                Text("No authentication inspection, background jobs or network requests. Live actions use only your selected Larp executable.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }

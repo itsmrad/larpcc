@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - 'apps/macos/**'
+      - 'docs/contracts/**'
       - '.github/workflows/macos-app.yml'
   push:
     branches: [main]
     paths:
       - 'apps/macos/**'
+      - 'docs/contracts/**'
       - '.github/workflows/macos-app.yml'
   workflow_dispatch:
 
@@ -28,10 +30,14 @@ jobs:
         working-directory: apps/macos
     steps:
       - uses: actions/checkout@v4
+      - name: Frozen contract copies
+        run: |
+          cmp ../../docs/contracts/cli-v1.schema.json Sources/LarpModel/Resources/cli-v1.schema.json
+          cmp ../../docs/contracts/cli-v1.examples.json Tests/LarpModelTests/Resources/cli-v1.examples.json
       - name: Swift toolchain
         run: swift --version
       - name: Synthetic model tests and debug build
-        run: swift test --parallel
+        run: swift test
       - name: Unsigned release bundle
         run: ./scripts/bundle.sh
       - name: Validate bundle executable

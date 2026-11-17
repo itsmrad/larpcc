@@ -11,6 +11,8 @@ bin_dir="$(swift build -c release --show-bin-path)"
 app='dist/LarpCC.app'
 mkdir -p "$app/Contents/MacOS"
 cp "$bin_dir/LarpCC" "$app/Contents/MacOS/LarpCC"
+# SwiftPM Bundle.module resolves its bundle from Bundle.main.bundleURL.
+find "$bin_dir" -maxdepth 1 -name '*.bundle' -exec cp -R {} "$app/" \;
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -27,4 +29,4 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 plutil -lint "$app/Contents/Info.plist"
-echo "Unsigned sample app: $(pwd)/$app"
+echo "Unsigned app: $(pwd)/$app"

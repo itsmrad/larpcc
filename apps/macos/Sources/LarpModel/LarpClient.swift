@@ -23,7 +23,8 @@ public struct Profile: Identifiable, Sendable, Equatable {
         if !cliEnabled && !desktopEnabled { return .off }
         return needsAttention ? .attention : .ready
     }
-    public var folder: String { "<root>/profiles/\(id)" }
+    public var displayFolder: String? = nil
+    public var folder: String { displayFolder ?? "<root>/profiles/\(id)" }
 }
 
 public enum CatalogKind: Sendable { case mcp, skill }
@@ -35,6 +36,7 @@ public struct CatalogItem: Identifiable, Sendable, Equatable {
 }
 
 public struct Snapshot: Sendable {
+    public var revision: String? = nil
     public var profiles: [Profile]
     public var servers: [CatalogItem]
     public var skills: [CatalogItem]
@@ -52,9 +54,15 @@ public enum LarpAction: Sendable {
 }
 
 public enum ClientError: Error, LocalizedError, Sendable {
-    case staleSelection, commandUnavailable, qualificationPending
+    case staleSelection, commandUnavailable, qualificationPending, invalidResponse, invalidExecutable, timedOut, outputLimit, conflict, operationRefused
     public var errorDescription: String? {
         switch self {
+        case .invalidResponse: return "Larp returned an unsupported or invalid response."
+        case .invalidExecutable: return "Select a local executable named larp. The selected file must remain unchanged."
+        case .timedOut: return "Larp timed out. Refresh before trying again."
+        case .outputLimit: return "Larp exceeded the safe output limit."
+        case .conflict: return "Registry changed. Review the refreshed snapshot and choose the action again."
+        case .operationRefused: return "Larp refused the operation. Check local metadata and recovery state."
         case .staleSelection: return "This selection is no longer available. Refresh and try again."
         case .commandUnavailable: return "The Larp command is unavailable. Sample mode remains available."
         case .qualificationPending: return "Native launch qualification is pending. No app was opened."
