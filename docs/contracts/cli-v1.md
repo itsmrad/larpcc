@@ -2,7 +2,8 @@
 
 Normative schema: [cli-v1.schema.json](cli-v1.schema.json), JSON Schema 2020-12.
 This is a planning contract, not shipped behavior. Import is **OUT OF SCOPE**;
-fresh profiles only. No account/provider output is captured, parsed or inferred.
+fresh profiles only. No account/auth output is captured, parsed or inferred. Only explicit bounded
+version text may be parsed by doctor --detect-versions (stage 08).
 SwiftUI later executes the installed CLI; no library extraction.
 
 ## Framing and compatibility
