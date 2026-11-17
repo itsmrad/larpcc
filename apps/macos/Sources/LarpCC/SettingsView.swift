@@ -52,10 +52,11 @@ struct SettingsView: View {
                 List(selection: $selection) {
                     Section {
                         ForEach(SettingsPage.allCases.filter { matches($0.rawValue) }) { page in
-                            Label { Text(page.rawValue) } icon: {
+                            HStack(spacing: 10) {
                                 Image(systemName: page.symbol).font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(.white).frame(width: 26, height: 26)
                                     .background(page.color.gradient, in: RoundedRectangle(cornerRadius: 6))
+                                Text(page.rawValue)
                             }
                             .padding(.vertical, 3).tag(Selection.page(page))
                         }
@@ -213,12 +214,15 @@ struct SettingsView: View {
             Card {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     if index > 0 { Divider() }
-                    Toggle(isOn: catalogBinding(item, profile: profile, kind: kind)) {
+                    HStack {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(item.id)
                             Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
                         }
-                    }.toggleStyle(.switch)
+                        Spacer()
+                        Toggle(item.id, isOn: catalogBinding(item, profile: profile, kind: kind))
+                            .labelsHidden().toggleStyle(.switch)
+                    }
                 }
                 if items.isEmpty { Text("No entries").foregroundStyle(.secondary) }
             }
