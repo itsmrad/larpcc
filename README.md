@@ -88,3 +88,7 @@ cargo +1.89 test --workspace --locked
 The `synthetic-launch` feature builds separate test-only driver/fake binaries. The legacy transport grammar and invented operation rows do not describe admitted vendor interfaces. Invented rows exercise the same bounded executable SHA-256, snapshot revalidation and metadata admission as ordinary dispatch. Unix run uses direct `execve`; synthetic authentication/status use a short-lived foreground wrapper retaining a per-ID cooperative lock until the direct child is reaped. Registry locks do not span confirmation or child lifetime. These checks do not exclude direct native clients or surviving descendants. Parent SIGKILL or an OS crash may release the cooperative lock while a child survives; human quiescence is required after abnormal exit. No shell fallback or background manager is used. Synthetic helpers are excluded by the explicit ordinary build/install commands above and are not release artifacts. Only fake operations are exercised; no installed provider, credential store or account is accessed. Native operation rows remain empty.
 
 Larp CC is independent and is not affiliated with Anthropic or OpenAI.
+
+New profile names and rename destinations reserve `larp`; existing legacy profiles
+with that name remain readable and addressable. Repeating a surface setting is a
+no-op: JSON reports `changed:false` and the registry revision stays unchanged.

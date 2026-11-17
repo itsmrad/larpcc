@@ -28,16 +28,16 @@ impl Registry {
         name: ProfileName,
         surface: Surface,
         enabled: bool,
-    ) -> Result<ProfileEntry, Error> {
+    ) -> Result<(ProfileEntry, bool), Error> {
         store::mutate_checked(
             self.root(),
             store::Mutation::Surface(name, surface, enabled),
             std::time::Duration::from_secs(10),
             self.expected,
         )
-        .map(|(entry, revision)| {
+        .map(|(entry, revision, changed)| {
             self.observed.set(Some(revision));
-            entry
+            (entry, changed)
         })
     }
 
@@ -206,7 +206,7 @@ impl Registry {
             std::time::Duration::from_secs(10),
             self.expected,
         )
-        .map(|(entry, revision)| {
+        .map(|(entry, revision, _)| {
             self.observed.set(Some(revision));
             entry
         })
@@ -218,7 +218,7 @@ impl Registry {
             std::time::Duration::from_secs(10),
             self.expected,
         )
-        .map(|(entry, revision)| {
+        .map(|(entry, revision, _)| {
             self.observed.set(Some(revision));
             entry
         })
@@ -230,7 +230,7 @@ impl Registry {
             std::time::Duration::from_secs(10),
             self.expected,
         )
-        .map(|(entry, revision)| {
+        .map(|(entry, revision, _)| {
             self.observed.set(Some(revision));
             entry
         })

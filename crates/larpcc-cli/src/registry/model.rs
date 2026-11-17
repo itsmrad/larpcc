@@ -62,7 +62,7 @@ impl ProfileName {
         {
             return Err(NameError::Invalid { input: s.into() });
         }
-        if matches!(s, "con" | "prn" | "aux" | "nul" | "larp")
+        if matches!(s, "con" | "prn" | "aux" | "nul")
             || (s.len() == 4
                 && (s.starts_with("com") || s.starts_with("lpt"))
                 && matches!(s.as_bytes()[3], b'1'..=b'9'))
@@ -70,6 +70,14 @@ impl ProfileName {
             return Err(NameError::Reserved { input: s.into() });
         }
         Ok(Self(s.into()))
+    }
+    // Existing names remain addressable, including legacy registries using `larp`.
+    pub fn parse_new(s: &str) -> Result<Self, NameError> {
+        let name = Self::parse(s)?;
+        if s == "larp" {
+            return Err(NameError::Reserved { input: s.into() });
+        }
+        Ok(name)
     }
     pub fn as_str(&self) -> &str {
         &self.0

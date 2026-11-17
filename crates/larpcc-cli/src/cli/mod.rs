@@ -24,10 +24,20 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
     /// Refuse if the registry revision has changed
-    #[arg(long, global = true)]
+    #[arg(long, global = true, value_parser = parse_revision)]
     expected_revision: Option<u64>,
     #[command(subcommand)]
     command: RootAction,
+}
+
+fn parse_revision(value: &str) -> Result<u64, &'static str> {
+    if value.is_empty()
+        || !value.bytes().all(|b| b.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err("expected a canonical decimal u64 revision");
+    }
+    value.parse().map_err(|_| "revision exceeds u64 range")
 }
 
 #[derive(Subcommand)]
@@ -113,6 +123,7 @@ enum ProfileAction {
     /// Register a profile and create its empty state directory
     Add {
         /// Profile name: 1-32 characters from a-z, 0-9, '-', '_', starting with a letter
+        #[arg(value_parser = ProfileName::parse_new)]
         name: ProfileName,
         /// Provider this profile is for
         #[arg(long, value_name = "PROVIDER", value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
@@ -130,6 +141,7 @@ enum ProfileAction {
         /// Profile name
         name: ProfileName,
         /// New profile name
+        #[arg(value_parser = ProfileName::parse_new)]
         new_name: ProfileName,
     },
     /// Remove a profile from the registry; its state directory is kept
@@ -291,7 +303,7 @@ fn execute(command: ProfileAction, registry: &Registry) -> Result<String, Error>
             surface,
             enabled,
         } => {
-            let entry = registry.surface(
+            let (entry, _) = registry.surface(
                 name,
                 if surface == "cli" {
                     crate::registry::Surface::Cli

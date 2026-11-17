@@ -343,6 +343,7 @@ fn stage04_strict_v3_fields_enums_references_and_safe_errors() {
     bad.push(v);
     for aliases in [
         json!([{"name":"codex-45","profile_id":99,"surface":"cli"}]),
+        json!([{"name":"larp","profile_id":1,"surface":"cli"}]),
         json!([{"name":"codex-45","profile_id":1,"surface":"other"}]),
         json!([{"name":"codex-45","profile_id":1,"surface":"cli"},{"name":"codex-45","profile_id":1,"surface":"desktop"}]),
     ] {
@@ -442,5 +443,164 @@ fn stage04_json_invalid_unicode_and_output_failure_are_silent() {
         assert!(out.stderr.is_empty());
         assert!(out.stdout.is_empty());
     }
+    assert!(!f.root.exists());
+}
+
+#[test]
+fn stage04_legacy_larp_remains_readable_but_new_names_are_reserved() {
+    for version in [1, 2] {
+        let f = Fixture::new();
+        let mut value = json!({"version":version,"revision":7,"next_id":3,"profiles":[{"id":2,"name":"larp","provider":"codex"}]});
+        if version == 2 {
+            value["bindings"] = json!([]);
+        }
+        let bytes = serde_json::to_vec(&value).unwrap();
+        f.install_registry(&bytes);
+        f.profile(&["list"], 0);
+        f.profile(&["show", "larp"], 0);
+        let shown = request(&f, &["cc", "profile", "show", "larp", "--json"], 0);
+        assert_eq!(shown["data"]["name"], "larp");
+        assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), bytes);
+    }
+    let f = Fixture::new();
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "larp",
+            "--provider",
+            "codex",
+            "--json",
+        ],
+        2,
+    );
+    assert!(!f.root.exists());
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "codex-45",
+            "--provider",
+            "codex",
+            "--json",
+        ],
+        0,
+    );
+    let bytes = fs::read(f.root.join("registry.json")).unwrap();
+    request(
+        &f,
+        &["cc", "profile", "rename", "codex-45", "larp", "--json"],
+        2,
+    );
+    assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), bytes);
+}
+
+#[test]
+fn stage04_surface_noop_preserves_revision_bytes_and_receipt() {
+    let f = Fixture::new();
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "claude-work",
+            "--provider",
+            "claude",
+            "--json",
+        ],
+        0,
+    );
+    let bytes = fs::read(f.root.join("registry.json")).unwrap();
+    for (surface, value) in [("cli", "on"), ("desktop", "off"), ("cli", "on")] {
+        let result = request(
+            &f,
+            &[
+                "cc",
+                "profile",
+                "surface",
+                "claude-work",
+                surface,
+                value,
+                "--expected-revision",
+                "1",
+                "--json",
+            ],
+            0,
+        );
+        assert_eq!(result["revision"], "1");
+        assert_eq!(
+            result["data"],
+            json!({"changed":false,"profile_id":"1","name":"claude-work","warnings":[]})
+        );
+        assert_eq!(fs::read(f.root.join("registry.json")).unwrap(), bytes);
+    }
+    let changed = request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "surface",
+            "claude-work",
+            "desktop",
+            "on",
+            "--expected-revision",
+            "1",
+            "--json",
+        ],
+        0,
+    );
+    assert_eq!(changed["revision"], "2");
+    assert_eq!(changed["data"]["changed"], true);
+}
+
+#[test]
+fn stage04_revision_parser_requires_canonical_u64() {
+    let f = Fixture::new();
+    for value in ["007", "00", "+0", "-1", " 0", "18446744073709551616"] {
+        let result = request(
+            &f,
+            &[
+                "cc",
+                "profile",
+                "list",
+                "--expected-revision",
+                value,
+                "--json",
+            ],
+            2,
+        );
+        assert_eq!(result["error"]["code"], "usage");
+        assert!(!f.root.exists());
+    }
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "list",
+            "--expected-revision",
+            "0",
+            "--json",
+        ],
+        0,
+    );
+    let max = request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "list",
+            "--expected-revision",
+            "18446744073709551615",
+            "--json",
+        ],
+        1,
+    );
+    assert_eq!(max["error"]["code"], "conflict");
     assert!(!f.root.exists());
 }

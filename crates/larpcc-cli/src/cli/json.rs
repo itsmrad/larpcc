@@ -135,7 +135,7 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
             ProfileAction::Add {name,provider} => r.add(name,provider).map(|e| receipt(&e)),
             ProfileAction::Rename {name,new_name} => r.rename(&name,new_name).map(|e| receipt(&e)),
             ProfileAction::Forget {name,..} => r.forget(&name).map(|e| receipt(&e)),
-            ProfileAction::Surface {name,surface,enabled} => r.surface(name,if surface=="cli" {crate::registry::Surface::Cli}else{crate::registry::Surface::Desktop},enabled=="on").map(|e| receipt(&e)),
+            ProfileAction::Surface {name,surface,enabled} => r.surface(name,if surface=="cli" {crate::registry::Surface::Cli}else{crate::registry::Surface::Desktop},enabled=="on").map(|(e,changed)| { let mut data=receipt(&e); data["changed"]=json!(changed); data }),
         },
         _ => unreachable!("native operations refused above"),
     };

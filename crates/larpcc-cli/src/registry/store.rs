@@ -128,7 +128,10 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     }
     let mut alias_names = HashSet::new();
     for a in &data.aliases {
-        if !alias_names.insert(&a.name) || !data.profiles.iter().any(|p| p.id == a.profile_id) {
+        if a.name.as_str() == "larp"
+            || !alias_names.insert(&a.name)
+            || !data.profiles.iter().any(|p| p.id == a.profile_id)
+        {
             return Err(corrupt("invalid alias reference".into()));
         }
     }
@@ -398,7 +401,7 @@ pub(super) fn mutate(
     mutation: Mutation,
     timeout: Duration,
 ) -> Result<ProfileEntry, Error> {
-    mutate_checked(root, mutation, timeout, None).map(|(entry, _)| entry)
+    mutate_checked(root, mutation, timeout, None).map(|(entry, _, _)| entry)
 }
 pub(super) fn precondition(data: &Data, expected: Option<u64>) -> Result<(), Error> {
     if expected.is_some_and(|r| r != data.revision) {
@@ -417,7 +420,7 @@ pub(super) fn mutate_checked(
     mutation: Mutation,
     timeout: Duration,
     expected: Option<u64>,
-) -> Result<(ProfileEntry, u64), Error> {
+) -> Result<(ProfileEntry, u64, bool), Error> {
     let _ancestors = crate::platform::anchor(root)?.ancestors;
     let _lock = lock(root, timeout)?;
     let _fixed = fixed(root)?;
@@ -433,6 +436,9 @@ pub(super) fn mutate_checked(
 
     let (mut selected, add) = match mutation {
         Mutation::Add(name, provider) => {
+            if name.as_str() == "larp" {
+                return Err(Error::Conflict);
+            }
             if data.profiles.iter().any(|p| p.name == name) {
                 return Err(Error::NameTaken { name });
             }
@@ -449,6 +455,9 @@ pub(super) fn mutate_checked(
             )
         }
         Mutation::Rename(from, to) => {
+            if to.as_str() == "larp" {
+                return Err(Error::Conflict);
+            }
             let index = data
                 .profiles
                 .iter()
@@ -467,10 +476,20 @@ pub(super) fn mutate_checked(
                 .find(|p| p.name == name)
                 .ok_or(Error::NotFound { name })?;
             let surfaces = p.surfaces.as_mut().ok_or(Error::RecoveryRequired)?;
-            match surface {
-                super::model::Surface::Cli => surfaces.cli = enabled,
-                super::model::Surface::Desktop => surfaces.desktop = enabled,
+            let current = match surface {
+                super::model::Surface::Cli => &mut surfaces.cli,
+                super::model::Surface::Desktop => &mut surfaces.desktop,
+            };
+            if *current == enabled {
+                let entry = old_entries
+                    .into_iter()
+                    .find(|e| e.profile.id == p.id)
+                    .ok_or_else(|| Error::NotFound {
+                        name: p.name.clone(),
+                    })?;
+                return Ok((entry, data.revision, false));
             }
+            *current = enabled;
             (p.clone(), false)
         }
         Mutation::Forget(name) => {
@@ -570,7 +589,7 @@ pub(super) fn mutate_checked(
             .ok_or(Error::NotFound {
                 name: selected.name,
             })
-            .map(|entry| (entry, data.revision));
+            .map(|entry| (entry, data.revision, true));
     }
     paths::entries(root, &data.profiles)?
         .into_iter()
@@ -578,7 +597,7 @@ pub(super) fn mutate_checked(
         .ok_or(Error::NotFound {
             name: selected.name,
         })
-        .map(|entry| (entry, data.revision))
+        .map(|entry| (entry, data.revision, true))
 }
 fn replace(from: &Path, to: &Path) -> Result<(), Error> {
     #[cfg(windows)]
