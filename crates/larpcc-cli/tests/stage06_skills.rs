@@ -1,5 +1,12 @@
 // Temporary path harness until CORE registers share after the v3 seed handoff.
 #![allow(dead_code)]
+#![cfg_attr(
+    windows,
+    allow(
+        clippy::duplicate_mod,
+        reason = "Platform tests and common fixtures each own their private Windows ACL fixture"
+    )
+)]
 #[path = "../src/desktop/mod.rs"]
 mod desktop;
 #[path = "../src/launch/mod.rs"]
@@ -12,6 +19,7 @@ mod provider;
 mod registry;
 #[path = "../src/share/mod.rs"]
 mod share;
+#[cfg(unix)]
 use share::skills;
 
 #[cfg(unix)]
@@ -134,12 +142,25 @@ mod cases {
     fn stage06_store_portable_collisions_and_unsafe_ancestry() {
         let temp = fixture();
         let source = package(temp.path());
-        file(&source.join("skill.MD"), b"collision");
-        assert!(matches!(
-            skills::Package::read(&source),
-            Err(skills::Error::Collision)
-        ));
-        fs::remove_file(source.join("skill.MD")).unwrap();
+        // Exercise journal validation even on volumes that cannot represent both spellings.
+        let mut encoded = serde_json::to_value(skills::Package::read(&source).unwrap()).unwrap();
+        encoded["files"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "path": "skill.MD", "bytes": []
+            }));
+        let colliding: skills::Package = serde_json::from_value(encoded).unwrap();
+        assert_eq!(colliding.validate(), Err(skills::Error::Collision));
+        if !source.join("skill.MD").exists() {
+            file(&source.join("skill.MD"), b"collision");
+            assert!(matches!(
+                skills::Package::read(&source),
+                Err(skills::Error::Collision)
+            ));
+            fs::remove_file(source.join("skill.MD")).unwrap();
+        }
+        assert_eq!(fs::read(source.join("SKILL.md")).unwrap(), b"example\n");
         file(&source.join("a:b"), b"ads");
         assert!(skills::Package::read(&source).is_err());
         fs::remove_file(source.join("a:b")).unwrap();

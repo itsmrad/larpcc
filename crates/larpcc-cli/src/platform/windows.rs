@@ -806,7 +806,7 @@ pub(crate) fn remove_skill_leaf(
     if kind == ObjectKind::File {
         single_link(&checked.file)?;
     }
-    let info = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
     // SAFETY: live checked handle, exact initialized input structure and size.
     if unsafe {
         SetFileInformationByHandle(

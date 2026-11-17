@@ -232,7 +232,7 @@ fn write_atomic(root: &Path, name: &str, bytes: &[u8]) -> Result<(), Error> {
     paths::sync(root)
 }
 fn validate(
-    root: &Path,
+    _root: &Path,
     index: &Index,
     manifest: &Manifest,
     data: &store::Data,
@@ -281,7 +281,7 @@ fn validate(
                 if o.profile.is_none() {
                     return Err(Error::RecoveryRequired);
                 }
-                receipt.validate_internal(root, &o.name)?;
+                receipt.validate_internal(_root, &o.name)?;
             }
         }
     }
