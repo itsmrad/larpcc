@@ -415,10 +415,14 @@ fn desktop_native_entry_never_executes_invented_targets_or_closed_claude() {
         let f = Fixture::new(provider);
         let mut checks = 0;
         assert!(
-            open_target(&f.target, || {
-                checks += 1;
-                Ok(())
-            })
+            open_target(
+                &f.target,
+                || {
+                    checks += 1;
+                    Ok(())
+                },
+                |_| panic!("closed target must not emit a notice")
+            )
             .is_err()
         );
         assert_eq!(checks, 0);

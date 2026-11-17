@@ -233,12 +233,13 @@ pub(crate) fn activity_for(target: &ValidatedDesktopTarget) -> Activity {
 pub(crate) fn open_target(
     target: &ValidatedDesktopTarget,
     revalidate: impl FnMut() -> Result<(), Error>,
+    notice: impl FnMut(&'static str),
 ) -> Result<DesktopReceipt, Error> {
     #[cfg(target_os = "macos")]
-    return macos::dispatch::open(target, revalidate);
+    return macos::dispatch::open(target, revalidate, notice);
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (target, revalidate);
+        let _ = (target, revalidate, notice);
         Err(Error::QualificationPending)
     }
 }

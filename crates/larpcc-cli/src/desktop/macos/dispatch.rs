@@ -247,6 +247,7 @@ pub(in crate::desktop) fn activity(target: &ValidatedDesktopTarget) -> Activity 
 pub(in crate::desktop) fn open(
     target: &ValidatedDesktopTarget,
     mut revalidate: impl FnMut() -> Result<(), Error>,
+    mut notice: impl FnMut(&'static str),
 ) -> Result<DesktopReceipt, Error> {
     if target.snapshot.provider != Provider::Codex {
         return Err(Error::QualificationPending);
