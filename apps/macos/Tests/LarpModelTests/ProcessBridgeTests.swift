@@ -90,10 +90,18 @@ final class ProcessBridgeTests: XCTestCase {
             (.setCatalog(kind: .mcp, itemID: "local-tools", profileID: "1", enabled: true), ["mcp", "enable", "local-tools", "personal"]),
             (.setCatalog(kind: .skill, itemID: "writing", profileID: "1", enabled: false), ["skills", "disable", "writing", "personal"]),
             (.setSyncNewServers(true), ["mcp", "sync-all", "on"]),
-            (.open(profileID: "1", surface: .desktop), ["app", "open", "personal"])
+            (.open(profileID: "1", surface: .desktop), ["app", "open", "personal"]),
+            (.addAlias(name: "claude-work", profileID: "1"), ["alias", "add", "claude-work", "personal"]),
+            (.removeAlias(name: "claude-personal"), ["alias", "remove", "claude-personal"])
         ]
         for (action, argv) in cases { XCTAssertEqual(try ProcessLarpClient.arguments(action, snapshot: snapshot), argv) }
         XCTAssertThrowsError(try ProcessLarpClient.arguments(.open(profileID: "1", surface: .cli), snapshot: snapshot))
+        for alias in ["claude", "codex", "larp", "Bad", "--yes", "a b", ""] {
+            XCTAssertThrowsError(try ProcessLarpClient.arguments(.addAlias(name: alias, profileID: "1"), snapshot: snapshot))
+        }
+        XCTAssertThrowsError(try ProcessLarpClient.arguments(.removeAlias(name: "missing"), snapshot: snapshot))
+        XCTAssertEqual(ProcessLarpClient.dataFolder(cliPath: "/fixture/root/profiles/2/cli", id: "2"), "/fixture/root")
+        XCTAssertNil(ProcessLarpClient.dataFolder(cliPath: "/elsewhere/2/cli", id: "2"))
     }
     func testCoherentSnapshotAllActionRevisionsAndConflictConsumesIntent() async throws {
         let transport = try RecordingTransport()
@@ -102,7 +110,8 @@ final class ProcessBridgeTests: XCTestCase {
         let actions: [LarpAction] = [.setSurface(profileID: "2", surface: .desktop, enabled: true),
             .setCatalog(kind: .mcp, itemID: "example", profileID: "2", enabled: true),
             .setCatalog(kind: .skill, itemID: "example", profileID: "2", enabled: false), .setSyncNewServers(false),
-            .open(profileID: "2", surface: .desktop), .delete(profileID: "2")]
+            .open(profileID: "2", surface: .desktop), .addAlias(name: "codex-work", profileID: "2"),
+            .removeAlias(name: "codex-45"), .delete(profileID: "2")]
         for action in actions {
             _ = try await client.perform(action)
             _ = try await client.snapshot()
@@ -206,7 +215,8 @@ private actor RecordingTransport: CLITransport {
         if mode == "delay", command == "profile.list", !delayed {
             delayed = true; try await Task.sleep(nanoseconds: 150_000_000)
         }
-        if reused, command == "profile.delete", calls.filter({ $0.prefix(3) == ["cc", "profile", "list"] }).count <= 7 {
+        // 1 initial + 8 per-action refreshes precede the stale delete.
+        if reused, command == "profile.delete", calls.filter({ $0.prefix(3) == ["cc", "profile", "list"] }).count <= 9 {
             let error: [String: Any] = ["schema": 1, "command": command, "ok": false, "error": ["code": "conflict", "message": "secret not displayed"]]
             return ProcessOutput(stdout: try ProcessBridgeTests.bytes(error), status: 1)
         }

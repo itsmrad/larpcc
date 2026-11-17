@@ -66,12 +66,21 @@ public actor ProcessLarpClient: LarpClient {
         let state = Snapshot(revision: revision, profiles: profiles.map {
             Profile(id: $0.id, name: $0.name, provider: Provider(rawValue: $0.provider)!, cliEnabled: $0.surfaces.cli.enabled,
                     desktopEnabled: $0.surfaces.desktop.enabled,
-                    needsAttention: $0.state != "active" || $0.surfaces.cli.state != "ok" || $0.surfaces.desktop.state != "ok" || $0.desktop_binding.state != "ok" || $0.aliases.contains { $0.state != "ok" }, aliases: $0.aliases.map(\.name), displayFolder: $0.surfaces.cli.path)
-        }, servers: catalog(mcp), skills: catalog(skill), syncNewServers: metadata.sync_all)
+                    needsAttention: $0.state != "active" || $0.surfaces.cli.state != "ok" || $0.surfaces.desktop.state != "ok" || $0.desktop_binding.state != "ok" || $0.aliases.contains { $0.state != "ok" }, aliases: $0.aliases.map(\.name), displayFolder: $0.surfaces.cli.path,
+                    desktopBinding: DesktopBinding(state: DesktopBinding.State(rawValue: $0.desktop_binding.state) ?? .invalid, displayPath: $0.desktop_binding.path,
+                                                   detectedVersion: $0.desktop_binding.detected_version, recordedVersion: $0.desktop_binding.recorded_version))
+        }, servers: catalog(mcp), skills: catalog(skill), syncNewServers: metadata.sync_all,
+           dataFolder: profiles.first.flatMap { Self.dataFolder(cliPath: $0.surfaces.cli.path, id: $0.id) })
         guard generation == token else { throw ClientError.staleSelection }
         try Task.checkCancellation()
         displayed = state
         return state
+    }
+    /// Display-only: `<root>/profiles/<id>/cli` yields `<root>`. Never used as a path.
+    static func dataFolder(cliPath: String, id: String) -> String? {
+        let suffix = "/profiles/\(id)/cli"
+        guard cliPath.hasSuffix(suffix), cliPath.count > suffix.count else { return nil }
+        return String(cliPath.dropLast(suffix.count))
     }
     static func arguments(_ action: LarpAction, snapshot: Snapshot) throws -> [String] {
         func name(_ id: String) throws -> String {
@@ -88,6 +97,12 @@ public actor ProcessLarpClient: LarpClient {
             guard surface == .desktop else { throw ClientError.commandUnavailable }
             return ["app", "open", try name(id)]
         case let .delete(id): return ["profile", "delete", try name(id), "--yes"]
+        case let .addAlias(alias, id):
+            guard LarpNames.isValidAlias(alias) else { throw ClientError.invalidName }
+            return ["alias", "add", alias, try name(id)]
+        case let .removeAlias(alias):
+            guard snapshot.profiles.contains(where: { $0.aliases.contains(alias) }) else { throw ClientError.staleSelection }
+            return ["alias", "remove", alias]
         }
     }
     public func perform(_ action: LarpAction) async throws -> String {

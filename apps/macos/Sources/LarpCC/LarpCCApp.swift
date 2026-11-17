@@ -10,19 +10,12 @@ struct LarpCCApp: App {
             catch { exit(1) }
         }
     }
-    private var sampleAppearance: ColorScheme? {
-        if CommandLine.arguments.contains("--appearance=dark") { return .dark }
-        if CommandLine.arguments.contains("--appearance=light") { return .light }
-        return nil
-    }
-
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
-                .frame(minWidth: 900, minHeight: 650)
-                .preferredColorScheme(sampleAppearance)
+                .frame(minWidth: 760, minHeight: 520)
         }
-        .defaultSize(width: 1040, height: 760)
+        .defaultSize(width: 900, height: 680)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .appSettings) {

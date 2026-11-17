@@ -2,9 +2,18 @@ import SwiftUI
 import LarpModel
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general = "General", mcp = "MCP Servers", skills = "Skills"
-    case aliases = "Aliases", desktop = "Desktop Apps", about = "About"
+    case general, mcp, skills, aliases, desktop, about
     var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .general: return "General"
+        case .mcp: return "MCP Servers"
+        case .skills: return "Skills"
+        case .aliases: return "Aliases"
+        case .desktop: return "Desktop Apps"
+        case .about: return "About"
+        }
+    }
     var symbol: String {
         switch self {
         case .general: return "gearshape.fill"
@@ -12,373 +21,266 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .skills: return "sparkles"
         case .aliases: return "terminal.fill"
         case .desktop: return "macwindow"
-        case .about: return "info.circle.fill"
+        case .about: return "info"
         }
     }
     var color: Color {
         switch self {
         case .general: return .gray
         case .mcp: return .indigo
-        case .skills: return .purple
+        case .skills: return .pink
         case .aliases: return .orange
         case .desktop: return .blue
-        case .about: return .teal
+        case .about: return Color(white: 0.35)
+        }
+    }
+    /// Extra words matched by the sidebar search.
+    var keywords: String {
+        switch self {
+        case .general: return "terminal appearance dark light executable larp data folder sample"
+        case .mcp: return "servers matrix catalog"
+        case .skills: return "matrix catalog"
+        case .aliases: return "commands launcher name"
+        case .desktop: return "claude.app chatgpt.app version open"
+        case .about: return "version privacy"
         }
     }
 }
 
-private enum Selection: Hashable { case page(SettingsPage), profile(String) }
+enum Selection: Hashable {
+    case page(SettingsPage), profile(String)
+
+    /// `--page=general|mcp|skills|aliases|desktop|about|profile-<id>` for fixture screenshots.
+    static var launchValue: Selection? {
+        guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--page=") }) else { return nil }
+        let value = String(arg.dropFirst("--page=".count))
+        if value.hasPrefix("profile-") { return .profile(String(value.dropFirst("profile-".count))) }
+        return SettingsPage(rawValue: value).map(Selection.page)
+    }
+}
 
 struct SettingsView: View {
     @ObservedObject var store: AppStore
-    @State private var selection: Selection? = .profile("1")
+    @State private var selection: Selection? = Selection.launchValue ?? .page(.general)
+    @State private var backStack: [Selection] = []
+    @State private var forwardStack: [Selection] = []
+    @State private var historyMove = false
     @State private var search = ""
-    @State private var deleting: Profile?
+    @AppStorage(PreferenceKey.appearance) private var appearance = AppearanceMode.system.rawValue
 
     var body: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search settings", text: $search).textFieldStyle(.plain)
-                        .accessibilityLabel("Search settings and profiles")
-                    if !search.isEmpty {
-                        Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.plain).accessibilityLabel("Clear search")
-                    }
-                }
-                .padding(9).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 9))
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                List(selection: $selection) {
-                    Section {
-                        ForEach(SettingsPage.allCases.filter { matches($0.rawValue) }) { page in
-                            HStack(spacing: 10) {
-                                Image(systemName: page.symbol).font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.white).frame(width: 26, height: 26)
-                                    .background(page.color.gradient, in: RoundedRectangle(cornerRadius: 6))
-                                Text(page.rawValue)
-                            }
-                            .padding(.vertical, 3).tag(Selection.page(page))
-                        }
-                    }
-                    Section {
-                        ForEach((store.snapshot?.profiles ?? []).filter { matches($0.name + " " + $0.provider.rawValue) }) { profile in
-                            HStack(spacing: 9) {
-                                ProviderGlyph(provider: profile.provider, size: 26)
-                                Text(profile.name).lineLimit(1)
-                                Spacer()
-                                Circle().fill(statusColor(profile.readiness)).frame(width: 7, height: 7)
-                                    .accessibilityLabel("Local configuration \(profile.readiness.rawValue)")
-                            }
-                            .padding(.vertical, 3).tag(Selection.profile(profile.id))
-                        }
-                    } header: {
-                        HStack {
-                            Text("Profiles")
-                            Spacer()
-                            Text("\(store.snapshot?.enabledCount ?? 0) on")
-                        }
-                    }
-                }
-                .listStyle(.sidebar)
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(store.modeTitle, systemImage: store.isFixture ? "testtube.2" : "terminal").font(.callout.weight(.medium))
-                    Text(store.isFixture ? "Changes stay in memory." : "Explicit local CLI access.").font(.caption).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-            }
-            .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 280)
+            sidebar
+                .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 300)
         } detail: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    if let snapshot = store.snapshot {
-                        switch selection {
-                        case let .profile(id):
-                            if let profile = snapshot.profiles.first(where: { $0.id == id }) {
-                                profileDetail(profile, snapshot: snapshot)
-                            } else { emptySelection }
-                        case let .page(page): pageDetail(page, snapshot: snapshot)
-                        case nil: emptySelection
-                        }
-                    } else {
-                        ContentUnavailableView(store.busy ? "Loading local metadata…" : "Local metadata unavailable", systemImage: "terminal", description: Text("Choose a trusted Larp CLI or sample mode."))
-                    }
-                }
-                .disabled(store.busy)
-                .frame(maxWidth: 760, alignment: .leading).padding(32)
-                .frame(maxWidth: .infinity)
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
-            .navigationTitle("LarpCC")
-            .toolbar {
-                ToolbarItemGroup {
-                    Button("Choose Larp…") { store.chooseExecutable() }.disabled(store.busy || deleting != nil)
-                    Button("Sample") { store.useFixture() }.disabled(store.busy || deleting != nil)
-                    Button("Refresh") { store.startRefresh() }.disabled(store.busy || deleting != nil)
-                    if store.busy { Button("Cancel") { store.cancel() }.keyboardShortcut(.cancelAction) }
-                    Label(store.modeTitle, systemImage: store.isFixture ? "testtube.2" : "terminal").foregroundStyle(.secondary)
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                if let message = store.message {
-                    HStack(alignment: .top) {
-                        Text(message).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
-                        Button { store.message = nil } label: { Image(systemName: "xmark") }
-                            .buttonStyle(.plain).accessibilityLabel("Dismiss message")
-                    }.padding(14).background(.regularMaterial)
-                }
-            }
+            detail
+                .navigationTitle(title)
+                .toolbar { toolbar }
+                .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
         }
         .task { store.startRefresh() }
-        .sheet(item: $deleting) { profile in
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Delete \(profile.name)?").font(.title2.bold())
-                Text(store.isFixture ? "This removes the sample profile and its sample assignments from memory. No folder or alias on disk will be removed." : "This asks Larp to remove the managed profile folder and aliases. This is folder deletion, not metadata-only forget. Keychain items and remote grants may remain; no logout is performed.")
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Spacer()
-                    Button("Cancel") { deleting = nil }.keyboardShortcut(.cancelAction)
-                    Button(store.isFixture ? "Delete sample profile" : "Delete profile folder", role: .destructive) {
-                        store.perform(.delete(profileID: profile.id))
-                        deleting = nil
-                        selection = .page(.general)
-                    }
-                }
-            }.padding(24).frame(width: 420)
+        .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply() }
+        .onChange(of: appearance) { _, value in (AppearanceMode(rawValue: value) ?? .system).apply() }
+        .onChange(of: selection) { old, _ in
+            if historyMove { historyMove = false; return }
+            if let old { backStack.append(old) }
+            forwardStack.removeAll()
         }
     }
 
-    private var emptySelection: some View {
-        ContentUnavailableView("Select a setting or profile", systemImage: "sidebar.left")
-    }
-    private func matches(_ text: String) -> Bool {
-        search.isEmpty || text.localizedCaseInsensitiveContains(search)
-    }
-    private func statusColor(_ status: Readiness) -> Color {
-        switch status { case .ready: return .green; case .attention: return .yellow; case .off: return .gray }
-    }
-    private func heading(_ title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 26, weight: .bold))
-            Text(subtitle).foregroundStyle(.secondary)
-        }
-    }
+    // MARK: Sidebar
 
-    private func profileDetail(_ profile: Profile, snapshot: Snapshot) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Card {
-                HStack(spacing: 14) {
-                    ProviderGlyph(provider: profile.provider, size: 48)
-                    heading(profile.name, subtitle: "\(profile.provider.rawValue) · authentication unknown")
-                    Spacer(minLength: 12)
-                    Button { store.startRefresh() } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }.help("Refresh local metadata").accessibilityLabel("Refresh profile")
-                    Toggle("CLI enabled", isOn: surfaceBinding(profile, .cli))
-                        .labelsHidden().toggleStyle(.switch).help("Enable CLI surface")
+    private var sidebar: some View {
+        List(selection: $selection) {
+            Section {
+                ForEach(SettingsPage.allCases.filter { matches($0.title + " " + $0.keywords) }) { page in
+                    Label {
+                        Text(page.title)
+                    } icon: {
+                        IconTile(symbol: page.symbol, color: page.color)
+                    }
+                    .tag(Selection.page(page))
                 }
             }
-            Card {
-                ValueRow("Provider", value: profile.provider.title)
-                Divider()
-                ValueRow("Command aliases", value: profile.aliases.isEmpty ? "None" : profile.aliases.joined(separator: ", "))
-                Divider()
-                ValueRow("Folder", value: profile.folder)
-                Divider()
-                ValueRow("Version", value: "Not detected · qualification pending")
-                Divider()
-                ValueRow("Surfaces", value: "CLI \(profile.cliEnabled ? "on" : "off") · Desktop \(profile.desktopEnabled ? "on" : "off")")
-            }
-            if profile.needsAttention {
-                Label("Folder or binding needs attention. Authentication is still unknown.", systemImage: "exclamationmark.triangle")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            catalogCard("MCP Servers", items: snapshot.servers, profile: profile, kind: .mcp)
-            catalogCard("Skills", items: snapshot.skills, profile: profile, kind: .skill)
-            Card {
-                HStack {
-                    Button("Open in Terminal", systemImage: "terminal") {
-                        store.perform(.open(profileID: profile.id, surface: .cli))
+            if let snapshot = store.snapshot {
+                Section {
+                    ForEach(snapshot.profiles.filter { matches($0.name + " " + $0.provider.title + " " + $0.aliases.joined(separator: " ")) }) { profile in
+                        ProfileSidebarRow(profile: profile)
+                            .tag(Selection.profile(profile.id))
                     }
-                    Button(profile.provider == .claude ? "Open Claude.app" : "Open ChatGPT.app", systemImage: "macwindow") {
-                        store.perform(.open(profileID: profile.id, surface: .desktop))
-                    }
-                    Spacer()
-                }
-                Text(store.isFixture ? "Sample actions only. Native launches remain unavailable pending qualification." : "Desktop requests go through Larp and remain subject to qualification. Terminal launch is unavailable.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Button("Delete Profile…", role: .destructive) { deleting = profile }
-                .foregroundStyle(.red)
-        }
-    }
-
-    private func catalogCard(_ title: String, items: [CatalogItem], profile: Profile, kind: CatalogKind) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(.headline)
-            Card {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 { Divider() }
+                } header: {
                     HStack {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(item.id)
-                            Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
-                        }
+                        Text("Profiles")
                         Spacer()
-                        Toggle(item.id, isOn: catalogBinding(item, profile: profile, kind: kind))
-                            .labelsHidden().toggleStyle(.switch)
+                        Text("\(snapshot.enabledCount) on").monospacedDigit()
                     }
                 }
-                if items.isEmpty { Text("No entries").foregroundStyle(.secondary) }
             }
         }
+        .listStyle(.sidebar)
+        .searchable(text: $search, placement: .sidebar, prompt: "Search")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: store.isFixture ? "testtube.2" : "terminal")
+                Text(store.isFixture ? "Sample data · changes stay in memory" : "Using your larp executable")
+                    .lineLimit(1)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .accessibilityElement(children: .combine)
+        }
     }
-    private func surfaceBinding(_ profile: Profile, _ surface: Surface) -> Binding<Bool> {
-        Binding(get: { surface == .cli ? profile.cliEnabled : profile.desktopEnabled }, set: {
-            store.perform(.setSurface(profileID: profile.id, surface: surface, enabled: $0))
-        })
-    }
-    private func catalogBinding(_ item: CatalogItem, profile: Profile, kind: CatalogKind) -> Binding<Bool> {
-        Binding(get: { item.profileIDs.contains(profile.id) }, set: {
-            store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: $0))
-        })
+
+    // MARK: Detail
+
+    private var title: String {
+        switch selection {
+        case let .page(page): return page.title
+        case let .profile(id): return store.snapshot?.profiles.first { $0.id == id }?.name ?? "Profile"
+        case nil: return "LarpCC"
+        }
     }
 
     @ViewBuilder
-    private func pageDetail(_ page: SettingsPage, snapshot: Snapshot) -> some View {
-        heading(page.rawValue, subtitle: page == .mcp ? "Choose which profiles receive each server definition." : "Local profile settings · \(store.modeTitle)")
-        switch page {
-        case .general:
-            Card {
-                ValueRow("Data source", value: store.isFixture ? "In-memory samples" : "Selected local Larp CLI")
-                if let path = store.selectedPath { ValueRow("Executable", value: path) }
-                Divider()
-                ValueRow("Profiles enabled", value: "\(snapshot.enabledCount) of \(snapshot.profiles.count)")
-                Divider()
-                ValueRow("Authentication", value: "Unknown · never observed")
-            }
-            Card {
-                Text("Your profiles, deliberately separate.").font(.headline)
-                Text("Each profile has its own CLI and desktop folders. Aliases can use explicit custom names. Launch qualification remains pending.")
-                    .foregroundStyle(.secondary)
-                Text(store.isFixture ? "All controls here edit sample data only. Restarting restores the samples." : "Changes are requested through the selected CLI using the displayed revision. Refresh after external changes.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-        case .mcp:
-            matrix(snapshot.servers, snapshot: snapshot, kind: .mcp)
-            Card {
-                Toggle("Sync new servers to all profiles", isOn: Binding(
-                    get: { snapshot.syncNewServers },
-                    set: { store.perform(.setSyncNewServers($0)) }
-                )).toggleStyle(.switch)
-                Text("Local metadata preference only. Server definitions are never executed by this app.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        case .skills:
-            matrix(snapshot.skills, snapshot: snapshot, kind: .skill)
-            Text("Local metadata with explicit per-profile assignments.")
-                .font(.callout).foregroundStyle(.secondary)
-        case .aliases:
-            Card {
-                ForEach(snapshot.profiles) { profile in
-                    ValueRow(profile.name, value: profile.aliases.isEmpty ? "No aliases" : profile.aliases.joined(separator: ", "))
-                    if profile.id != snapshot.profiles.last?.id { Divider() }
-                }
-                if snapshot.profiles.isEmpty { Text("No profiles") }
-            }
-            Text("Aliases are local metadata. Authentication is not observed.")
-                .font(.callout).foregroundStyle(.secondary)
-        case .desktop:
-            Card {
-                ForEach(snapshot.profiles) { profile in
-                    Toggle(isOn: surfaceBinding(profile, .desktop)) {
-                        HStack {
-                            ProviderGlyph(provider: profile.provider, size: 28)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(profile.name)
-                                Text("\(profile.folder)/desktop").font(.caption).foregroundStyle(.secondary)
-                            }
+    private var detail: some View {
+        Group {
+            switch selection {
+            case .page(.general): GeneralPage(store: store, appearance: $appearance)
+            case .page(.about): AboutPage(store: store)
+            case let .page(page):
+                if let snapshot = store.snapshot {
+                    switch page {
+                    case .mcp: CatalogPage(store: store, snapshot: snapshot, kind: .mcp)
+                    case .skills: CatalogPage(store: store, snapshot: snapshot, kind: .skill)
+                    case .aliases: AliasesPage(store: store, snapshot: snapshot)
+                    default: DesktopAppsPage(store: store, snapshot: snapshot)
+                    }
+                } else { metadataUnavailable }
+            case let .profile(id):
+                if let snapshot = store.snapshot {
+                    if let profile = snapshot.profiles.first(where: { $0.id == id }) {
+                        ProfilePage(store: store, snapshot: snapshot, profile: profile) {
+                            selection = .page(.general)
                         }
-                    }.toggleStyle(.switch)
-                    if profile.id != snapshot.profiles.last?.id { Divider() }
-                }
-                if snapshot.profiles.isEmpty { Text("No profiles") }
+                        .id(profile.id)
+                    } else {
+                        UnavailablePane(title: "Profile unavailable", symbol: "person.crop.circle.badge.questionmark",
+                                        message: "This profile is no longer in the current snapshot.")
+                    }
+                } else { metadataUnavailable }
+            case nil:
+                UnavailablePane(title: "Nothing selected", symbol: "sidebar.left", message: "Choose a page or profile in the sidebar.")
             }
-            Text("Desktop switches do not authorize a launch. Provider applications require separate qualification.")
-                .font(.callout).foregroundStyle(.secondary)
-        case .about:
-            Card {
-                Text("LarpCC").font(.title2.bold())
-                Text("Native profile settings for Larp.")
-                Divider()
-                ValueRow("Build", value: "Development · unsigned")
-                ValueRow("Mode", value: store.modeTitle)
-                Text("No authentication inspection, background jobs or network requests. Live actions use only your selected Larp executable.")
-                    .font(.callout).foregroundStyle(.secondary)
+        }
+        .disabled(store.busy)
+    }
+
+    private var metadataUnavailable: some View {
+        Group {
+            if store.busy {
+                ProgressView("Loading local metadata…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                UnavailablePane(title: "Local metadata unavailable", symbol: "terminal",
+                                message: "Choose a trusted larp executable or use sample data in General.")
             }
         }
     }
 
-    private func matrix(_ items: [CatalogItem], snapshot: Snapshot, kind: CatalogKind) -> some View {
-        ScrollView(.horizontal) {
-            Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 16) {
-                GridRow {
-                    Text(kind == .mcp ? "Server" : "Skill").font(.caption.weight(.semibold))
-                    ForEach(snapshot.profiles) { profile in
-                        Text(profile.name).font(.caption.weight(.semibold)).frame(minWidth: 66)
-                    }
-                }.foregroundStyle(.secondary)
-                ForEach(items) { item in
-                    GridRow {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(item.id).fontWeight(.medium)
-                            Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
-                        }.frame(minWidth: 170, alignment: .leading)
-                        ForEach(snapshot.profiles) { profile in
-                            Toggle("\(item.id) for \(profile.name)", isOn: catalogBinding(item, profile: profile, kind: kind))
-                                .labelsHidden().toggleStyle(.checkbox)
-                                .frame(minWidth: 66)
-                        }
-                    }
-                }
-            }.padding(18)
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            ControlGroup {
+                Button { move(back: true) } label: { Label("Back", systemImage: "chevron.left") }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(backStack.isEmpty)
+                    .help("Back")
+                Button { move(back: false) } label: { Label("Forward", systemImage: "chevron.right") }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(forwardStack.isEmpty)
+                    .help("Forward")
+            }
+            .controlGroupStyle(.navigation)
         }
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.07)))
+        ToolbarItemGroup(placement: .primaryAction) {
+            if store.busy {
+                ProgressView().controlSize(.small)
+                Button("Cancel") { store.cancel() }
+                    .keyboardShortcut(.cancelAction)
+            } else {
+                Button { store.startRefresh() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .help("Reload local metadata")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var messageBar: some View {
+        if let message = store.message {
+            VStack(spacing: 0) {
+                Divider()
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "info.circle").foregroundStyle(.secondary)
+                    Text(message)
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button { store.message = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Dismiss message")
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+            }
+            .background(.bar)
+        }
+    }
+
+    // MARK: Helpers
+
+    private func matches(_ text: String) -> Bool {
+        let query = search.trimmingCharacters(in: .whitespaces)
+        return query.isEmpty || text.localizedCaseInsensitiveContains(query)
+    }
+
+    private func exists(_ target: Selection) -> Bool {
+        guard case let .profile(id) = target else { return true }
+        return store.snapshot?.profiles.contains { $0.id == id } ?? false
+    }
+
+    /// Steps through history, skipping profiles that no longer exist.
+    private func move(back: Bool) {
+        while let target = back ? backStack.popLast() : forwardStack.popLast() {
+            guard exists(target), target != selection else { continue }
+            if let current = selection {
+                if back { forwardStack.append(current) } else { backStack.append(current) }
+            }
+            historyMove = true
+            selection = target
+            return
+        }
     }
 }
 
-struct ProviderGlyph: View {
-    let provider: Provider
-    let size: CGFloat
+private struct ProfileSidebarRow: View {
+    let profile: Profile
     var body: some View {
-        Image(systemName: provider.symbol)
-            .font(.system(size: size * 0.48, weight: .medium))
-            .foregroundStyle(provider == .claude ? Color.orange : Color.primary)
-            .frame(width: size, height: size)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: size * 0.24))
-            .accessibilityLabel(provider.title)
-    }
-}
-
-struct Card<Content: View>: View {
-    @ViewBuilder var content: Content
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) { content }
-            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.07)))
-    }
-}
-
-struct ValueRow: View {
-    let title: String
-    let value: String
-    init(_ title: String, value: String) { self.title = title; self.value = value }
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 20) {
-            Text(title).frame(width: 118, alignment: .leading)
-            Spacer(minLength: 0)
-            Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing).textSelection(.enabled)
-        }.font(.callout).padding(.vertical, 2)
+        HStack(spacing: 6) {
+            Label {
+                Text(profile.name).lineLimit(1)
+            } icon: {
+                ProviderGlyph(provider: profile.provider)
+            }
+            Spacer(minLength: 4)
+            if profile.readiness != .off {
+                StatusDot(color: profile.readiness.color)
+            }
+        }
+        .opacity(profile.readiness == .off ? 0.55 : 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
     }
 }
