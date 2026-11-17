@@ -160,15 +160,17 @@ struct SettingsView: View {
 
     private func profileDetail(_ profile: Profile, snapshot: Snapshot) -> some View {
         VStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 14) {
-                ProviderGlyph(provider: profile.provider, size: 48)
-                heading(profile.name, subtitle: "\(profile.provider.rawValue) · authentication unknown")
-                Spacer(minLength: 12)
-                Button { Task { await store.refresh() } } label: {
-                    Image(systemName: "arrow.clockwise")
-                }.help("Refresh sample profile").accessibilityLabel("Refresh profile")
-                Toggle("CLI enabled", isOn: surfaceBinding(profile, .cli))
-                    .labelsHidden().toggleStyle(.switch).help("Enable sample CLI surface")
+            Card {
+                HStack(spacing: 14) {
+                    ProviderGlyph(provider: profile.provider, size: 48)
+                    heading(profile.name, subtitle: "\(profile.provider.rawValue) · authentication unknown")
+                    Spacer(minLength: 12)
+                    Button { Task { await store.refresh() } } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }.help("Refresh sample profile").accessibilityLabel("Refresh profile")
+                    Toggle("CLI enabled", isOn: surfaceBinding(profile, .cli))
+                        .labelsHidden().toggleStyle(.switch).help("Enable sample CLI surface")
+                }
             }
             Card {
                 ValueRow("Provider", value: profile.provider.title)
@@ -192,7 +194,7 @@ struct SettingsView: View {
                     Button("Open in Terminal", systemImage: "terminal") {
                         store.perform(.open(profileID: profile.id, surface: .cli))
                     }
-                    Button("Open Desktop App", systemImage: "macwindow") {
+                    Button(profile.provider == .claude ? "Open Claude.app" : "Open ChatGPT.app", systemImage: "macwindow") {
                         store.perform(.open(profileID: profile.id, surface: .desktop))
                     }
                     Spacer()
@@ -365,9 +367,9 @@ struct ValueRow: View {
     init(_ title: String, value: String) { self.title = title; self.value = value }
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 20) {
-            Text(title).foregroundStyle(.secondary).frame(width: 118, alignment: .leading)
+            Text(title).frame(width: 118, alignment: .leading)
             Spacer(minLength: 0)
-            Text(value).multilineTextAlignment(.trailing).textSelection(.enabled)
+            Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing).textSelection(.enabled)
         }.font(.callout).padding(.vertical, 2)
     }
 }
