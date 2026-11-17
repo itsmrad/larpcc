@@ -165,6 +165,21 @@ final class ProcessBridgeTests: XCTestCase {
         let url = try script("printf 'safe json\\n'; printf 'SECRET' >&2\n")
         do { _ = try await ProcessRunner.run(url: url, arguments: []); XCTFail() } catch ClientError.invalidResponse {}
     }
+    func testSelectionIdentityRejectsReplacementAndRenamedNativeBinary() throws {
+        let scriptURL = try script("exit 0")
+        let url = scriptURL.deletingLastPathComponent().appendingPathComponent("larp")
+        var data = Data([0xcf, 0xfa, 0xed, 0xfe])
+        try data.write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        XCTAssertThrowsError(try SelectedLarp(url: url)) // renamed native header is insufficient
+        data.append(Data("Named Claude Code and Codex account profiles\0Manage profile records (no login, no provider launch)".utf8))
+        try data.write(to: url)
+        let selected = try SelectedLarp(url: url)
+        try selected.recheck()
+        data.append(0)
+        try data.write(to: url)
+        XCTAssertThrowsError(try selected.recheck())
+    }
     func testProductionSelectionRejectsScriptsDirectoriesAndWrongNames() throws {
         let url = try script("exit 0\n")
         XCTAssertThrowsError(try SelectedLarp(url: url))

@@ -7,7 +7,8 @@ preserves fixture screenshots (`--appearance=light` / `--appearance=dark`).
 **Choose Larp…** explicitly selects a trusted local native executable named `larp`.
 Live mode clears the samples immediately; failed operations never simulate success.
 Selection rejects scripts, symlinks, directories, non-executables and non-Mach-O
-files. A bounded SHA-256 fingerprint, file identity and resolved path are rechecked
+files and requires the current Larp-specific embedded help markers before any
+execution (a false negative on a future build safely refuses selection). A bounded SHA-256 fingerprint, file identity and resolved path are rechecked
 before every invocation. A schema-1 JSON help response must identify `larp cc`.
 These checks detect accidental replacement, not a malicious executable: the user
 must trust the selected build. There remains a path replacement race between

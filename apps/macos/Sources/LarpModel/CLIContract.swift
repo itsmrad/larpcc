@@ -38,7 +38,7 @@ enum CLIContract {
         case "object":
             guard let object = value as? [String: Any], let props = rule["properties"] as? [String: [String: Any]],
                   let required = rule["required"] as? [String], required.allSatisfy({ object[$0] != nil }),
-                  Set(object.keys).isSubset(of: Set(props.keys())) else { return false }
+                  Set(object.keys).isSubset(of: Set(props.keys)) else { return false }
             return object.allSatisfy { valid($0.value, props[$0.key]!) }
         case "array":
             guard let array = value as? [Any], let item = rule["items"] as? [String: Any] else { return false }
