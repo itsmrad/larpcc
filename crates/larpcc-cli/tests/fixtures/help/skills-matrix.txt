@@ -1,0 +1,6 @@
+Usage: larp cc skills matrix [OPTIONS]
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

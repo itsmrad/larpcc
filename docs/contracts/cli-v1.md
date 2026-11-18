@@ -94,8 +94,11 @@ Missing/unsafe homes are diagnostic states, not evidence of being signed out.
 `app open PROFILE --json` success is a **local dispatch receipt** only:
 `profile_id,provider,surface:"desktop",outcome:"launched"|"focused",
 native_auth:"not_observed"`. It says nothing about account identity, successful
-authentication, UI readiness or isolation. Currently it fails
-`qualification_pending` before app execution; no success row is authorized.
+authentication, UI readiness or isolation. The [stage09 lead desktop amendment](../stages/09-desktop.md#lead-desktop-admission-amendment--2026-11-17)
+authorizes local dispatch of strictly verified ChatGPT.app on macOS, with a fixed
+warning for untested/unknown versions. Claude and unsupported platforms remain
+`qualification_pending`. CLI native rows remain empty and `qualified:false`;
+local desktop dispatch does not qualify accounts or storage isolation.
 CORE resolves one coherent v3 profile/provider/cli/desktop/binding snapshot,
 validates ancestry/ACLs and paths, and revalidates snapshot before dispatch.
 MAC retains checked paths through open/focus, revalidates app identity and
@@ -137,3 +140,7 @@ validator exists, validate the schema and examples with it too; install nothing.
 Implementers add Rust serialization/CLI e2e fixtures against these exact examples,
 including stderr/stdout/exit assertions. Planning validation does not prove CLI
 implementation or native launch behavior.
+
+Skills source confinement uses `forbidden_source` with a fixed message and no
+source path. Recorded desktop version labels contain 1–128 ASCII letters, digits,
+`.`, `_`, `+` or `-`; labels remain unverified metadata.

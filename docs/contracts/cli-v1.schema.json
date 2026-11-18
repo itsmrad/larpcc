@@ -484,6 +484,7 @@
             "conflict",
             "busy",
             "unsafe_path",
+            "forbidden_source",
             "drift",
             "qualification_pending",
             "json_native_io",

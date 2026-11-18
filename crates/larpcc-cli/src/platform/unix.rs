@@ -836,6 +836,50 @@ pub(crate) fn terminate_by_signal(signal: i32) -> Result<u32, Error> {
     })
 }
 
+/// Read an explicitly selected package, permitting trusted 0755/0644 sources.
+pub(crate) fn read_skill_object(
+    path: &Path,
+    kind: ObjectKind,
+    source: bool,
+) -> Result<CheckedObject, Error> {
+    if !source {
+        return inspect(path, kind)?.ok_or_else(|| unsafe_path(path, "is missing"));
+    }
+    let file = open(path, kind, false)?;
+    let meta = file.metadata().map_err(|e| io_error("inspect", path, e))?;
+    if (kind == ObjectKind::Directory && !meta.is_dir())
+        || (kind == ObjectKind::File && !meta.is_file())
+    {
+        return Err(unsafe_path(path, "is not a regular package object"));
+    }
+    trusted(path, &meta)?;
+    acl_file(&file, path)?;
+    Ok(CheckedObject {
+        file,
+        identity: identity(&meta),
+    })
+}
+
+pub(crate) fn append_skill_file(
+    path: &Path,
+    expected: &FileIdentity,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    use std::io::{Seek, SeekFrom, Write};
+    let file = open(path, ObjectKind::File, true)?;
+    let mut checked = verify_opened(file, path, ObjectKind::File)?;
+    if &checked.identity != expected {
+        return Err(unsafe_path(path, "filesystem identity changed"));
+    }
+    single_link(&checked.file)?;
+    checked
+        .file
+        .seek(SeekFrom::End(0))
+        .and_then(|_| checked.file.write_all(bytes))
+        .and_then(|_| checked.file.sync_all())
+        .map_err(|e| io_error("write skill file", path, e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
