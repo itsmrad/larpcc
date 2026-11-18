@@ -18,7 +18,8 @@ Store `<root>/shared/skills/<name>/SKILL.md` and safe supporting regular files.
 Add copies an explicit package once (not a live external link), after no-follow
 validation; reject special files, symlinks/reparse, traversal, hardlinked files,
 unsafe ancestry, collisions; limits 1,000 files/16 MiB/16 levels per package.
-No scripts execute. SHA-256 digest is over sorted relative paths+file lengths+
+Sources inside the managed root or known vendor homes refuse `forbidden_source`
+before any package contents are read. No scripts execute. SHA-256 digest is over sorted relative paths+file lengths+
 bytes, unambiguous length-prefixed encoding; store immutable, no overwrite.
 Remove refuses enabled references until disabled. Names use profile grammar.
 New skills default enabled for all active CLI profiles; new profiles inherit all
@@ -26,13 +27,18 @@ stored skills. Explicit disables persist by ID, independent of rename.
 
 Under same registry lock, separate skills index version=1 holds revision,
 name/digest and effective per-ID switches. Per-profile links into cli/skills
-point only to verified internal store entries. Windows tries junctions only
-with confined target verification; if unavailable uses owned copy with digest.
+point only to verified internal store entries. Stage 06 uses owned digest-copies
+on Windows; junction creation is outside this stage.
 No fallback over occupied destinations. Existing directories, links to other
 sources and changed copies refuse `drift`; never replace real directories.
 Disable/removal only removes proven owned link/copy, no traversal of target.
 `sync` journals plan/apply with manifest expected revision, rollback/resume rules
-from stage 04. Read-only list/matrix never repairs. Global/project/provider
+from stage 04. A missing owned profile artifact is absent: sync recreates it, and disable/removal
+drops its receipt through the journal. Occupied or changed artifacts still refuse
+drift. Profile hooks validate only their affected entries. Read-only list/matrix
+never repairs. Skills writes acquire lifecycle guards in ascending profile ID
+order before reacquiring the registry lock and rechecking the revision; contention
+refuses without profile writes. Catalog-only changes need no lifecycle guard. Global/project/provider
 skills may remain visible; disabling here does not hide those scopes. Desktop
 chat skills are account-side and outside local sharing.
 
@@ -40,7 +46,7 @@ chat skills are account-side and outside local sharing.
 package contents. Implement and execute
 `cargo test --workspace --locked stage06_` on each native OS:
 `stage06_store` safe package/digest/limits; `stage06_links` enable/disable and new
-profile, Windows junction and copy modes; `stage06_drift` occupied directory,
+profile, Windows owned-copy mode and drift/removal; `stage06_drift` occupied directory,
 changed copy/link, traversal/reparse/hardlink/outside sentinel;
 `stage06_crash` concurrent toggles/delete and each transaction interruption.
 Zero matched tests fails. All fixtures temporary, names claude-work/codex-45,

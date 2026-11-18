@@ -138,6 +138,9 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     let mut desktop_providers = HashSet::new();
     for b in &data.desktop_bindings {
         if !desktop_providers.insert(b.provider)
+            || b.recorded_version
+                .as_deref()
+                .is_some_and(|v| super::parse_recorded_version(v).is_err())
             || !b.path.is_absolute()
             || b.path
                 .components()
@@ -172,7 +175,7 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     }
     Ok(data)
 }
-type RegistryLock = (File, Vec<crate::platform::CheckedObject>);
+pub(super) type RegistryLock = (File, Vec<crate::platform::CheckedObject>);
 pub(super) fn snapshot(
     root: &Path,
     expected: Option<u64>,
@@ -427,7 +430,7 @@ pub(super) fn mutate_checked(
     expected: Option<u64>,
 ) -> Result<(ProfileEntry, u64, bool), Error> {
     let _ancestors = crate::platform::anchor(root)?.ancestors;
-    let _lock = lock(root, timeout)?;
+    let mut registry_lock = Some(lock(root, timeout)?);
     let _fixed = fixed(root)?;
     let mut data = load(root)?;
     precondition(&data, expected)?;
@@ -507,6 +510,7 @@ pub(super) fn mutate_checked(
                 .aliases
                 .iter()
                 .any(|a| a.profile_id == data.profiles[index].id)
+                || super::skills::has_profile_references(root, &data, data.profiles[index].id)?
             {
                 return Err(Error::Conflict);
             }
@@ -572,7 +576,7 @@ pub(super) fn mutate_checked(
         } else {
             serialize(&data)?
         };
-        if super::skills::profile_commit(root, &data)? {
+        if super::skills::profile_commit(root, &data, &mut registry_lock, expected)? {
             applied = true;
         } else {
             persist(root, &bytes, &mut applied, &mut created_temp)?;

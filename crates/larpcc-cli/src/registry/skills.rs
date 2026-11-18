@@ -78,7 +78,11 @@ impl Artifact {
     }
     fn remove(&self, path: &Path) -> Result<(), Error> {
         match self {
-            Self::Copy { receipt } => receipt.resume_remove(path)?,
+            Self::Copy { receipt } => match fs::symlink_metadata(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(_) => return Err(Error::Drift),
+                Ok(_) => receipt.resume_remove(path)?,
+            },
             #[cfg(unix)]
             Self::Link { receipt } => match fs::symlink_metadata(path) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
@@ -167,6 +171,41 @@ impl SkillsAction {
         }
     }
 }
+// Refuse known homes before opening the selected source or any package file.
+fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
+    for component in source.components() {
+        if let std::path::Component::Normal(name) = component {
+            let name = name.to_string_lossy().to_ascii_lowercase();
+            if name.starts_with(".claude") || name.starts_with(".codex") || name == ".agents" {
+                return Err(Error::ForbiddenSource);
+            }
+        }
+    }
+    for forbidden in std::iter::once(root.to_path_buf()).chain(
+        ["CLAUDE_CONFIG_DIR", "CODEX_HOME"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute()),
+    ) {
+        if platform::contains_path(source, &forbidden)? {
+            return Err(Error::ForbiddenSource);
+        }
+    }
+    let (object, held) = skills::source_directory(source)?;
+    // Retained directory identities catch native alternate spellings of the root.
+    if let Some(root_object) = platform::inspect(root, ObjectKind::Directory)?
+        && (object.identity == root_object.identity
+            || held
+                .ancestors
+                .iter()
+                .any(|p| p.identity == root_object.identity))
+    {
+        return Err(Error::ForbiddenSource);
+    }
+    Package::source(source).map_err(Into::into)
+}
+
 fn digest_valid(d: &str) -> bool {
     d.len() == 64
         && d.bytes()
@@ -299,9 +338,28 @@ fn load(root: &Path, data: &store::Data) -> Result<(Index, Manifest), Error> {
     validate(root, &index, &manifest, data)?;
     Ok((index, manifest))
 }
+fn preflight_owned(root: &Path, owned: &Owned) -> Result<(), Error> {
+    match fs::symlink_metadata(owned.path(root)) {
+        Err(e) if owned.profile.is_some() && e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(Error::Drift),
+        Ok(_) => owned.artifact.verify(&owned.path(root)),
+    }
+}
+#[derive(Clone, Copy)]
+enum Repair {
+    None,
+    All,
+    Profile(ProfileId),
+}
+impl Repair {
+    fn includes(self, id: ProfileId) -> bool {
+        matches!(self, Self::All) || matches!(self,Self::Profile(selected) if selected==id)
+    }
+}
+
 fn preflight(root: &Path, index: &Index, manifest: &Manifest) -> Result<(), Error> {
     for o in &manifest.entries {
-        o.artifact.verify(&o.path(root))?;
+        preflight_owned(root, o)?;
     }
     for skill in &index.skills {
         if !manifest
@@ -323,6 +381,7 @@ fn plan(
     index: &Index,
     manifest: &Manifest,
     package: Option<(ProfileName, Package)>,
+    repair: Repair,
 ) -> Result<Vec<Step>, Error> {
     let mut steps = vec![];
     if let Some((name, package)) = package {
@@ -335,9 +394,14 @@ fn plan(
                     .entries
                     .iter()
                     .any(|o| o.name == skill.name && o.profile == Some(p.id))
+                || (enabled(skill, p)
+                    && repair.includes(p.id)
+                    && fs::symlink_metadata(artifact_path(root, &skill.name, Some(p.id)))
+                        .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound))
             {
                 let path = artifact_path(root, &skill.name, Some(p.id));
                 platform::anchor(&path)?;
+                platform::inspect(path.parent().ok_or(Error::Drift)?, ObjectKind::Directory)?;
                 if fs::symlink_metadata(&path).is_ok() {
                     return Err(Error::Drift);
                 }
@@ -372,6 +436,46 @@ fn plan(
     }
     Ok(steps)
 }
+// Release registry lock before taking lifecycle guards; always reacquire and
+// compare the revision before using the prepared ID-based plan.
+fn guarded_relock(
+    root: &Path,
+    revision: u64,
+    expected: Option<u64>,
+    steps: &[Step],
+    lock: store::RegistryLock,
+) -> Result<
+    (
+        store::RegistryLock,
+        Vec<crate::launch::admission::AuthGuard>,
+    ),
+    Error,
+> {
+    let ids: BTreeSet<_> = steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::Profile { id, .. } => Some(*id),
+            Step::Remove { owned } => owned.profile,
+            Step::Store { .. } => None,
+        })
+        .collect();
+    if ids.is_empty() {
+        return Ok((lock, vec![]));
+    }
+    drop(lock);
+    let mut guards = Vec::new();
+    for id in ids {
+        guards.push(crate::launch::admission::acquire_auth_guard(root, id)?);
+    }
+    let lock = store::lock(root, Duration::from_secs(10))?;
+    let current = store::load_unchecked(root)?;
+    store::precondition(&current, expected)?;
+    if current.revision != revision {
+        return Err(Error::Conflict);
+    }
+    Ok((lock, guards))
+}
+
 fn sync_directory(path: &Path) -> Result<(), Error> {
     paths::sync(path)
 }
@@ -454,7 +558,14 @@ fn apply(root: &Path, j: &mut Journal) -> Result<(), Error> {
                 j.manifest
                     .entries
                     .retain(|o| !(o.name == owned.name && o.profile == owned.profile));
-                paths::sync(owned.path(root).parent().ok_or(Error::RecoveryRequired)?)?;
+                let parent = owned
+                    .path(root)
+                    .parent()
+                    .ok_or(Error::RecoveryRequired)?
+                    .to_path_buf();
+                if platform::inspect(&parent, ObjectKind::Directory)?.is_some() {
+                    paths::sync(&parent)?;
+                }
             }
         }
         j.next += 1;
@@ -671,7 +782,7 @@ impl Registry {
             self.observed.set(Some(data.revision));
             return render(self.root(), &action, &data, &index, &manifest);
         }
-        let _lock = if read_only {
+        let lock = if read_only {
             store::admission_lock(self.root())?
         } else {
             store::lock(self.root(), Duration::from_secs(10))?
@@ -682,7 +793,21 @@ impl Registry {
             if !matches!(action, SkillsAction::Sync) {
                 return Err(Error::RecoveryRequired);
             }
-            recover(self.root(), &data)?;
+            let journal: Journal = decode(
+                &read_bytes(self.root(), JOURNAL, JOURNAL_LIMIT)?.ok_or(Error::RecoveryRequired)?,
+            )?;
+            if journal.kind != "skills" {
+                return Err(Error::RecoveryRequired);
+            }
+            let (_lock, _guards) = guarded_relock(
+                self.root(),
+                data.revision,
+                self.expected,
+                &journal.steps,
+                lock,
+            )?;
+            let current = store::load_unchecked(self.root())?;
+            recover(self.root(), &current)?;
             data = store::load_unchecked(self.root())?;
             self.observed.set(Some(data.revision));
             return Ok(json!({"changed":true,"profile_id":null,"name":null,"warnings":[]}));
@@ -705,6 +830,11 @@ impl Registry {
         let mut package = None;
         let mut target_id = None;
         let mut target_name = None;
+        let mut repair = if matches!(action, SkillsAction::Sync) {
+            Repair::All
+        } else {
+            Repair::None
+        };
         match action {
             SkillsAction::Add { source, name } => {
                 if index.skills.iter().any(|s| s.name == name) {
@@ -723,7 +853,7 @@ impl Registry {
                         .map_err(|e| paths::io("resolve source", Path::new("skills"), e))?
                         .join(source)
                 };
-                let snapshot = Package::source(&source)?;
+                let snapshot = source_package(self.root(), &source)?;
                 target_name = Some(name.clone());
                 index.skills.push(Skill {
                     name: name.clone(),
@@ -765,14 +895,21 @@ impl Registry {
                     s.disabled.insert(p.id);
                 }
                 target_id = Some(p.id);
+                if on {
+                    repair = Repair::Profile(p.id);
+                }
                 target_name = Some(name);
             }
             SkillsAction::Sync => (),
             _ => unreachable!(),
         }
         index.skills.sort_by(|a, b| a.name.cmp(&b.name));
-        let steps = plan(self.root(), &data, &index, &manifest, package)?;
+        let steps = plan(self.root(), &data, &index, &manifest, package, repair)?;
         let changed = index != before_index || !steps.is_empty();
+        let (_lock, _guards) =
+            guarded_relock(self.root(), data.revision, self.expected, &steps, lock)?;
+        store::load(self.root())?;
+        preflight(self.root(), &before_index, &manifest)?;
         if changed {
             let mut after = store::parse(Path::new("registry.json"), &store::serialize(&data)?)?;
             after.revision = after.revision.checked_add(1).ok_or(Error::Exhausted)?;
@@ -817,21 +954,64 @@ fn render(
     Ok(value)
 }
 
+pub(super) fn has_profile_references(
+    root: &Path,
+    data: &store::Data,
+    id: ProfileId,
+) -> Result<bool, Error> {
+    let (index, manifest) = load(root, data)?;
+    Ok(manifest.entries.iter().any(|o| o.profile == Some(id))
+        || index.skills.iter().any(|s| {
+            s.disabled.contains(&id) || data.profiles.iter().any(|p| p.id == id && enabled(s, p))
+        }))
+}
+
 /// Existing profile mutations call here while retaining the registry lock.
 /// The only side effects are the concrete skills plan and its registry commit.
-pub(super) fn profile_commit(root: &Path, after: &store::Data) -> Result<bool, Error> {
+pub(super) fn profile_commit(
+    root: &Path,
+    after: &store::Data,
+    lock: &mut Option<store::RegistryLock>,
+    expected: Option<u64>,
+) -> Result<bool, Error> {
     let before = store::load_unchecked(root)?;
     let (old, manifest) = load(root, &before)?;
     if old.skills.is_empty() {
         return Ok(false);
     }
-    preflight(root, &old, &manifest)?;
     let mut index = old.clone();
     for s in &mut index.skills {
         s.disabled
             .retain(|id| after.profiles.iter().any(|p| p.id == *id));
     }
-    let steps = plan(root, after, &index, &manifest, None)?;
+    let steps = plan(root, after, &index, &manifest, None, Repair::None)?;
+    if steps.is_empty() && index == old {
+        return Ok(false);
+    }
+    for step in &steps {
+        match step {
+            Step::Profile { name, .. } => {
+                let store = manifest
+                    .entries
+                    .iter()
+                    .find(|o| o.name == *name && o.profile.is_none())
+                    .ok_or(Error::Drift)?;
+                preflight_owned(root, store)?;
+            }
+            Step::Remove { owned } => preflight_owned(root, owned)?,
+            Step::Store { .. } => unreachable!(),
+        }
+    }
+    let (registry_lock, _guards) = guarded_relock(
+        root,
+        before.revision,
+        expected,
+        &steps,
+        lock.take().ok_or(Error::RecoveryRequired)?,
+    )?;
+    *lock = Some(registry_lock);
+    store::load(root)?;
+    // Same revision after reacquisition: no cooperative writer changed the plan.
     begin(root, &before, after, old, index, manifest, steps)?;
     Ok(true)
 }
@@ -1104,6 +1284,9 @@ mod tests {
             });
             [one.join().unwrap(), two.join().unwrap()]
         });
+        assert!(results[0].is_ok());
+        assert!(matches!(results[1], Err(Error::Conflict)));
+        assert!(r.get(&name("claude-work")).is_ok());
         assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
         assert_eq!(
             results
@@ -1181,5 +1364,166 @@ mod tests {
         assert!(!copy.exists());
         fs::hard_link(source.join("SKILL.md"), source.join("hardlink")).unwrap();
         assert!(Package::source(&source).is_err());
+    }
+    fn remove_profile_artifact(path: &Path) {
+        #[cfg(unix)]
+        fs::remove_file(path).unwrap();
+        #[cfg(windows)]
+        {
+            let receipt = OwnedCopy::capture(path, &Package::read(path).unwrap().sha256).unwrap();
+            receipt.resume_remove(path).unwrap();
+        }
+    }
+    #[test]
+    fn stage06_links_missing_owned_artifact_sync_disable_and_unrelated_profile_mutations() {
+        let (_temp, r, source) = fixture();
+        r.add(name("claude-work"), Provider::Claude).unwrap();
+        add(&r, &source);
+        let path = r.root().join("profiles/1/cli/skills/example");
+        remove_profile_artifact(&path);
+        assert_eq!(
+            r.skills(SkillsAction::List).unwrap()["skills"][0]["state"],
+            "drift"
+        );
+        r.rename(&name("claude-work"), name("codex-45")).unwrap();
+        r.add(name("claude-work"), Provider::Claude).unwrap();
+        assert!(!path.exists());
+        r.skills(SkillsAction::Sync).unwrap();
+        assert!(path.join("SKILL.md").is_file());
+        remove_profile_artifact(&path);
+        fs::remove_dir(path.parent().unwrap()).unwrap();
+        r.skills(SkillsAction::Switch {
+            name: name("example"),
+            profile: name("codex-45"),
+            enabled: false,
+        })
+        .unwrap();
+        let (_, manifest) = load(r.root(), &store::load(r.root()).unwrap()).unwrap();
+        assert!(
+            !manifest
+                .entries
+                .iter()
+                .any(|o| o.profile == Some(ProfileId::new(1)))
+        );
+        assert!(!crate::share::pending(r.root()));
+    }
+    #[test]
+    fn stage06_links_profile_rename_ignores_unrelated_drift_but_sync_refuses() {
+        let (_temp, r, source) = fixture();
+        r.add(name("claude-work"), Provider::Claude).unwrap();
+        add(&r, &source);
+        let path = r.root().join("profiles/1/cli/skills/example");
+        remove_profile_artifact(&path);
+        platform::create_directory(&path).unwrap();
+        platform::create_file(&path.join("native"))
+            .unwrap()
+            .file
+            .write_all(b"sentinel")
+            .unwrap();
+        r.rename(&name("claude-work"), name("codex-45")).unwrap();
+        assert!(matches!(r.skills(SkillsAction::Sync), Err(Error::Drift)));
+        assert_eq!(fs::read(path.join("native")).unwrap(), b"sentinel");
+        assert!(!crate::share::pending(r.root()));
+    }
+    #[test]
+    fn stage06_forget_sharing_references_conflict_without_effects() {
+        let (_temp, r, source) = fixture();
+        r.add(name("claude-work"), Provider::Claude).unwrap();
+        add(&r, &source);
+        let registry = fs::read(r.root().join("registry.json")).unwrap();
+        let manifest = fs::read(r.root().join(MANIFEST)).unwrap();
+        assert!(matches!(
+            r.forget(&name("claude-work")),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(registry, fs::read(r.root().join("registry.json")).unwrap());
+        assert_eq!(manifest, fs::read(r.root().join(MANIFEST)).unwrap());
+        assert!(
+            r.root()
+                .join("profiles/1/cli/skills/example/SKILL.md")
+                .is_file()
+        );
+        switch(&r, false).unwrap();
+        assert!(matches!(
+            r.forget(&name("claude-work")),
+            Err(Error::Conflict)
+        ));
+        r.skills(SkillsAction::Remove {
+            name: name("example"),
+        })
+        .unwrap();
+        r.forget(&name("claude-work")).unwrap();
+        assert!(r.root().join("profiles/1/cli").is_dir());
+    }
+    #[test]
+    fn stage06_lifecycle_guard_blocks_enable_sync_surface_and_recovery() {
+        let (_temp, r, source) = fixture();
+        r.add(name("claude-work"), Provider::Claude).unwrap();
+        add(&r, &source);
+        switch(&r, false).unwrap();
+        let guard =
+            crate::launch::admission::acquire_auth_guard(r.root(), ProfileId::new(1)).unwrap();
+        let before = fs::read(r.root().join("registry.json")).unwrap();
+        assert!(matches!(switch(&r, true), Err(Error::AuthBusy)));
+        assert_eq!(fs::read(r.root().join("registry.json")).unwrap(), before);
+        assert!(!crate::share::pending(r.root()));
+        drop(guard);
+        switch(&r, true).unwrap();
+        let path = r.root().join("profiles/1/cli/skills/example");
+        remove_profile_artifact(&path);
+        let guard =
+            crate::launch::admission::acquire_auth_guard(r.root(), ProfileId::new(1)).unwrap();
+        assert!(matches!(r.skills(SkillsAction::Sync), Err(Error::AuthBusy)));
+        assert!(matches!(
+            r.surface(name("claude-work"), Surface::Cli, false),
+            Err(Error::AuthBusy)
+        ));
+        assert!(!crate::share::pending(r.root()));
+        drop(guard);
+        set_fault(Some("journal"));
+        assert!(r.skills(SkillsAction::Sync).is_err());
+        set_fault(None);
+        let guard =
+            crate::launch::admission::acquire_auth_guard(r.root(), ProfileId::new(1)).unwrap();
+        assert!(matches!(r.skills(SkillsAction::Sync), Err(Error::AuthBusy)));
+        assert!(crate::share::pending(r.root()));
+        drop(guard);
+        r.skills(SkillsAction::Sync).unwrap();
+    }
+    #[test]
+    fn stage06_lifecycle_multiple_profiles_release_earlier_guards_on_contention() {
+        let (_temp, r, source) = fixture();
+        r.add(name("claude-work"), Provider::Claude).unwrap();
+        r.add(name("codex-45"), Provider::Codex).unwrap();
+        let guard =
+            crate::launch::admission::acquire_auth_guard(r.root(), ProfileId::new(2)).unwrap();
+        assert!(matches!(
+            r.skills(SkillsAction::Add {
+                source,
+                name: name("example")
+            }),
+            Err(Error::AuthBusy)
+        ));
+        let first =
+            crate::launch::admission::acquire_auth_guard(r.root(), ProfileId::new(1)).unwrap();
+        assert!(!skills::store_path(r.root(), &name("example")).exists());
+        assert!(!crate::share::pending(r.root()));
+        drop(first);
+        drop(guard);
+    }
+    #[test]
+    fn stage06_links_missing_copy_and_parent_can_drop_owned_receipt() {
+        let (_temp, r, source) = fixture();
+        let parent = source.parent().unwrap().join("copies");
+        platform::create_directory(&parent).unwrap();
+        let copy = parent.join("example");
+        let package = Package::source(&source).unwrap();
+        package.resume_copy(&copy).unwrap();
+        let receipt = OwnedCopy::capture(&copy, &package.sha256).unwrap();
+        receipt.resume_remove(&copy).unwrap();
+        fs::remove_dir(parent).unwrap();
+        Artifact::Copy { receipt }.remove(&copy).unwrap();
+        assert!(!copy.exists());
+        assert!(!r.root().exists());
     }
 }

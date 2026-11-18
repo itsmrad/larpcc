@@ -9,6 +9,8 @@ pub enum Error {
     Conflict,
     Drift,
     SkillNotFound,
+    ForbiddenSource,
+    InvalidVersionLabel,
     RecoveryRequired,
     ManagedMode {
         path: PathBuf,
@@ -94,6 +96,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidVersionLabel => {
+                f.write_str("recorded version label is invalid or exceeds 128 bytes")
+            }
+            Self::ForbiddenSource => {
+                f.write_str("skill sources inside managed or vendor homes are forbidden")
+            }
             Self::Drift => f.write_str("owned skills content or filesystem identity has drifted"),
             Self::SkillNotFound => f.write_str("skill was not found"),
             Self::Conflict => f.write_str("registry revision or references conflict"),
