@@ -2,6 +2,7 @@
 Import is OUT OF SCOPE. Stdlib only; no general JSON Schema validator claim.
 """
 import copy
+import ipaddress
 import json
 import re
 from pathlib import Path
@@ -47,6 +48,28 @@ def matches(value, rule):
     except AssertionError:
         return False
 
+DNS_LABEL = r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
+DESTINATION = re.compile(
+    rf'([A-Za-z0-9_][A-Za-z0-9_-]{{0,63}})@({DNS_LABEL}(?:\.{DNS_LABEL})*)'
+    r'(?::([1-9][0-9]{0,4}))?'
+)
+
+def check_host(host):
+    ssh = host['ssh']
+    match = DESTINATION.fullmatch(ssh['destination'])
+    assert match is not None
+    user, hostname, port = match.groups()
+    assert len(hostname) <= 253
+    last = hostname.rsplit('.', 1)[-1]
+    if not last[0].isalpha():
+        try:
+            assert str(ipaddress.IPv4Address(hostname)) == hostname
+        except ipaddress.AddressValueError as error:
+            raise AssertionError('invalid IPv4 destination') from error
+    port = port or '22'
+    assert int(port) <= 65535
+    assert ssh['resolved'] == f'{user}@{hostname}:{port}'
+
 def semantic(value):
     if isinstance(value, dict):
         for k, v in value.items():
@@ -62,6 +85,16 @@ def semantic(value):
             assert [x['name'] for x in rows] == sorted(set(x['name'] for x in rows))
             if value['command'] == 'profile.list':
                 assert len({x['id'] for x in rows}) == len(rows)
+        if value.get('ok'):
+            command, data = value['command'], value['data']
+            if command in ('host.list', 'host.catalog.list'):
+                rows = data['hosts'] if command == 'host.list' else data['entries']
+                assert [x['name'] for x in rows] == sorted(set(x['name'] for x in rows))
+                if command == 'host.list':
+                    for host in rows:
+                        check_host(host)
+            if command == 'host.show':
+                check_host(data['host'])
         if value.get('ok') and 'changed' in value.get('data', {}):
             command, data = value['command'], value['data']
             if command in {'profile.add', 'profile.rename', 'profile.forget',
@@ -122,6 +155,23 @@ duplicate = copy.deepcopy(invalid['data']['profiles'][0])
 duplicate['name'] = 'other'
 invalid['data']['profiles'].append(duplicate)
 invalid_mutations = [invalid]
+host_list = next(x for x in fixtures if x['command'] == 'host.list' and x['ok'])
+invalid = copy.deepcopy(host_list)
+invalid['data']['hosts'].append(copy.deepcopy(invalid['data']['hosts'][0]))
+invalid_mutations.append(invalid)
+for field, destination in (
+    ('destination', '-oProxyCommand=x'),
+    ('resolved', '-oProxyCommand=x'),
+    ('destination', 'dev@0x7f000001'),
+):
+    invalid = copy.deepcopy(host_list)
+    invalid['data']['hosts'][0]['ssh'][field] = destination
+    invalid_mutations.append(invalid)
+for command in ('host.catalog.share', 'host.catalog.apply'):
+    invalid = copy.deepcopy(next(x for x in fixtures if x['command'] == command and x['ok']))
+    invalid['revision'] = None
+    assert not matches(invalid, SCHEMA)
+    negative_checks += 1
 for command in ('profile.add', 'profile.rename', 'profile.forget',
                 'profile.delete', 'profile.recover', 'profile.surface',
                 'alias.add', 'alias.remove', 'skills.enable', 'skills.disable'):

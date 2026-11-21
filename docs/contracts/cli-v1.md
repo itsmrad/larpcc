@@ -146,13 +146,18 @@ can reject the new syntax as `parse`.
 | `host.show` | `{host:Host}` | Local host store |
 | `host.check` | `{name,status}` for the explicitly checked host. Status is `ok`, `unreachable`, `larp_missing` or `incompatible`. A classified probe failure is a completed check with exit 0. | Local host store |
 | `host.catalog.list` | `{kind,entries:[{name,all_machines}]}`, ASCII name order, unique names | Selected machine's registry |
-| `host.catalog.share`, `host.catalog.apply` | Common mutation receipt, non-null entry `name` and null `profile_id` | Selected machine's registry |
+| `host.catalog.share`, `host.catalog.apply` | Common mutation receipt, non-null entry `name` and null `profile_id` | Selected machine's non-null registry revision |
 
-`Host` is `{name,ssh:{destination,resolved},larp,larpcc_home}` with nullable
-paths. `destination` is the input alias or direct destination and `resolved`
-is the normalized direct destination with an explicit port. Paths and SSH
-destination fields are display data in the app. Host store success revisions
-are canonical u64 strings, including `"0"` for a missing host store.
+`Host` is `{name,ssh:{destination,resolved},larp,larpcc_home,identity_file}` with
+nullable paths. Pending confirmation, `destination` is a direct
+`USER@HOST[:PORT]` and `resolved` is the same destination with an explicit
+port. The local `identity_file` option is pending user decision. Paths and
+SSH destination fields are display data in the app. Host store success
+revisions are canonical u64 strings, including `"0"` for a missing host store.
+
+`host.catalog.share` advances the selected registry revision once when the
+flag changes and preserves it on a no-op. Catalog apply uses the destination's
+local inheritance rules, previewed against that registry revision.
 
 For host-store commands, `--expected-revision` is a host-store precondition.
 For forwarded commands it guards the remote registry. Forwarded app reads and
@@ -170,6 +175,9 @@ with exit 1. Error messages contain fixed safe text. An unknown mutation
 outcome requires an explicit read before deciding whether to retry. The
 ordinary JSON `too_large`, `conflict` and other applicable codes remain valid.
 An unsupported route/operation exits 2 with `usage` or `unsupported`.
+The local router reserves `ssh_*`, `remote_*` and `catalog_unavailable`.
+Those codes in a forwarded reply make it invalid. After mutation dispatch,
+an invalid reply leaves the outcome unknown.
 
 Remote profiles use LOCAL usage mode only. If the destination has LIVE enabled,
 forwarded reads still use LOCAL and the receiver refuses requests to read or

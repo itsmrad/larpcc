@@ -699,11 +699,12 @@
         {
           "name": "dev-vm",
           "ssh": {
-            "destination": "sandbox-dev",
+            "destination": "dev@sandbox.example:2222",
             "resolved": "dev@sandbox.example:2222"
           },
           "larp": "/opt/Larp Tools/larp",
-          "larpcc_home": null
+          "larpcc_home": null,
+          "identity_file": null
         }
       ]
     }
@@ -717,11 +718,12 @@
       "host": {
         "name": "dev-vm",
         "ssh": {
-          "destination": "sandbox-dev",
+          "destination": "dev@sandbox.example:2222",
           "resolved": "dev@sandbox.example:2222"
         },
         "larp": "/opt/Larp Tools/larp",
-        "larpcc_home": null
+        "larpcc_home": null,
+        "identity_file": null
       }
     }
   },
@@ -787,7 +789,7 @@
       "entries": [
         {
           "name": "review",
-          "all_machines": true
+          "all_machines": false
         }
       ]
     }
@@ -796,7 +798,7 @@
     "schema": 1,
     "command": "host.catalog.share",
     "ok": true,
-    "revision": "12",
+    "revision": "13",
     "data": {
       "changed": true,
       "profile_id": null,

@@ -588,13 +588,24 @@
               "type": "null"
             }
           ]
+        },
+        "identity_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "name",
         "ssh",
         "larp",
-        "larpcc_home"
+        "larpcc_home",
+        "identity_file"
       ],
       "additionalProperties": false
     },
@@ -2239,15 +2250,8 @@
           "const": true
         },
         "revision": {
-          "anyOf": [
-            {
-              "type": "string",
-              "pattern": "^(0|[1-9][0-9]{0,19})$"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
         },
         "data": {
           "$ref": "#/$defs/host_mutation"
@@ -2275,15 +2279,8 @@
           "const": true
         },
         "revision": {
-          "anyOf": [
-            {
-              "type": "string",
-              "pattern": "^(0|[1-9][0-9]{0,19})$"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
         },
         "data": {
           "$ref": "#/$defs/host_mutation"

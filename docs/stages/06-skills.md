@@ -22,7 +22,8 @@ No scripts execute. SHA-256 digest is over sorted relative paths+file lengths+
 bytes, unambiguous length-prefixed encoding; store immutable, no overwrite.
 Remove refuses enabled references until disabled. Names use profile grammar.
 New skills default enabled for all active CLI profiles; new profiles inherit all
-stored skills. Explicit disables persist by ID, independent of rename.
+stored skills. Explicit disables persist by ID, independent of rename. Stage 13 catalog apply follows these destination-local
+defaults for a new entry. An identical existing entry keeps its switches.
 
 Under same registry lock, separate skills index version=1 holds revision,
 name/digest and effective per-ID switches. Per-profile links into cli/skills
