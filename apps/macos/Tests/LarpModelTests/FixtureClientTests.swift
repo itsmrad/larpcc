@@ -53,4 +53,18 @@ final class FixtureClientTests: XCTestCase {
         XCTAssertEqual(state.profiles.first { $0.id == "2" }?.readiness, .attention)
         XCTAssertEqual(state.profiles.first { $0.id == "5" }?.readiness, .off)
     }
+
+    func testSampleAliasesAddRemoveAndRefuseInvalidOrDuplicateNames() async throws {
+        let client = FixtureLarpClient()
+        _ = try await client.perform(.addAlias(name: "claude-work", profileID: "1"))
+        var state = try await client.snapshot()
+        XCTAssertTrue(try XCTUnwrap(state.profiles.first { $0.id == "1" }).aliases.contains("claude-work"))
+        do { _ = try await client.perform(.addAlias(name: "claude-work", profileID: "3")); XCTFail() } catch ClientError.operationRefused {}
+        do { _ = try await client.perform(.addAlias(name: "claude", profileID: "1")); XCTFail() } catch ClientError.invalidName {}
+        _ = try await client.perform(.removeAlias(name: "claude-work"))
+        state = try await client.snapshot()
+        XCTAssertFalse(state.profiles.contains { $0.aliases.contains("claude-work") })
+        do { _ = try await client.perform(.removeAlias(name: "claude-work")); XCTFail() } catch ClientError.staleSelection {}
+        XCTAssertEqual(state.profiles.first { $0.id == "1" }?.desktopBinding?.state, .ok)
+    }
 }

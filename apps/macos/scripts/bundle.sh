@@ -5,11 +5,16 @@ if [[ "$(uname -s)" != Darwin ]]; then
   echo 'LarpCC bundling requires macOS.' >&2
   exit 1
 fi
-swift build -c release --product LarpCC
+# SwiftPM records the deployment target as the SDK version, which makes macOS
+# draw the app in its compatibility style. Record the real SDK instead.
+swift build -c release --product LarpCC \
+  -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$(xcrun --show-sdk-version)"
 bin_dir="$(swift build -c release --show-bin-path)"
 # Only create/replace the executable and metadata inside this package's output.
 app='dist/LarpCC.app'
 mkdir -p "$app/Contents/MacOS"
+# Replace rather than overwrite, so a running copy keeps its own signed file.
+rm -f "$app/Contents/MacOS/LarpCC"
 cp "$bin_dir/LarpCC" "$app/Contents/MacOS/LarpCC"
 # SwiftPM Bundle.module resolves its bundle from Bundle.main.bundleURL.
 find "$bin_dir" -maxdepth 1 -name '*.bundle' -exec cp -R {} "$app/" \;

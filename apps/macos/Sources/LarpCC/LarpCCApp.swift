@@ -10,24 +10,40 @@ struct LarpCCApp: App {
             catch { exit(1) }
         }
     }
-    private var sampleAppearance: ColorScheme? {
-        if CommandLine.arguments.contains("--appearance=dark") { return .dark }
-        if CommandLine.arguments.contains("--appearance=light") { return .light }
-        return nil
-    }
-
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
-                .frame(minWidth: 900, minHeight: 650)
-                .preferredColorScheme(sampleAppearance)
+                .onAppear { fitWindowOnScreen() }
         }
-        .defaultSize(width: 1040, height: 760)
+        .defaultSize(width: 900, height: 680)
+        .defaultPosition(.center)
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .appSettings) {
                 OpenSettingsWindow()
             }
+            CommandGroup(replacing: .newItem) {
+                Button("New Profile…") { store.sheet = .addProfile }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(store.snapshot == nil || store.busy)
+            }
+        }
+    }
+}
+
+/// Keeps the window fully on the screen it opens on, in case a restored or
+/// default frame lands partly off-screen (e.g. after a display change).
+@MainActor private func fitWindowOnScreen() {
+    DispatchQueue.main.async {
+        for window in NSApp.windows where window.isVisible && window.styleMask.contains(.titled) {
+            guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame,
+                  !visible.contains(window.frame) else { continue }
+            var frame = window.frame
+            frame.size.width = min(frame.width, visible.width)
+            frame.size.height = min(frame.height, visible.height)
+            frame.origin.x = visible.midX - frame.width / 2
+            frame.origin.y = visible.midY - frame.height / 2
+            window.setFrame(frame, display: true)
         }
     }
 }
@@ -40,8 +56,15 @@ private struct OpenSettingsWindow: View {
     }
 }
 
+/// App-wide sheets, opened from the menu bar, toolbar or sidebar.
+enum AppSheet: String, Identifiable {
+    case addProfile, addServer, addSkill
+    var id: String { rawValue }
+}
+
 @MainActor
 final class AppStore: ObservableObject {
+    @Published var sheet: AppSheet?
     @Published var snapshot: Snapshot?
     @Published var busy = false
     @Published var message: String?
@@ -85,12 +108,16 @@ final class AppStore: ObservableObject {
         client = FixtureLarpClient()
         operation = Task { await refresh() }
     }
+    /// True while a change (not a read) is running; Cancel then warns before stopping it.
+    @Published private(set) var mutating = false
+
     func cancel() {
         generation += 1
         operation?.cancel(); operation = nil
         busy = false
         snapshot = nil
-        message = "Cancelled. Refresh before choosing another action."
+        message = mutating ? ClientError.outcomeUnknown.errorDescription : "Cancelled. Refresh before choosing another action."
+        mutating = false
     }
     func startRefresh() { operation = Task { await refresh() } }
     func refresh() async {
@@ -109,28 +136,42 @@ final class AppStore: ObservableObject {
             message = (error as? ClientError)?.errorDescription ?? "Could not refresh local metadata."
         }
     }
-    func perform(_ action: LarpAction) {
-        guard !busy, snapshot != nil else { return }
+    /// Runs one user intent. `completion` gets nil on success or the safe error text;
+    /// when given, the caller shows the error inline instead of the message bar.
+    /// After a failure the snapshot is refreshed, but the action is never replayed.
+    func perform(_ action: LarpAction, completion: ((String?) -> Void)? = nil) {
+        guard !busy, snapshot != nil else { completion?("Refresh before trying again."); return }
         busy = true
+        mutating = true
         generation += 1
         let token = generation
         operation = Task {
-            defer { if generation == token { busy = false } }
+            defer { if generation == token { busy = false; mutating = false } }
+            let result: String
             do {
-                let result = try await client.perform(action)
+                result = try await client.perform(action)
+            } catch {
+                guard generation == token else { return }
+                let text = (error as? ClientError)?.errorDescription ?? "The action could not be completed. Refresh and try again."
+                if let completion { completion(text) } else { message = text }
+                mutating = false
+                let value = try? await client.snapshot()
+                if generation == token, !Task.isCancelled { snapshot = value }
+                return
+            }
+            guard generation == token, !Task.isCancelled else { return }
+            mutating = false
+            // The change succeeded; a failed follow-up read is reported on its own.
+            do {
                 let value = try await client.snapshot()
                 guard generation == token, !Task.isCancelled else { return }
                 message = result; snapshot = value
             } catch {
                 guard generation == token else { return }
                 snapshot = nil
-                message = (error as? ClientError)?.errorDescription ?? "The action could not be completed. Refresh and try again."
-                if case ClientError.conflict = error {
-                    // Refresh only; the old action is never replayed.
-                    let value = try? await client.snapshot()
-                    if generation == token, !Task.isCancelled { snapshot = value }
-                }
+                message = result + " Refresh failed — refresh to see the current state."
             }
+            completion?(nil)
         }
     }
 }
