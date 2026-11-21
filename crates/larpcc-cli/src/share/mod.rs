@@ -1,3 +1,4 @@
+pub(crate) mod mcp;
 pub(crate) mod skills;
 
 // A single pending namespace gates all registry consumers. Future alias/MCP

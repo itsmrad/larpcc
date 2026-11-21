@@ -855,6 +855,27 @@ fn fault(_phase: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Test-only skill add with injected private vendor homes, for other owners'
+/// hook-ordering tests (e.g. MCP after a skills registry commit).
+#[cfg(test)]
+pub(super) fn add_private(r: &Registry, source: &Path, name: ProfileName) -> Result<Value, Error> {
+    let homes = VendorHomes {
+        configured: vec![],
+        default_home: Some(
+            r.root()
+                .parent()
+                .ok_or(Error::RecoveryRequired)?
+                .join("fake-home"),
+        ),
+    };
+    r.skills_with_homes(
+        SkillsAction::Add {
+            source: source.into(),
+            name,
+        },
+        Some(&homes),
+    )
+}
 impl Registry {
     pub fn skills(&self, action: SkillsAction) -> Result<Value, Error> {
         self.skills_with_homes(action, None)

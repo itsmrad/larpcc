@@ -1,0 +1,13 @@
+Disable a server for one profile or for all profiles
+
+Usage: larp cc mcp disable [OPTIONS] <NAME> [PROFILE]
+
+Arguments:
+  <NAME>     
+  [PROFILE]  
+
+Options:
+      --all                                    
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

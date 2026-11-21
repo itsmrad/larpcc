@@ -1,0 +1,11 @@
+Remove a definition, its switches and its renders
+
+Usage: larp cc mcp remove [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>  
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

@@ -68,6 +68,12 @@ enum CcAction {
         #[command(subcommand)]
         command: SkillsCommand,
     },
+    /// Manage reference-only MCP definitions and per-profile switches
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    Mcp {
+        #[command(subcommand)]
+        command: crate::share::mcp::cli::McpCommand,
+    },
     #[command(
         about = "Manage native provider bindings",
         arg_required_else_help = true,
@@ -335,6 +341,18 @@ pub fn run() -> ExitCode {
                 Err(error) => operational_error(error),
             };
         }
+        CcAction::Mcp { command } => {
+            return match Registry::locate()
+                .and_then(|r| r.expecting(expected).mcp(command.into_action()))
+            {
+                Ok(data) => write_output(
+                    crate::share::mcp::cli::human(&data).as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
         CcAction::Run { name, args } => return operation(Operation::Run, name, args, false),
         CcAction::Login { name, yes } => return operation(Operation::Login, name, vec![], yes),
         CcAction::Status { name } => return operation(Operation::Status, name, vec![], true),
@@ -455,7 +473,7 @@ fn operational_error(error: Error) -> ExitCode {
     }
     if matches!(
         error,
-        Error::AlreadyBound { .. } | Error::InvalidVersionLabel
+        Error::AlreadyBound { .. } | Error::InvalidVersionLabel | Error::McpInvalid
     ) {
         ExitCode::from(2)
     } else {
