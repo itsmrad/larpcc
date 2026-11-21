@@ -127,6 +127,9 @@ lead to ask the user, per the rollout order.
   client. This amends "JSON status is local metadata; human native status is
   still gated pass-through" above for `status NAME` only: status output is
   captured by an exact-row parser instead of passed through.
+  Under `--host` (implemented with stage 13) the remote Larp runs its own
+  status and returns the same variant over the user's SSH, only on explicit
+  user action, with never-store on both ends.
 - D26: email and plan are never stored by LarpCC or the app. Parsing is
   exact-version and fail-closed (`account: unknown`). Invariant 2 stays: no
   token or credential file reads, ever. Invariant 3 stays: LarpCC makes no

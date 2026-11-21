@@ -161,7 +161,13 @@ other command keeps them.
 
 `--no-account` is accepted only by `status`. Elsewhere it is `usage`, exit 2.
 An older CLI rejects it as `parse`, exit 2. `doctor` is unchanged. Under a
-stage 13 `--host` route, account mode fails `unsupported`, exit 2, before SSH.
+stage 13 `--host` route (implemented with stage 13), the remote Larp runs its
+own account status and the forwarded envelope is the same `status.account`
+shape with no host field. The local router validates it like any forwarded
+read and also requires the requested profile ID. A remote without stage 14
+support yields `remote_incompatible` for account mode. No separate example is
+needed because the shape is identical. See
+[stage 14](../stages/14-account-summary.md#remote-account-status).
 
 `account` is `{state,email,plan}`. `state` is `signed_in`, `signed_out`,
 `unknown`, `not_qualified` or `unavailable`. Email and plan may be non-null

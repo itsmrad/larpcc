@@ -52,10 +52,9 @@ argv forwarding to the selected CLI run and its own admission rules. Only the
 capture-capable code path and avoids guessing whether a forwarded `status`
 word was meant for Larp or the provider.
 
-Under a stage 13 `--host NAME` route, account status is refused with
-`unsupported` (exit 2) before SSH. `--host NAME status PROFILE --no-account`
-forwards as the ordinary metadata command. An email never crosses SSH in v1
-(question 1 below).
+Under a stage 13 `--host NAME` route, account status is allowed. The remote
+Larp runs its own qualified status and returns `status.account` over the
+user's SSH. See [Remote account status](#remote-account-status).
 
 ### Human output
 
@@ -90,7 +89,7 @@ the way to see usage without running a client.
 Both human modes exit 0 for every completed observation, including
 `signed_out`, `unknown`, `not_qualified` and `unavailable`. Native exit codes
 are provider-specific and are interpreted only by the parser. Scripts that
-need the state use `--json` (question 3). Pre-spawn, admission, conflict,
+need the state use `--json` (lead ruling, 2026-11-21). Pre-spawn, admission, conflict,
 busy and cleanup failures are fixed local errors (exit 1, or 2 for usage).
 A real process cancellation (INT/TERM/HUP) is propagated after the child is
 reaped, with no account line printed.
@@ -188,6 +187,55 @@ row admits but an approved stage 08 version-only descriptor matches the exact
 artifact, account mode runs that bounded `--version` probe in a fresh
 isolated home and reports its version. Otherwise `provider_version` is null.
 `--no-account` never probes.
+
+### Remote account status
+
+This is implemented with [stage 13](13-remote-hosts.md) (#20), not before.
+Until then `--host` is unknown to the CLI. Every stage 13 rule applies
+unchanged: routing and `--expected-host-revision`, the fixed SSH argv and
+remote command, the version probe and receiver allowlist, `--remote-request`,
+empty remote stderr, the 1 MiB per-stream caps, untrusted remote output with
+fixed local error text, and the reserved `ssh_*`/`remote_*` codes.
+
+- **Trigger.** Only an explicit user action: a `larp cc --host H status NAME`
+  invocation, or the app's explicit account open/Refresh on a remote profile.
+  App launch, restore, selection of a machine, window or menu-bar open and
+  wake never run it. No polling.
+- **Who decides.** The remote Larp runs its own admission, auth guard, exact
+  Status row and parser against its own binaries and homes. The local side
+  never checks, unlocks or overrides remote rows. Remote `not_qualified`,
+  `unavailable`, `unknown` and `signed_out` show locally as returned.
+- **Wire.** The local router sends `status NAME --json --remote-request`
+  (plus the target `--expected-revision` if given). The receiver allowlist
+  admits account status only for the exact released versions that implement
+  this stage. A remote that implements stage 13 but not stage 14 gets
+  `remote_incompatible` for account mode. For it, `--no-account` maps to a
+  plain `status NAME`, which is metadata on that release. The reply must be
+  one schema-1 `status.account` envelope (or an allowed error), with the
+  same shape as local and no host field. Its profile ID must be the one the
+  request resolved.
+- **Deadline.** The forwarded account command uses a 12 s per-child deadline
+  (the remote's 10 s status bound plus 2 s). The app bridge's end-to-end
+  deadline for this read is 22 s. Every other forwarded read keeps stage 13's
+  5 s and 15 s.
+- **Validation.** Apply the full schema and semantic checks of the local
+  variant, including the email and plan forms. Anything else is
+  `remote_output` and no account data is shown. Re-encode the validated
+  values. Remote diagnostics get fixed local text. Remote email and plan
+  are inert display text, never evidence that a local profile or another
+  host is signed in.
+- **Never store on both ends (D26).** The remote receiver keeps the values
+  only in its request memory and logs nothing, as for a local call. The local
+  router and app neither log, cache, persist nor attach them to diagnostics.
+  The SSH child's stdout is drained into memory and dropped after
+  validation. The app keys the result by route and profile ID and drops it on
+  route change, refresh, mismatch or close.
+- **Human output** is rendered locally from the validated envelope and adds
+  the host name to the header line (`codex-q1 on build-box (codex 0.98.0)`).
+- **Usage** stays stage 11 LOCAL-only remotely; `usage` remains null.
+
+The email crosses the user's own encrypted SSH connection to their own
+machine. LarpCC adds no other transport.
 
 ### Parser (exact-version, fail-closed)
 
@@ -321,7 +369,8 @@ refresh, mismatch and close. All other views use `--no-account`.
   inference" for this account view only.
 
 **Menu bar (step 3).** The menu bar never runs account status and never shows
-an email. It uses profile labels and stage 11 usage/reset data the CLI
+an email. Whether it may show a plan label is deferred to this step; the lead
+asks the user then. It uses profile labels and stage 11 usage/reset data the CLI
 already provides, and renders unknown resets as unavailable. It never caches
 or reuses an account result from the app.
 
@@ -448,7 +497,7 @@ lifecycle evidence is incomplete.
 
 | Test | Required proof |
 |---|---|
-| `stage14_status_modes` | Default runs account mode; `--no-account` never spawns (fake binary counts zero execs) and emits the byte-compatible `status` envelope; `--no-account` refused on other commands; `--host` + account mode refused before SSH. |
+| `stage14_status_modes` | Default runs account mode; `--no-account` never spawns (fake binary counts zero execs) and emits the byte-compatible `status` envelope; `--no-account` refused on other commands. |
 | `stage14_admission` | Closed table → `not_qualified` exit 0 with no spawn; no binding/disabled/unsafe home → `unavailable`; exact SHA/OS/build/argv; revision drift before dispatch and after reap → `conflict`; auth guard held until reap; busy → `busy`; no fallback home. |
 | `stage14_parser` | Each invented row's signed-in, partial and signed-out shapes; `unknown` on wrong version, shape, exit/stream pair, encoding, duplicates, control bytes, invalid email/plan, overflow and timeout. |
 | `stage14_never_store` | Sentinel PII and sentinel credentials in fake output never appear in stdout of other commands, stderr, errors, registry, any file under the root, temp dirs or crash output; unrelated fields from the fake never appear anywhere. |
@@ -457,13 +506,15 @@ lifecycle evidence is incomplete.
 | `stage14_extras` | v3 → v4 metadata migration; label/arguments kept on rename; `@` refused; expected-revision and atomic failure; version cache invalidation on replacement; argv override, bare `--`, stale-default refusal. |
 | `stage14_usage_render` | Stage 11 absent/partial windows, 0% and 100%, floor rounding, reset text, narrow, non-TTY, `NO_COLOR`, ASCII, no live call. |
 | Mac live evidence | Per-operation identity/digest, G0 citation, path scope, exit/result and cleanup on the exact head; unresolved stage 3 dependencies listed one by one. |
+| `stage14_remote` (with stage 13) | Fake SSH and fake remote Larp: explicit-action only; remote states pass through; stage-13-only remote gives `remote_incompatible` for account mode and plain `status` for `--no-account`; wrong discriminator, wrong profile ID, bad email form, stderr, overflow and the 12 s deadline give `remote_output`/`remote_timeout` with no account data; sentinel email absent from local logs, files and diagnostics. |
 | Later UI acceptance | CLI contract shipped first; explicit open/refresh only; stale-result guard; blur, reveal, re-blur on close/relaunch, hide setting, accessibility; menu bar never shows an email. |
 
-## Questions for the user (defaults apply if unanswered)
+## Resolved rulings (lead, 2026-11-21; the user may still veto)
 
-1. **Remote account status.** Default: refused under `--host`. The email
-   never crosses SSH; remote callers use `--no-account`.
-2. **Plan label in the menu bar.** Default: no. The menu bar never runs
-   account status, so it shows neither email nor plan.
-3. **Human exit code when signed out.** Default: 0 for every completed
-   observation; scripts read `account.state` from `--json`.
+1. **Remote account status:** allowed, as specified in
+   [Remote account status](#remote-account-status), implemented with stage 13.
+2. **Plan label in the menu bar:** deferred to the menu-bar step. For now the
+   menu bar never runs account status.
+3. **Human exit code:** 0 for every completed observation, including signed
+   out. Scripts read `account.state` from `--json`.
+4. **G0** and the separate registry v4 profile-extras amendment are approved.
