@@ -99,25 +99,65 @@ final class EditingTests: XCTestCase {
     }
 
     func testUnknownCommandAndErrorEnvelopesAreShownSafely() async throws {
-        for (code, command, status, expected) in [
-            ("usage", "parse", Int32(2), ClientError.unsupportedCommand),
-            ("unsupported", "mcp.add", 1, .unsupportedCommand),
-            ("secret_literal", "mcp.add", 2, .refused(code: "secret_literal")),
-            ("conflict", "mcp.add", 1, .conflict),
-            ("conflict", "app.bind", 2, .alreadyBound)
-        ] as [(String, String, Int32, ClientError)] {
+        let server = LarpAction.addServer(name: "example", transport: .url("https://example.com/mcp", headerRefs: []))
+        let bind = LarpAction.bindApp(provider: .codex, path: "/Applications/ChatGPT.app", version: nil, replace: false)
+        let forget = LarpAction.forget(profileID: "2")
+        let cases: [(String, String, Int32, Bool, Bool, LarpAction, ClientError)] = [
+            // code, command, exit, help knows the command, revision moved, action, expected
+            ("usage", "parse", 2, false, false, server, .unsupportedCommand),
+            ("usage", "parse", 2, true, false, server, .refused(code: "usage")),
+            ("unsupported", "mcp.add", 1, true, false, server, .unsupportedCommand),
+            ("secret_literal", "mcp.add", 2, true, false, server, .refused(code: "secret_literal")),
+            ("conflict", "mcp.add", 1, true, true, server, .conflict),
+            ("conflict", "profile.forget", 1, true, false, forget, .blocked(command: "profile.forget")),
+            ("conflict", "profile.forget", 1, true, true, forget, .conflict),
+            ("conflict", "app.bind", 2, true, false, bind, .alreadyBound)
+        ]
+        for (code, command, status, known, moved, action, expected) in cases {
             let transport = try ExampleTransport(failing: ["schema": 1, "command": command, "ok": false,
-                                                           "error": ["code": code, "message": "never shown"]], status: status)
+                                                           "error": ["code": code, "message": "never shown"]],
+                                                 status: status, knowsCommands: known, revisionMoves: moved)
             let client = ProcessLarpClient(transport: transport)
             _ = try await client.snapshot()
-            let action: LarpAction = command == "app.bind"
-                ? .bindApp(provider: .codex, path: "/Applications/ChatGPT.app", version: nil, replace: false)
-                : .addServer(name: "example", transport: .url("https://example.com/mcp", headerRefs: []))
             do { _ = try await client.perform(action); XCTFail(code) } catch let error as ClientError {
-                XCTAssertEqual(error, expected)
+                XCTAssertEqual(error, expected, "\(code) \(command)")
                 XCTAssertFalse(error.errorDescription!.contains("never shown"))
             }
+            let mutations = await transport.calls.filter { $0.contains("--expected-revision") && !["list", "matrix"].contains($0[2]) }
+            XCTAssertEqual(mutations.count, 1, "never replayed")
         }
+        XCTAssertNotEqual(ClientError.blocked(command: "profile.forget").errorDescription, ClientError.conflict.errorDescription)
+    }
+
+    func testDeleteWarningIsReadableAndUnknownCodesFallBack() async throws {
+        let transport = try ExampleTransport()
+        let client = ProcessLarpClient(transport: transport)
+        _ = try await client.snapshot()
+        let message = try await client.perform(.delete(profileID: "2"))
+        XCTAssertFalse(message.contains("keychain_retained"))
+        XCTAssertTrue(message.contains("Keychain items"))
+        XCTAssertEqual(ProcessLarpClient.warningText(code: "new_code", message: "Safe text.\u{1b}[31m"), "Safe text.[31m")
+    }
+
+    func testCancelledMutationReportsUnknownOutcome() async throws {
+        let transport = try ExampleTransport(hangMutations: true)
+        let client = ProcessLarpClient(transport: transport)
+        _ = try await client.snapshot()
+        let task = Task { try await client.perform(.migrate) }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        task.cancel()
+        do { _ = try await task.value; XCTFail() } catch ClientError.outcomeUnknown {}
+        let mutation = await transport.mutationFlags
+        XCTAssertEqual(mutation, [false, false, false, false, false, false, true], "reads keep the timeout, mutations do not")
+    }
+
+    func testNamesRejectTrailingNewline() {
+        XCTAssertFalse(LarpNames.isValid("work\n"))
+        XCTAssertFalse(LarpNames.isValidProfile("work\n"))
+        XCTAssertFalse(MCPInput.isEnvName("TOKEN\n"))
+        XCTAssertFalse(MCPInput.isHeaderName("Authorization\n"))
+        XCTAssertFalse(LarpNames.isVersionLabel("1.2\n"))
+        XCTAssertTrue(LarpNames.isVersionLabel("1.2.3"))
     }
 
     func testSampleModeEditsInMemory() async throws {
@@ -156,19 +196,38 @@ final class EditingTests: XCTestCase {
 /// Answers each call with the frozen ok example for its command, or one fixed error for mutations.
 private actor ExampleTransport: CLITransport {
     var calls = [[String]]()
+    var mutationFlags = [Bool]()
     private let examples: [[String: Any]]
     private let failing: [String: Any]?
     private let status: Int32
-    init(failing: [String: Any]? = nil, status: Int32 = 1) throws {
+    private let knowsCommands: Bool
+    private let revisionMoves: Bool
+    private let hangMutations: Bool
+    private var failed = false
+    init(failing: [String: Any]? = nil, status: Int32 = 1, knowsCommands: Bool = true,
+         revisionMoves: Bool = false, hangMutations: Bool = false) throws {
         examples = try ProcessBridgeTests.examples(); self.failing = failing; self.status = status
+        self.knowsCommands = knowsCommands; self.revisionMoves = revisionMoves; self.hangMutations = hangMutations
     }
-    func run(_ argv: [String]) async throws -> ProcessOutput {
-        calls.append(argv)
+    private func ok(_ command: String) throws -> ProcessOutput {
+        var e = examples.first { $0["command"] as? String == command && $0["ok"] as? Bool == true }!
+        if failed, revisionMoves, e["revision"] is String { e["revision"] = "8" }
+        return ProcessOutput(stdout: try ProcessBridgeTests.bytes(e), status: 0)
+    }
+    func run(_ argv: [String], mutation: Bool) async throws -> ProcessOutput {
+        calls.append(argv); mutationFlags.append(mutation)
+        if argv.contains("--help"), argv.first == "cc" {
+            // Per-command help: an envelope when the build knows the command, a parse error otherwise.
+            if knowsCommands { return try ok("help") }
+            return ProcessOutput(stdout: try ProcessBridgeTests.bytes(["schema": 1, "command": "parse", "ok": false,
+                                                                       "error": ["code": "usage", "message": "x"]]), status: 2)
+        }
         let command = argv.first == "--help" ? "help" : argv.dropFirst().prefix(2).joined(separator: ".")
-        if let failing, !command.hasSuffix(".list"), !command.hasSuffix(".matrix"), command != "help" {
+        if mutation, hangMutations { try await Task.sleep(nanoseconds: 10_000_000_000) }
+        if let failing, mutation {
+            failed = true
             return ProcessOutput(stdout: try ProcessBridgeTests.bytes(failing), status: status)
         }
-        let e = examples.first { $0["command"] as? String == command && $0["ok"] as? Bool == true }!
-        return ProcessOutput(stdout: try ProcessBridgeTests.bytes(e), status: 0)
+        return try ok(command)
     }
 }

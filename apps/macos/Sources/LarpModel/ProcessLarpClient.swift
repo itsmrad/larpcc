@@ -13,21 +13,32 @@ public actor ProcessLarpClient: LarpClient {
     public init(selected: SelectedLarp) { transport = ProcessTransport(selected: selected) }
     init(transport: any CLITransport) { self.transport = transport }
 
-    private func request(_ path: [String], revision: String? = nil) async throws -> CLIEnvelope {
+    private func request(_ path: [String], revision: String? = nil, mutation: Bool = false) async throws -> CLIEnvelope {
         var argv = ["cc"] + path + ["--json"]
         if let revision { argv += ["--expected-revision", revision] }
-        let result = try await transport.run(argv)
-        try Task.checkCancellation()
+        let result: ProcessOutput
+        do {
+            result = try await transport.run(argv, mutation: mutation)
+            try Task.checkCancellation()
+        } catch where mutation && (error is CancellationError || error as? ClientError == .timedOut) {
+            // The CLI may have committed part of the change before it stopped.
+            throw ClientError.outcomeUnknown
+        }
         let e = try CLIContract.decode(result.stdout, exit: result.status)
         let expected = path.prefix(2).joined(separator: ".")
-        // A larp build without this command answers with a `parse` usage envelope.
-        if !e.ok, e.command == "parse" { throw ClientError.unsupportedCommand }
+        if !e.ok, e.command == "parse" {
+            // Unknown command, or arguments this build rejects? Its own help tells them apart.
+            throw await commandExists(path) ? ClientError.refused(code: "usage") : ClientError.unsupportedCommand
+        }
         guard e.command == expected else { throw ClientError.invalidResponse }
         guard e.ok else {
             switch e.error?.code {
             case "conflict":
-                // Exit 2 is a rebind without --replace; exit 1 is a stale revision.
-                throw result.status == 2 && ["app.bind", "provider.bind"].contains(expected) ? ClientError.alreadyBound : ClientError.conflict
+                // Exit 2 is a rebind without --replace. Exit 1 is a stale revision, unless the
+                // revision is unchanged: then registry state (aliases, shared items) blocks it.
+                if result.status == 2 && ["app.bind", "provider.bind"].contains(expected) { throw ClientError.alreadyBound }
+                if mutation, let revision, await currentRevision() == revision { throw ClientError.blocked(command: expected) }
+                throw ClientError.conflict
             case "qualification_pending": throw ClientError.qualificationPending
             case "unsupported": throw ClientError.unsupportedCommand
             case let code?: throw ClientError.refused(code: code)
@@ -39,12 +50,30 @@ public actor ProcessLarpClient: LarpClient {
         }
         return e
     }
+    private func commandExists(_ path: [String]) async -> Bool {
+        guard let output = try? await transport.run(["cc"] + path.prefix(2) + ["--help", "--json"], mutation: false),
+              let e = try? CLIContract.decode(output.stdout, exit: output.status) else { return false }
+        return e.ok && e.command == "help"
+    }
+    private func currentRevision() async -> String? {
+        try? await request(["profile", "list"]).revision
+    }
+    /// Fixed text for known warning codes; otherwise the envelope's own safe message, bounded.
+    static func warningText(code: String, message: String) -> String {
+        switch code {
+        case "keychain_retained":
+            return "Keychain items and remote sign-in grants for this profile may remain. Remove them yourself if you no longer need them."
+        default:
+            let printable = message.unicodeScalars.filter { $0.properties.generalCategory != .control }
+            return String(String.UnicodeScalarView(printable).prefix(200))
+        }
+    }
     public func snapshot() async throws -> Snapshot {
         generation += 1
         let token = generation
         displayed = nil
         if !verified {
-            let helpOutput = try await transport.run(["--help", "--json"])
+            let helpOutput = try await transport.run(["--help", "--json"], mutation: false)
             let help = try CLIContract.decode(helpOutput.stdout, exit: helpOutput.status)
             guard help.command == "help", help.ok, case let .text(text) = help.data,
                   text.hasPrefix("Usage: larp cc") else { throw ClientError.invalidExecutable }
@@ -120,7 +149,7 @@ public actor ProcessLarpClient: LarpClient {
             guard MCPInput.isAbsolutePath(path), path.hasSuffix(".app") else { throw ClientError.invalidInput }
             var argv = ["app", "bind", provider.rawValue, path]
             if let version {
-                guard version.range(of: "^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$", options: .regularExpression) != nil else { throw ClientError.invalidInput }
+                guard LarpNames.isVersionLabel(version) else { throw ClientError.invalidInput }
                 argv += ["--version", version]
             }
             return replace ? argv + ["--replace"] : argv
@@ -161,14 +190,16 @@ public actor ProcessLarpClient: LarpClient {
         generation += 1
         let token = generation
         displayed = nil // One user intent consumes one snapshot; never retry after a conflict.
-        let result = try await request(args, revision: revision)
+        let result = try await request(args, revision: revision, mutation: true)
         guard token == generation else { throw ClientError.staleSelection }
         if case let .receipt(r) = result.data {
-            guard state.profiles.contains(where: { $0.id == r.profile_id && $0.provider.rawValue == r.provider }) else { throw ClientError.invalidResponse }
+            // The receipt must describe the profile that was asked to open.
+            guard case let .open(requested, _) = action, r.profile_id == requested,
+                  state.profiles.contains(where: { $0.id == requested && $0.provider.rawValue == r.provider }) else { throw ClientError.invalidResponse }
             return "Larp reports local app \(r.outcome). Authentication, readiness and isolation were not observed."
         }
         if case let .mutation(m) = result.data, !m.warnings.isEmpty {
-            return "Larp updated local metadata with warnings: \(m.warnings.map(\.code).joined(separator: ", "))."
+            return (["Larp updated local metadata."] + m.warnings.map { Self.warningText(code: $0.code, message: $0.message) }).joined(separator: " ")
         }
         if case let .mutation(m) = result.data, !m.changed { return "Nothing to change." }
         return "Larp updated local metadata. Authentication was not observed."

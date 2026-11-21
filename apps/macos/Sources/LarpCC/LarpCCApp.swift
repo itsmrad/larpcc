@@ -108,12 +108,16 @@ final class AppStore: ObservableObject {
         client = FixtureLarpClient()
         operation = Task { await refresh() }
     }
+    /// True while a change (not a read) is running; Cancel then warns before stopping it.
+    @Published private(set) var mutating = false
+
     func cancel() {
         generation += 1
         operation?.cancel(); operation = nil
         busy = false
         snapshot = nil
-        message = "Cancelled. Refresh before choosing another action."
+        message = mutating ? ClientError.outcomeUnknown.errorDescription : "Cancelled. Refresh before choosing another action."
+        mutating = false
     }
     func startRefresh() { operation = Task { await refresh() } }
     func refresh() async {
@@ -138,23 +142,36 @@ final class AppStore: ObservableObject {
     func perform(_ action: LarpAction, completion: ((String?) -> Void)? = nil) {
         guard !busy, snapshot != nil else { completion?("Refresh before trying again."); return }
         busy = true
+        mutating = true
         generation += 1
         let token = generation
         operation = Task {
-            defer { if generation == token { busy = false } }
+            defer { if generation == token { busy = false; mutating = false } }
+            let result: String
             do {
-                let result = try await client.perform(action)
-                let value = try await client.snapshot()
-                guard generation == token, !Task.isCancelled else { return }
-                message = result; snapshot = value
-                completion?(nil)
+                result = try await client.perform(action)
             } catch {
                 guard generation == token else { return }
                 let text = (error as? ClientError)?.errorDescription ?? "The action could not be completed. Refresh and try again."
                 if let completion { completion(text) } else { message = text }
+                mutating = false
                 let value = try? await client.snapshot()
                 if generation == token, !Task.isCancelled { snapshot = value }
+                return
             }
+            guard generation == token, !Task.isCancelled else { return }
+            mutating = false
+            // The change succeeded; a failed follow-up read is reported on its own.
+            do {
+                let value = try await client.snapshot()
+                guard generation == token, !Task.isCancelled else { return }
+                message = result; snapshot = value
+            } catch {
+                guard generation == token else { return }
+                snapshot = nil
+                message = result + " Refresh failed — refresh to see the current state."
+            }
+            completion?(nil)
         }
     }
 }

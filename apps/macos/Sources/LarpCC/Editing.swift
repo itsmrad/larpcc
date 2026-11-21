@@ -87,7 +87,7 @@ struct AddProfileSheet: View {
     private var valid: Bool { LarpNames.isValidProfile(trimmed(name)) && !taken }
 
     var body: some View {
-        EditSheet(title: "New Profile", confirm: "Add Profile", canConfirm: valid, error: $error, onConfirm: add) {
+        EditSheet(title: "New Profile", confirm: "Add Profile", canConfirm: valid && !store.busy, error: $error, onConfirm: add) {
             Section {
                 TextField("Name", text: $name, prompt: Text("claude-work"))
                 Picker("Provider", selection: $provider) {
@@ -128,7 +128,7 @@ struct RenameProfileSheet: View {
     private var valid: Bool { LarpNames.isValidProfile(trimmed(name)) && !taken && trimmed(name) != profile.name }
 
     var body: some View {
-        EditSheet(title: "Rename Profile", confirm: "Rename", canConfirm: valid, error: $error) {
+        EditSheet(title: "Rename Profile", confirm: "Rename", canConfirm: valid && !store.busy, error: $error) {
             submit(store, .renameProfile(profileID: profile.id, newName: trimmed(name)), error: $error, dismiss: dismiss)
         } content: {
             Section {
@@ -157,14 +157,14 @@ struct BindSheet: View {
 
     private var label: String { kind == .app ? provider.desktopApp : "\(provider.rawValue) executable" }
     private var versionValid: Bool {
-        version.isEmpty || version.range(of: "^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$", options: .regularExpression) != nil
+        version.isEmpty || LarpNames.isVersionLabel(version)
     }
     private var valid: Bool {
         MCPInput.isAbsolutePath(path) && (kind == .tool || path.hasSuffix(".app")) && versionValid
     }
 
     var body: some View {
-        EditSheet(title: "Bind \(label)", confirm: "Bind", canConfirm: valid, error: $error) {
+        EditSheet(title: "Bind \(label)", confirm: "Bind", canConfirm: valid && !store.busy, error: $error) {
             let action: LarpAction = kind == .app
                 ? .bindApp(provider: provider, path: path, version: version.isEmpty ? nil : version, replace: replace)
                 : .bindProvider(provider: provider, path: path, replace: replace)
@@ -231,7 +231,7 @@ struct AddServerSheet: View {
     }
 
     var body: some View {
-        EditSheet(title: "Add MCP Server", confirm: "Add", canConfirm: problem == nil, error: $error) {
+        EditSheet(title: "Add MCP Server", confirm: "Add", canConfirm: problem == nil && !store.busy, error: $error) {
             submit(store, .addServer(name: trimmed(name), transport: transport), error: $error, dismiss: dismiss)
         } content: {
             Section {
@@ -331,7 +331,7 @@ struct AddSkillSheet: View {
     private var valid: Bool { MCPInput.isAbsolutePath(path) && LarpNames.isValid(trimmed(name)) && !taken }
 
     var body: some View {
-        EditSheet(title: "Add Skill", confirm: "Add", canConfirm: valid, error: $error) {
+        EditSheet(title: "Add Skill", confirm: "Add", canConfirm: valid && !store.busy, error: $error) {
             submit(store, .addSkill(path: path, name: trimmed(name)), error: $error, dismiss: dismiss)
         } content: {
             Section {
@@ -381,6 +381,7 @@ extension View {
             get: { item.wrappedValue != nil }, set: { if !$0 { item.wrappedValue = nil } }
         ), titleVisibility: .visible, presenting: item.wrappedValue) { confirmation in
             Button(confirmation.button, role: .destructive) { store.perform(confirmation.action) }
+                .disabled(store.busy)
             Button("Cancel", role: .cancel) {}
         } message: { confirmation in
             Text(confirmation.message)

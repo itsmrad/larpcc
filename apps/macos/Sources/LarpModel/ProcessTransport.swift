@@ -7,7 +7,10 @@ import Glibc
 #endif
 
 struct ProcessOutput: Sendable { let stdout: Data; let status: Int32 }
-protocol CLITransport: Sendable { func run(_ arguments: [String]) async throws -> ProcessOutput }
+protocol CLITransport: Sendable {
+    /// `mutation` runs without the read timeout: killing a CLI mid-transaction leaves an unknown outcome.
+    func run(_ arguments: [String], mutation: Bool) async throws -> ProcessOutput
+}
 
 // Identity is pinned to the explicitly chosen regular file, never resolved via PATH.
 public struct SelectedLarp: Sendable {
@@ -47,14 +50,15 @@ private struct FileIdentity: Equatable, Sendable {
 
 struct ProcessTransport: CLITransport {
     let selected: SelectedLarp
-    func run(_ arguments: [String]) async throws -> ProcessOutput {
-        return try await ProcessRunner.run(url: selected.url, arguments: arguments, recheck: { try selected.recheck() })
+    func run(_ arguments: [String], mutation: Bool) async throws -> ProcessOutput {
+        try await ProcessRunner.run(url: selected.url, arguments: arguments, timeout: mutation ? nil : 15,
+                                    recheck: { try selected.recheck() })
     }
 }
 
 // Internal runner permits synthetic executables in tests; production only constructs ProcessTransport.
 enum ProcessRunner {
-    static func run(url: URL, arguments: [String], timeout: TimeInterval = 15,
+    static func run(url: URL, arguments: [String], timeout: TimeInterval? = 15,
                     recheck: @escaping @Sendable () throws -> Void = {}) async throws -> ProcessOutput {
         let cancellation = CancellationFlag()
         return try await withTaskCancellationHandler(operation: {
@@ -66,7 +70,7 @@ enum ProcessRunner {
             }
         }, onCancel: { cancellation.cancel() })
     }
-    private static func execute(_ url: URL, _ arguments: [String], _ timeout: TimeInterval,
+    private static func execute(_ url: URL, _ arguments: [String], _ timeout: TimeInterval?,
                                 _ cancellation: CancellationFlag, _ recheck: () throws -> Void) throws -> ProcessOutput {
         let child = Process(), out = Pipe(), err = Pipe()
         child.executableURL = url; child.arguments = arguments
@@ -88,7 +92,7 @@ enum ProcessRunner {
             let now = ProcessInfo.processInfo.systemUptime
             if failure == nil {
                 if cancellation.cancelled { failure = CancellationError() }
-                else if now - start >= timeout { failure = ClientError.timedOut }
+                else if let timeout, now - start >= timeout { failure = ClientError.timedOut }
             }
             if failure != nil, stoppedAt == nil {
                 stoppedAt = now

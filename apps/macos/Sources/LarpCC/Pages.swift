@@ -108,7 +108,15 @@ struct CatalogPage: View {
                 if kind == .mcp {
                     Toggle(isOn: Binding(
                         get: { snapshot.syncNewServers },
-                        set: { store.perform(.setSyncNewServers($0)) }
+                        set: { on in
+                            if on {
+                                confirmation = Confirmation(title: "Turn on every server for every profile?",
+                                    message: "Larp switches every current MCP server on for every active profile, and new servers and profiles start with them on. Turning this off later keeps the switches as they are.",
+                                    button: "Turn On", action: .setSyncNewServers(true))
+                            } else {
+                                store.perform(.setSyncNewServers(false))
+                            }
+                        }
                     )) {
                         Text("New MCP servers start on for every profile")
                         Text("Turning this on also switches every current server on for every active profile.")

@@ -16,11 +16,16 @@ struct ProfilePage: View {
                 header
                 if profile.recoverable {
                     LabeledContent {
-                        Button("Recover") { store.perform(.recover(profileID: profile.id)) }
+                        Button("Finish Deleting…", role: .destructive) {
+                            confirmation = Confirmation(title: "Finish deleting “\(profile.name)”?",
+                                message: "Larp completes the interrupted delete and removes this profile's folder. Quit any Claude or Codex sessions using this profile first — the command line and the desktop app.",
+                                button: "Finish Deleting", action: .recover(profileID: profile.id))
+                        }
+                        .foregroundStyle(.red)
                     } label: {
                         Label {
                             Text("Delete was interrupted")
-                            Text("Larp can finish recovering this profile's folders.")
+                            Text("The profile's folder is still on disk until the delete finishes.")
                         } icon: {
                             Image(systemName: "exclamationmark.triangle.fill").symbolRenderingMode(.multicolor)
                         }
@@ -80,13 +85,13 @@ struct ProfilePage: View {
                 LabeledContent {
                     Button("Forget…") {
                         confirmation = Confirmation(title: "Forget “\(profile.name)”?",
-                            message: "Larp stops managing this profile but keeps its folder on disk. Aliases to it are removed. Keychain items and remote grants are unchanged.",
+                            message: "Larp stops managing this profile and keeps its folder on disk. Remove its command names and shared items first. The ID is retired and the folder can't be re-attached. Keychain items and remote grants are unchanged.",
                             button: "Forget Profile", action: .forget(profileID: profile.id))
                     }
                 } label: {
                     Text("Forget profile")
                     Text(store.isFixture ? "Removes this sample profile from memory."
-                         : "Stops managing it and keeps the folder.")
+                         : "Stops managing it and keeps the folder. Remove its command names first.")
                 }
                 LabeledContent {
                     Button("Delete…", role: .destructive) { confirmingDelete = true }
@@ -107,11 +112,12 @@ struct ProfilePage: View {
             Button(store.isFixture ? "Delete Sample Profile" : "Delete Profile Folder", role: .destructive) {
                 store.perform(.delete(profileID: profile.id))
             }
+            .disabled(store.busy)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(store.isFixture
                  ? "This removes the sample profile and its sample assignments from memory. No folder or alias on disk is removed."
-                 : "Larp removes the managed profile folder and its aliases. This deletes files; it is not a metadata-only forget. Keychain items and remote grants may remain, and no logout is performed.")
+                 : "Quit any Claude or Codex sessions using this profile first — the command line and the desktop app. Larp removes the managed profile folder and its aliases. This deletes files; it is not a metadata-only forget. Keychain items and remote grants may remain, and no logout is performed.")
         }
     }
 

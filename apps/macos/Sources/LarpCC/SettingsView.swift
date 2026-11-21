@@ -66,6 +66,7 @@ struct SettingsView: View {
     @State private var forwardStack: [Selection] = []
     @State private var historyMove = false
     @State private var search = ""
+    @State private var confirmingStop = false
     @AppStorage(PreferenceKey.appearance) private var appearance = AppearanceMode.system.rawValue
 
     var body: some View {
@@ -82,6 +83,12 @@ struct SettingsView: View {
                 .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
         }
         .task { store.startRefresh() }
+        .confirmationDialog("Stop this change?", isPresented: $confirmingStop, titleVisibility: .visible) {
+            Button("Stop", role: .destructive) { store.cancel() }
+            Button("Keep Waiting", role: .cancel) {}
+        } message: {
+            Text("larp may already have changed some files. Stopping now leaves the outcome unknown until you refresh.")
+        }
         .sheet(item: $store.sheet) { sheet in
             switch sheet {
             case .addProfile:
@@ -230,7 +237,7 @@ struct SettingsView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             if store.busy {
                 ProgressView().controlSize(.small)
-                Button("Cancel") { store.cancel() }
+                Button("Cancel") { if store.mutating { confirmingStop = true } else { store.cancel() } }
                     .keyboardShortcut(.cancelAction)
             } else {
                 if selection == .page(.mcp) || selection == .page(.skills) {

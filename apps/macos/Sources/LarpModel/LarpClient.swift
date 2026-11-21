@@ -47,6 +47,10 @@ public enum LarpNames {
     public static func isValidProfile(_ name: String) -> Bool {
         CLIContract.name(name) && !providerCommands.contains(name)
     }
+    /// A user's own desktop-app version note for `app bind --version`.
+    public static func isVersionLabel(_ value: String) -> Bool {
+        value.range(of: "^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}\\z", options: .regularExpression) != nil
+    }
     /// Alias names follow the profile-name grammar; `claude` and `codex` need `--shadow`.
     public static func isValidAlias(_ name: String, shadow: Bool = false) -> Bool {
         CLIContract.name(name) && (shadow || !providerCommands.contains(name))
@@ -72,10 +76,10 @@ public enum MCPInput {
     public static let maxRefs = 16
 
     public static func isEnvName(_ value: String) -> Bool {
-        value.range(of: "^[A-Za-z_][A-Za-z0-9_]{0,63}$", options: .regularExpression) != nil
+        value.range(of: "^[A-Za-z_][A-Za-z0-9_]{0,63}\\z", options: .regularExpression) != nil
     }
     public static func isHeaderName(_ value: String) -> Bool {
-        value.range(of: "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$", options: .regularExpression) != nil
+        value.range(of: "^[A-Za-z0-9][A-Za-z0-9-]{0,63}\\z", options: .regularExpression) != nil
     }
     /// An absolute local path with no control characters.
     public static func isAbsolutePath(_ value: String) -> Bool {
@@ -154,13 +158,22 @@ public enum LarpAction: Sendable {
 
 public enum ClientError: Error, LocalizedError, Sendable, Equatable {
     case staleSelection, commandUnavailable, qualificationPending, invalidResponse, invalidExecutable, timedOut, outputLimit, conflict, operationRefused, invalidName
-    case invalidInput, unsupportedCommand, alreadyBound, skillInUse
+    case invalidInput, unsupportedCommand, alreadyBound, skillInUse, outcomeUnknown
+    /// A `conflict` with an unchanged revision: the registry state blocks the command.
+    case blocked(command: String)
     /// A CLI error envelope, described by its stable code (the message is never shown).
     case refused(code: String)
     public var errorDescription: String? {
         switch self {
         case .invalidInput: return "Check the entered values. Nothing was changed."
-        case .unsupportedCommand: return "Your larp build doesn't support this action yet. Nothing was changed."
+        case .unsupportedCommand: return "This action is not supported by this larp yet. Nothing was changed."
+        case .outcomeUnknown: return "Outcome unknown — refresh to see the current state."
+        case let .blocked(command):
+            switch command {
+            case "profile.forget": return "Larp can't forget this profile yet. Remove its command names and shared items first."
+            case "skills.remove": return "Turn this skill off for every profile before removing it."
+            default: return "Larp refused because existing items depend on this. Nothing was changed."
+            }
         case .alreadyBound: return "An app is already bound. Turn on Replace to change it."
         case .skillInUse: return "Turn this skill off for every profile before removing it."
         case let .refused(code):
@@ -178,6 +191,7 @@ public enum ClientError: Error, LocalizedError, Sendable, Equatable {
             case "newer_schema": return "This data was written by a newer larp."
             case "exhausted": return "Larp has no IDs left for new profiles."
             case "confirmation_required": return "Larp needs confirmation for this action."
+            case "usage": return "Larp rejected the request's arguments. Nothing was changed."
             default: return "Larp refused the operation. Check local metadata and recovery state."
             }
         case .invalidName: return "Use a new lowercase name: letters, digits, - or _, up to 32 characters."
