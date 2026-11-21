@@ -26,8 +26,9 @@ CLI data until the lead's explicit go. UI shows only fields the CLI provides.
 
 **Not in this stage.** Account email and plan from the official client's status
 command are stage 14 (D25/D26: shown from a fresh status run, never stored); this
-stage does not duplicate them. Here, a plan appears only as a **user-entered**
-label. No spend, cost, credit balance or token counts anywhere.
+stage does not duplicate them. Here, a plan is the user-entered label or the
+plan the client recorded in LOCAL non-credential data (D29), never read from
+credentials. No spend, cost, credit balance or token counts anywhere.
 
 ## CLI surface
 
@@ -39,7 +40,7 @@ larp cc settings usage live off                                # "settings.usage
 larp cc settings usage mode local|live [--profile PROFILE]     # "settings.usage.mode"
 larp cc settings usage mode inherit --profile PROFILE          # "settings.usage.mode"
 larp cc settings usage interval off|SECONDS                    # "settings.usage.interval"
-larp cc settings usage claude-statusline on|off                # "settings.usage.claude-statusline"
+larp cc settings usage claude-statusline on|off --profile PROFILE  # "settings.usage.claude-statusline"
 larp cc profile plan-label PROFILE LABEL                       # "profile.plan-label"
 larp cc profile plan-label PROFILE --clear                     # "profile.plan-label"
 ```
@@ -64,11 +65,17 @@ Settings live under `settings usage` because a profile may legally be named
   enabled. `mode live` while LIVE is off fails `live_disabled`, exit 1.
 - `mode inherit` requires `--profile`; `mode local|live` without `--profile` sets
   the installation mode. `interval` accepts `off` or an integer 300–86400.
+- `claude-statusline` is the per-profile opt-in for LOCAL Claude capture
+  (default off; D29). It requires `--profile`; a Codex profile fails
+  `unsupported`, exit 1. `on` refuses `statusline_exists`, exit 1, without
+  effects when the profile already has its own statusLine (check below); Larp
+  never overwrites or wraps a user statusLine. `off` always succeeds.
 - `plan-label` takes exactly one of LABEL or `--clear` (else `usage`, exit 2).
   LABEL must match the grammar below or fails `usage`, exit 2, without echo.
 - Receipts are the common `changed,profile_id,name,warnings` mutation result.
-  `profile.plan-label` and per-profile `settings.usage.mode` carry the profile
-  ID and profile name; installation-wide `settings.usage.*` carry null/null.
+  `profile.plan-label`, `settings.usage.claude-statusline` and per-profile
+  `settings.usage.mode` carry the profile ID and profile name; installation-wide
+  `settings.usage.mode|live|interval` carry null/null.
   `live on` adds warning `live_unverified`. Same value again: `changed:false`.
 - A hidden fixed hook entry point (Claude capture, below) is not part of the
   public grammar or help, and has no JSON mode.
@@ -99,8 +106,9 @@ The cli-v1 rule "no timestamps or nondeterministic keys" is amended for
   the registry lock, written with the stage 06 index commit pattern (temporary
   file, fsync, rename, then registry revision bump; guarded relock). Fields:
   `mode`, `live.enabled`, `live.acknowledged_warning` (integer or null),
-  `refresh_interval_seconds` (null or 300–86400), `claude_statusline_capture`
-  (default true) and `profiles: {"<id>": {mode, plan_label}}`. Unknown fields
+  `refresh_interval_seconds` (null or 300–86400) and
+  `profiles: {"<id>": {mode, plan_label, claude_statusline}}` (`claude_statusline`
+  default false, Claude profiles only). Unknown fields
   or versions refuse. Entries for IDs that are not active are ignored and pruned
   by the next usage-settings mutation; IDs are never reused, so delete/forget do
   not need to touch this file. No timestamps, tokens or provider data here.
@@ -125,7 +133,7 @@ command. Each row:
 | `source` | `codex_session_log`, `claude_statusline`, `live_endpoint`, or null when nothing was read |
 | `captured_at` | when the values were observed (local clock), or null. Values are "as of last use" in LOCAL. |
 | `client_version` | version of the official client that wrote the LOCAL record (`^N.N.N$`), else null |
-| `plan` | null, or `{label, source:"user"}`: the user-entered label only |
+| `plan` | null, or `{label, source}`: `user` (the user-entered label, wins) or `client_local` (Codex `plan_type` from the LOCAL record, D29) |
 | `windows.five_hour`, `windows.weekly` | always present window objects, W = 18000 s and 604800 s |
 | `windows.extra` | null (this source has no extra windows) or an array of 0–8 extra windows |
 | `reset_credits` | always present tri-state object |
@@ -180,14 +188,22 @@ null means the source cannot report extras.
 expiry), `not_recorded` or `unsupported`; for `none|not_recorded|unsupported`
 states it equals the state. "Resets remaining" = `count` plus optional expiry.
 
-**Plan label** grammar: ASCII, 1–32 characters, starts with a letter or digit,
-letters/digits and `. _ + / ( ) -`, single inner spaces (`plan_label`). No `@`,
-quotes, control or non-ASCII characters, so it cannot carry an email. It is
-user metadata, never verified, never read from tokens, credential files,
-session logs or provider output, and shown with `source:"user"`. D14 LIVE
-covers only an in-memory token read for one usage request; it does **not**
-cover reading plan or account identity, so LIVE never reads
-`subscriptionType`/`rateLimitTier` or `plan_type` (open decision 1).
+**Plan** (D29). Precedence: the user-entered `plan_label` (`source:"user"`)
+always wins; otherwise a plan the official client recorded in the LOCAL
+**non-credential** data this stage already reads (`source:"client_local"`);
+otherwise null. Today only Codex provides one: `rate_limits.plan_type` of the
+selected `codex`-bucket `token_count` event, used only when it is one of the
+verified 0.169.0 `PlanType` values (`codex-rs/protocol/src/account.rs:9-49`,
+e.g. `plus`, `pro`, `team`) and fits the grammar; it is shown as recorded.
+Claude's statusLine input carries no plan, so Claude shows the user label only.
+Plans are **never** read from tokens or credential files (Claude
+`subscriptionType`/`rateLimitTier`, Codex `id_token` claims). LIVE response plan
+fields (Codex `plan_type`) are discarded: D14 covers only the usage numbers.
+A LIVE row still uses the user label. Grammar for both sources: ASCII, 1–32
+characters, starts with a letter or digit, letters/digits and `. _ + / ( ) -`,
+single inner spaces (`plan_label`). No `@`, quotes, control or non-ASCII
+characters, so it cannot carry an email. Plans are display-only and never
+verified.
 
 ### Pace (normative; vectors in [usage-pace-vectors.json](../contracts/usage-pace-vectors.json))
 
@@ -258,9 +274,10 @@ object whose identity leaves the profile root. Newest files by name first.
 - Per line: a streaming JSON deserializer whose target struct names only
   `timestamp`, `type`, `payload.type` and, for `event_msg`/`token_count`, the
   allowlisted `payload.rate_limits` subfields `limit_id`, `limit_name`,
-  `primary|secondary.{used_percent, window_minutes, resets_at}`. Every other
-  value is skipped unretained (e.g. serde `IgnoredAny`). `info`, `credits`,
-  `individual_limit`, `plan_type` and conversation items are never materialized.
+  `primary|secondary.{used_percent, window_minutes, resets_at}` and `plan_type`
+  (D29). Every other value is skipped unretained (e.g. serde `IgnoredAny`).
+  `info`, `credits`, `individual_limit` and conversation items are never
+  materialized.
   From `session_meta` only `cli_version` is extracted the same way. A partial
   final line (no LF) is ignored.
 - Parser errors are mapped to fixed codes; the error value is **never**
@@ -321,7 +338,7 @@ as untrusted data with `strings` only, never executed; plus
 |---|---|---|
 | native file writes | none; the render lives in `profiles/<id>/usage/` | merges into a file Claude Code itself rewrites (`/config`, permissions, model) |
 | stage 04 rules | ordinary owned render + manifest | needs native config parse/merge, which stage 04 forbids; constant drift refusals |
-| precedence | above user/project/local, so a repo's `.claude/settings.json` cannot replace the hook | a project or local statusLine overrides it |
+| precedence | above user/project/local, so Larp must check for an existing statusLine first (below) | a project or local statusLine overrides it |
 | coverage | only Larp-launched sessions (qualified run rows, aliases) | also manual `CLAUDE_CONFIG_DIR=… claude` sessions |
 | tamper | file hash-checked by Larp before every launch | any native rewrite silently changes it |
 
@@ -332,11 +349,26 @@ so until a Claude row is qualified every Claude profile reports
 `capture_not_installed`; the GUI shows "Not available". Manual sessions outside
 Larp are never captured (no native config writes).
 
+**Opt-in, never over a user statusLine (D29).** Capture is off by default and
+enabled per profile with `settings usage claude-statusline on --profile P`.
+Because `--settings` outranks user/project/local settings, Larp first checks
+that no user statusLine exists. The check is a bounded, confined, no-follow,
+**key-presence-only** read (≤ 1 MiB, values skipped unretained, nothing
+output) of top-level `statusLine` in Claude settings files. It is the only
+native-config read in this stage:
+
+- at `on`: the profile's `profiles/<id>/cli/settings.json`; present →
+  `statusline_exists`, nothing changed;
+- before each injecting launch: that file again, plus `.claude/settings.json`
+  and `.claude/settings.local.json` in the launch directory and each parent
+  (≤ 64 levels). Present, unreadable or oversize → the launch proceeds
+  **without** `--settings` (the user's statusLine wins; nothing captured).
+  Managed settings are not read; a managed statusLine already wins over flags.
+
 The render is exactly
 `{"statusLine":{"type":"command","command":"'<root>/bin/.larp-usage-hook' claude-statusline <ID>","padding":0}}`
-when `claude_statusline_capture` is on (else no `--settings` flag). It
-replaces the user's own statusLine for Larp-launched sessions; turning capture
-off restores it. The path is single-quoted; a root path containing `'`, a
+and is only passed when the profile opted in and the check passed. The hook
+never wraps or chains another command. The path is single-quoted; a root path containing `'`, a
 newline, a control or non-ASCII character makes capture unavailable
 (`capture_not_installed`, diagnostic `unsafe_path`). Windows is
 `capture_not_installed` (diagnostic `unsupported_os`) until the statusLine shell
@@ -363,9 +395,8 @@ reachable. It:
    stale own temporaries older than 60 s removed by exact pattern). It rewrites
    at most once per 60 s unless values change. Content (≤ 1 KiB):
    `{"version":1,"captured_at":"…Z","client_version":"2.1.325","five_hour":{"used_percent":42.0,"resets_at":1763740800}|null,"weekly":{…}|null}`;
-5. prints at most one line built only from validated numbers
-   (`5h 42% | wk 13%`), writes **nothing** to stderr, always exits 0, has no
-   network client in its code path, never echoes or logs the input.
+5. prints **nothing** to stdout or stderr (D29: it only captures), always exits
+   0, has no network client in its code path, never echoes or logs the input.
 
 `usage` reads the capture file (no-follow, regular, owner-only, ≤ 4 KiB, strict
 fields) and maps a missing window to `not_reported`, an unverified
@@ -380,6 +411,10 @@ and sends it to the provider's usage endpoint. This may break the provider's
 terms of service, and LarpCC can't rule out account restrictions. LIVE is
 unverified against real accounts. LOCAL mode, the default, never reads tokens
 and makes no network requests."
+On macOS the sheet adds: "For Claude profiles, macOS will ask whether larp may
+read the Claude Code sign-in item in your Keychain. Allow lets it read once.
+Always Allow lets larp read that item from now on without asking. Deny keeps
+LIVE from working for that profile. LarpCC never chooses for you."
 
 Acknowledgement is stored as `live.acknowledged_warning = 1` in `usage.json` by
 `settings usage live on --acknowledge-risk` (the GUI passes the flag only after
@@ -409,8 +444,8 @@ PTY, no child process.
 | provider / OS | location | read |
 |---|---|---|
 | Claude, Linux/Windows | `profiles/<id>/cli/.credentials.json` → `claudeAiOauth.accessToken` (2.1.325 binary: `storagePath = join(configDir, ".credentials.json")`) | `accessToken` only; `refreshToken`, `subscriptionType`, `rateLimitTier` never materialized |
-| Claude, macOS | Keychain generic password, service `Claude Code-credentials-<first 8 hex of sha256(NFC config dir)>` when `CLAUDE_CONFIG_DIR` is set, account `$USER` (binary function building `"Claude Code" + suffix + "-" + hash8`; the `-credentials` argument and JSON payload are **unverified**) | same JSON field. The OS asks the user to allow Larp access; "Always Allow" adds Larp to the item ACL (residual risk) |
-| Codex, all OS (file store) | `profiles/<id>/cli/auth.json` → `tokens.access_token`, `tokens.account_id` (`codex-rs/login/src/auth/storage.rs:51-76,167-169`, `codex-rs/login/src/token_data.rs:10-33`) | those two only; `id_token`, `refresh_token`, `OPENAI_API_KEY` never materialized |
+| Claude, macOS | Keychain generic password, service `Claude Code-credentials-<first 8 hex of sha256(NFC config dir)>` when `CLAUDE_CONFIG_DIR` is set, account `$USER` (binary function building `"Claude Code" + suffix + "-" + hash8`; the `-credentials` argument and JSON payload are **unverified**) | same JSON field, with a plain read query. macOS shows its own access prompt (D29: explained at enable time). Larp never requests, sets or edits the item's ACL or "Always Allow"; Deny → `live_unavailable`, diagnostic `keychain_denied`. Each refresh may prompt again unless the user chose Always Allow |
+| Codex, all OS (file store) | `profiles/<id>/cli/auth.json` → `tokens.access_token`, `tokens.account_id` (`codex-rs/login/src/auth/storage.rs:51-76,167-169`, `codex-rs/login/src/token_data.rs:10-33`) | those two only, LIVE only. `account_id` is inside D14 (D29) under the token's rules: in memory, per request, sent only as the `chatgpt-account-id` header to the pinned host, never stored or output. `id_token`, `refresh_token` and `OPENAI_API_KEY` are never materialized |
 | Codex, keyring store | service `Codex Auth`, account `cli|<16 hex of sha256(CODEX_HOME)>` (`codex-rs/login/src/auth/storage.rs:302-321`) | **not supported in v1**: Larp does not read config.toml to learn the store mode; a missing auth.json is `sign_in_again` |
 
 Credential files are opened no-follow under the validated profile handle,
@@ -424,10 +459,10 @@ anywhere but its pinned endpoint.
 | | Claude | Codex |
 |---|---|---|
 | request | `GET https://api.anthropic.com/api/oauth/usage` (2.1.325: `BASE_API_URL`, usage paths, 5 s timeout) | `GET https://chatgpt.com/backend-api/wham/usage` (`codex-rs/backend-client/src/client/rate_limit_resets.rs:69-82`, `codex-rs/model-provider/src/chatgpt_base_url.rs:6`) |
-| headers | `Authorization: Bearer <token>`, `anthropic-beta: oauth-2025-04-20` (constant present; its use on this call **unverified**), `Accept: application/json`, `User-Agent: larpcc/<version>` | `Authorization: Bearer <token>`, `chatgpt-account-id: <account_id>` (`codex-rs/http-client/src/openai_headers.rs:3`, `codex-rs/backend-client/src/client.rs:388-392`; open decision 3), `Accept`, `User-Agent: larpcc/<version>` |
+| headers | `Authorization: Bearer <token>`, `anthropic-beta: oauth-2025-04-20` (constant present; its use on this call **unverified**), `Accept: application/json`, `User-Agent: larpcc/<version>` | `Authorization: Bearer <token>`, `chatgpt-account-id: <account_id>` (`codex-rs/http-client/src/openai_headers.rs:3`, `codex-rs/backend-client/src/client.rs:388-392`; inside D14 per D29), `Accept`, `User-Agent: larpcc/<version>` |
 | response used | `five_hour`, `seven_day` → windows; `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps` → extras "Opus weekly", "Sonnet weekly", "OAuth apps weekly" (W 604800). Each `{utilization: number 0-100 \| null, resets_at: ISO 8601 \| null}` (binary response parser; units from the SDK schema description) | `rate_limit.primary_window`/`secondary_window` `{used_percent: i32, limit_window_seconds, reset_after_seconds, reset_at}` mapped by window length ±5%; `additional_rate_limits[] {limit_name, metered_feature, rate_limit}` → extras; `rate_limit_reset_credits.available_count` → `reset_credits` (`codex-rs/codex-backend-openapi-models/src/models/*.rs`, `codex-rs/backend-client/src/types.rs:22-75`) |
 | ignored | `extra_usage`, `cinder_cove`, `wattle_ember`, `limits[]`, all dollar fields | `plan_type`, `credits`, `spend_control`, `account_id`, `user_id`, `rate_limit_upsell`, `rate_limit_reached_type` |
-| reset credits | `unsupported` (only an experimental `cedar_ember=1` variant has them; open decision 2) | count from the summary; expiry `unsupported` (needs a second endpoint; open decision 4) |
+| reset credits | `unsupported` (only an experimental `cedar_ember=1` variant has them; D29 keeps it unsupported) | count from the summary; expiry `unsupported` (needs a second request, which D29 rules out) |
 
 **Network rules.** HTTPS only to the two fixed host/path pairs; TLS 1.2+ with
 certificate and hostname verification; proxy environment variables
@@ -451,12 +486,13 @@ verification waits for a later explicit user authorization.
 | client / mode | field | status |
 |---|---|---|
 | Codex 0.169.0 LOCAL | `rate_limits.primary/secondary.{used_percent, window_minutes, resets_at}`, `limit_id`, `limit_name`, line `timestamp`, `session_meta.cli_version`, file layout | verified from source |
-| Codex 0.169.0 LOCAL | `plan_type` in the same record | verified present; **not used** (open decision 1) |
+| Codex 0.169.0 LOCAL | `plan_type` in the same record (`PlanType` values, `account.rs:9-49`) | verified; shown as `client_local` plan unless a user label is set (D29) |
 | Codex 0.169.0 LOCAL | reset credits | not in the record: `unsupported` |
 | Codex LIVE | `/wham/usage` request, headers, response structs, `rate_limit_reset_credits.available_count` | from source; unverified against a live response |
 | Codex LIVE | reset-credit expiry | not available in v1 |
 | Claude 2.1.325 LOCAL | `rate_limits.five_hour/seven_day.{used_percentage, resets_at}`, `version`, `--settings`, statusLine schema | verified from binary + docs |
-| Claude 2.1.325 LOCAL | reset credits, plan, extra windows | not passed to statusLine: `unsupported` |
+| Claude 2.1.325 LOCAL | reset credits, plan, extra windows | not passed to statusLine: `unsupported` (plan = user label only) |
+| Claude 2.1.325 LOCAL | project settings lookup path (launch dir vs repository root) | unverified, so the existing-statusLine check walks the launch directory and all parents |
 | Claude 2.1.325 LOCAL | statusLine child inherits `CLAUDE_CONFIG_DIR`; Windows shell | unverified (hook refuses / Windows unsupported) |
 | Claude LIVE | `/api/oauth/usage` path, host, response keys `{utilization, resets_at}` | from binary; unverified against a live response |
 | Claude LIVE | `anthropic-beta` header use, macOS Keychain service suffix/payload, utilization units | unverified |
@@ -476,29 +512,30 @@ every fixture deleted in finally. No vendor binary or real account.
 |---|---|
 | `stage11_json` | every new example envelope byte-for-byte; ordering, framing, exit codes, empty stderr, `--expected-revision` conflict before reads, tombstone/unknown profile, `--local --live` usage error |
 | `stage11_pace` | loads `docs/contracts/usage-pace-vectors.json`; every vector exact; skew/reset/unknown cases |
-| `stage11_local_codex` | synthetic rollouts: 5h/weekly by `window_minutes` not position, non-codex bucket → extra, newest per bucket, unverified version, `.zst`/archived skipped, symlink/hardlink/outside-root/oversize/line-cap/file-cap refusal, partial line ignored, conversation sentinel strings never appear in stdout/stderr/files |
-| `stage11_local_claude_hook` | hook argv/env checks, 256 KiB cap, absent `rate_limits` keeps last capture, hostile input (deep nesting, huge strings, wrong types, NaN), atomic replace under kill, no stderr, sentinel input fields never written; render file content/quoting/manifest drift refusal; `capture_not_installed` while rows are empty |
+| `stage11_local_codex` | synthetic rollouts: 5h/weekly by `window_minutes` not position, `plan_type` → `client_local` plan unless a user label overrides, unknown plan value → null, non-codex bucket → extra, newest per bucket, unverified version, `.zst`/archived skipped, symlink/hardlink/outside-root/oversize/line-cap/file-cap refusal, partial line ignored, conversation sentinel strings never appear in stdout/stderr/files |
+| `stage11_local_claude_hook` | hook argv/env checks, 256 KiB cap, absent `rate_limits` keeps last capture, hostile input (deep nesting, huge strings, wrong types, NaN), atomic replace under kill, empty stdout and stderr, sentinel input fields never written; render file content/quoting/manifest drift refusal; opt-in default off; `statusline_exists` on enable; existing profile/project/local statusLine (including in a parent directory) → no `--settings` injection; settings values never read or output; `capture_not_installed` while rows are empty |
 | `stage11_live_fake` | fake HTTPS server: success mapping for both providers, 401 → `sign_in_again`, 3xx not followed, proxy env ignored, oversize/slow/unknown shape → `live_unavailable`, exactly one request per profile, no retry/refresh, `live_disabled` before any credential read, budget |
 | `stage11_secrets` | fake tokens `fake-token-…` and fake account IDs appear in zero bytes of stdout, stderr, any file under LARPCC_HOME, child argv/env, panic output and error envelopes (including injected parser/TLS/IO failures) |
-| `stage11_settings` | ack required on every enable, `live off` resets modes, mode/interval/capture/plan-label receipts, label grammar refusals without echo, `changed:false`, registry revision bumps, pruning |
+| `stage11_settings` | ack required on every enable, `live off` resets modes, mode/interval/capture/plan-label receipts, claude-statusline `--profile` required and Codex `unsupported`, label grammar refusals without echo, `changed:false`, registry revision bumps, pruning |
 | `stage11_closed` | default and `--local` make zero network connections (transport fake asserts unused); no background process or scheduler; hook binary has no network path; real hosts unreachable from tests |
 
-## Open decisions (lead/user)
+## Decided (D29, lead 2026-11-21; the user may veto)
 
-1. **Plan from client records.** Codex writes `plan_type` in the same local
-   rate-limit record (and the LIVE response); Claude's credential file has
-   `subscriptionType`. Showing either as `plan.source:"client_record"` would be
-   account inference beyond D14. Default: not included; user label only.
-2. **Claude reset credits.** Only the experimental `?cedar_ember=1` usage
-   variant returns them. Default: `unsupported`.
-3. **Codex `chatgpt-account-id` header.** The official client sends it; using it
-   means reading `tokens.account_id` in memory (never output). Confirm it is
-   inside D14, or omit it (requests may then fail as `live_unavailable`).
-4. **Codex reset-credit expiry** needs a second endpoint per refresh. Default:
-   one request per profile, expiry `unsupported`.
-5. **macOS Keychain prompt** for Claude LIVE: the user must allow Larp access to
-   the Claude Code item; "Always Allow" persists Larp in its ACL.
-6. **Hook replaces the user's statusLine** in Larp-launched Claude sessions with
-   a usage line. Alternative: print nothing. Toggle: `claude-statusline off`.
-7. **User-Agent.** Honest `larpcc/<version>` (default) vs imitating the official
-   client, which this plan refuses.
+1. **Client-recorded plan: shown.** From LOCAL non-credential data only (Codex
+   `plan_type` in rollout events); the user's `plan_label` overrides it. Never
+   from tokens or credential files. Claude has no LOCAL plan source.
+2. **Claude reset credits** via the experimental `cedar_ember` variant:
+   `unsupported`.
+3. **Codex `chatgpt-account-id` header: inside D14.** Read only when LIVE is
+   enabled, in memory, per request, never stored or output.
+4. **No second Codex LIVE request** for reset-credit expiry: expiry
+   `unsupported`.
+5. **macOS Keychain:** the prompt is explained at enable time; Larp never
+   requests or sets "Always Allow" or edits the item's ACL.
+6. **statusLine hook: opt-in per profile.** It never overwrites or wraps an
+   existing user statusLine (`statusline_exists` on enable, no injection at
+   launch), and it prints nothing.
+7. **Honest User-Agent** `larpcc/<version>`; imitating an official client is
+   refused.
+
+No open decisions remain in this plan.

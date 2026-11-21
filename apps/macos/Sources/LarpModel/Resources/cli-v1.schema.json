@@ -497,7 +497,8 @@
             "corrupt",
             "newer_schema",
             "exhausted",
-            "live_disabled"
+            "live_disabled",
+            "statusline_exists"
           ]
         },
         "message": {
@@ -799,7 +800,7 @@
     "plan_label": {
       "type": "string",
       "pattern": "^(?=.{1,32}$)[A-Za-z0-9](?:[A-Za-z0-9._+/()-]| (?=[A-Za-z0-9._+/()-]))*$",
-      "description": "User-entered display label; never read from tokens, files or provider output."
+      "description": "User-entered display label, or a client-recorded plan value; never read from tokens or credential files."
     },
     "plan": {
       "type": "object",
@@ -808,14 +809,18 @@
           "$ref": "#/$defs/plan_label"
         },
         "source": {
-          "const": "user"
+          "enum": [
+            "user",
+            "client_local"
+          ]
         }
       },
       "required": [
         "label",
         "source"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "user = the user-entered plan_label (always wins); client_local = plan_type from the LOCAL Codex rollout record (D29). Never from tokens or credential files."
     },
     "client_version": {
       "type": "string",
@@ -959,10 +964,20 @@
             "live"
           ]
         },
-        "plan": {
+        "plan_label": {
           "anyOf": [
             {
-              "$ref": "#/$defs/plan"
+              "$ref": "#/$defs/plan_label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claude_statusline": {
+          "anyOf": [
+            {
+              "type": "boolean"
             },
             {
               "type": "null"
@@ -975,9 +990,11 @@
         "name",
         "provider",
         "mode",
-        "plan"
+        "plan_label",
+        "claude_statusline"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "claude_statusline is the opt-in capture switch for Claude profiles; null for Codex."
     },
     "usage_settings": {
       "type": "object",
@@ -1035,9 +1052,6 @@
             }
           ]
         },
-        "claude_statusline_capture": {
-          "type": "boolean"
-        },
         "profiles": {
           "type": "array",
           "items": {
@@ -1049,7 +1063,6 @@
         "mode",
         "live",
         "refresh_interval_seconds",
-        "claude_statusline_capture",
         "profiles"
       ],
       "additionalProperties": false

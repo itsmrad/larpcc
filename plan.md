@@ -78,10 +78,14 @@ specifies; every other invariant stays binding.
   No daemon, schedule, login item or background refresh is started by Larp.
 - Stage 04's "never reads auth/history/session contents" is narrowed for LOCAL
   Codex only: a bounded, confined streaming reader extracts allowlisted
-  rate-limit fields from the profile's own session logs and retains nothing else.
-  LIVE reads only the named credential fields. Native config is still never read.
-- Plan/account identity is never read from tokens, files or logs; a plan shows
-  only as a user-entered label. Account email/plan display is stage 14 (D25/D26).
+  rate-limit and plan fields from the profile's own session logs and retains
+  nothing else. LIVE reads only the named credential fields (token, and the
+  Codex account ID as a request header, D29). Native config values are still
+  never read; the opt-in Claude capture only checks whether a `statusLine` key
+  exists, so it never overwrites a user's own statusLine (D29).
+- Plan: the user-entered label, else (D29) the plan the client recorded in the
+  LOCAL non-credential data above. Never read from tokens or credential files.
+  Account email/plan from status output is stage 14 (D25/D26).
 - Agents never read real tokens or call real endpoints (RULES 4a); LIVE is built
   and tested against fakes and labelled unverified until the user authorizes a
   real-account qualification.

@@ -84,8 +84,6 @@ struct CLIEnvelope: Decodable {
     enum Payload: Decodable {
         case profiles([WireProfile]), profile(WireProfile), aliases([WireAlias]), bindings([Detection])
         case mcp(MCPList), skills(SkillsList), matrix(Matrix), status(Status), mutation(Mutation), receipt(Receipt), text(String), version(String)
-        // Stage 11 usage reads: schema-validated only; typed decoding waits for the app/menu bar go.
-        case usageReport
         init(from decoder: Decoder) throws { throw ClientError.invalidResponse }
     }
     enum CodingKeys: String, CodingKey { case schema, command, ok, revision, data, error }
@@ -108,7 +106,6 @@ struct CLIEnvelope: Decodable {
         case "app.open": data = .receipt(try Receipt(from: d))
         case "help": data = .text(try TextData(from: d).text)
         case "version": data = .version(try VersionData(from: d).version)
-        case "usage", "settings.usage": data = .usageReport
         default: data = .mutation(try Mutation(from: d))
         }
     }
@@ -132,15 +129,11 @@ struct CLIEnvelope: Decodable {
         case let .skills(s): try unique(s.skills.map(\.name)); for item in s.skills { try unique(item.switches.map(\.profile_id)) }
         case let .status(s): if let p = s.profile { try profiles([p]) }; try unique(s.detected_versions.map { $0.provider + "." + $0.surface })
         case let .mutation(m):
-            let profileCommands = ["profile.add", "profile.rename", "profile.forget", "profile.delete", "profile.recover", "profile.surface", "alias.add", "alias.remove", "skills.enable", "skills.disable", "profile.plan-label"]
+            let profileCommands = ["profile.add", "profile.rename", "profile.forget", "profile.delete", "profile.recover", "profile.surface", "alias.add", "alias.remove", "skills.enable", "skills.disable"]
             if profileCommands.contains(command), m.profile_id == nil { throw ClientError.invalidResponse }
-            let global = ["profile.migrate", "provider.bind", "app.bind", "mcp.sync", "mcp.sync-all", "skills.sync",
-                          "settings.usage.live", "settings.usage.interval", "settings.usage.claude-statusline"]
+            let global = ["profile.migrate", "provider.bind", "app.bind", "mcp.sync", "mcp.sync-all", "skills.sync"]
             if global.contains(command), m.profile_id != nil || m.name != nil { throw ClientError.invalidResponse }
-            if command == "settings.usage.mode" {
-                // Installation-wide mode has null ID/name; a per-profile override carries both.
-                guard (m.profile_id == nil) == (m.name == nil) else { throw ClientError.invalidResponse }
-            } else if !global.contains(command), m.name == nil { throw ClientError.invalidResponse }
+            if !global.contains(command), m.name == nil { throw ClientError.invalidResponse }
         default: break
         }
     }

@@ -77,15 +77,14 @@ def semantic(value):
             if command in {'profile.add', 'profile.rename', 'profile.forget',
                            'profile.delete', 'profile.recover', 'profile.surface',
                            'alias.add', 'alias.remove', 'skills.enable', 'skills.disable',
-                           'profile.plan-label'}:
+                           'profile.plan-label', 'settings.usage.claude-statusline'}:
                 assert data['profile_id'] is not None and data['name'] is not None
             if command in {'mcp.enable', 'mcp.disable', 'mcp.add', 'mcp.remove',
                            'skills.add', 'skills.remove'}:
                 assert data['name'] is not None
             if command in {'profile.migrate', 'provider.bind', 'app.bind',
                            'skills.sync', 'mcp.sync', 'mcp.sync-all',
-                           'settings.usage.live', 'settings.usage.interval',
-                           'settings.usage.claude-statusline'}:
+                           'settings.usage.live', 'settings.usage.interval'}:
                 assert data['profile_id'] is None and data['name'] is None
             if command == 'settings.usage.mode':
                 assert (data['profile_id'] is None) == (data['name'] is None)
@@ -182,12 +181,15 @@ def usage_semantic(data):
             assert keys == sorted(keys) and len({w['label'] for w in ws['extra']}) == len(keys)
             assert all(w['pace'] is None for w in ws['extra'] if w['window_seconds'] is None)
         credits_semantic(p['reset_credits'])
+        if p['plan'] is not None and p['plan']['source'] == 'client_local':
+            assert p['provider'] == 'codex' and src == 'codex_session_log'
         diags = [(d['code'], d['message']) for d in p['diagnostics']]
         assert diags == sorted(diags)
 
 def settings_semantic(data):
     rows = data['profiles']
     assert [p['name'] for p in rows] == sorted({p['name'] for p in rows})
+    assert all((p['claude_statusline'] is None) == (p['provider'] == 'codex') for p in rows)
     live = data['live']
     if live['acknowledged_warning'] is not None:
         assert live['acknowledged_warning'] <= live['current_warning']
@@ -325,6 +327,11 @@ semantic_only = [
     (usage, lambda x: codex(x).update(source=None)),
     (usage, lambda x: codex(x).update(captured_at='2026-11-21T13:00:00Z')),
     (usage, lambda x: x['data'].update(requested_mode='live')),
+    (usage, lambda x: x['data']['profiles'][0].update(plan={'label': 'max', 'source': 'client_local'})),
+    (next(x for x in fixtures if x['command'] == 'settings.usage'),
+     lambda x: x['data']['profiles'][1].update(claude_statusline=True)),
+    (next(x for x in fixtures if x['command'] == 'settings.usage.claude-statusline' and x['ok']),
+     lambda x: x['data'].update(profile_id=None, name=None)),
     (next(x for x in fixtures if x['command'] == 'settings.usage'), lambda x: x['data'].update(mode='live')),
     (next(x for x in fixtures if x['command'] == 'profile.plan-label'),
      lambda x: x['data'].update(profile_id=None)),

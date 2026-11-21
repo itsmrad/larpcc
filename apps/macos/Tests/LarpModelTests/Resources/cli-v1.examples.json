@@ -730,7 +730,7 @@
           "diagnostics": [
             {
               "code": "capture_not_installed",
-              "message": "Claude usage capture needs a qualified Larp launch."
+              "message": "Claude usage capture is off or needs a qualified Larp launch."
             }
           ]
         },
@@ -743,8 +743,8 @@
           "captured_at": "2026-11-21T12:00:00Z",
           "client_version": "0.169.0",
           "plan": {
-            "label": "Pro",
-            "source": "user"
+            "label": "pro",
+            "source": "client_local"
           },
           "windows": {
             "five_hour": {
@@ -852,27 +852,22 @@
         "verified": false
       },
       "refresh_interval_seconds": null,
-      "claude_statusline_capture": true,
       "profiles": [
         {
           "profile_id": "1",
           "name": "claude-work",
           "provider": "claude",
           "mode": "inherit",
-          "plan": {
-            "label": "Max 5x",
-            "source": "user"
-          }
+          "plan_label": "Max 5x",
+          "claude_statusline": false
         },
         {
           "profile_id": "2",
           "name": "codex-45",
           "provider": "codex",
           "mode": "inherit",
-          "plan": {
-            "label": "Pro",
-            "source": "user"
-          }
+          "plan_label": null,
+          "claude_statusline": null
         }
       ]
     }
@@ -925,8 +920,8 @@
     "revision": "8",
     "data": {
       "changed": true,
-      "profile_id": null,
-      "name": null,
+      "profile_id": "1",
+      "name": "claude-work",
       "warnings": []
     }
   },
@@ -937,8 +932,8 @@
     "revision": "8",
     "data": {
       "changed": true,
-      "profile_id": "2",
-      "name": "codex-45",
+      "profile_id": "1",
+      "name": "claude-work",
       "warnings": []
     }
   },
@@ -958,6 +953,15 @@
     "error": {
       "code": "confirmation_required",
       "message": "Enabling LIVE usage requires --acknowledge-risk."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.claude-statusline",
+    "ok": false,
+    "error": {
+      "code": "statusline_exists",
+      "message": "This profile already has its own statusLine; LarpCC will not replace it."
     }
   }
 ]

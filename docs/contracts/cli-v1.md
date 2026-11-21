@@ -6,7 +6,8 @@ fresh profiles only. No account/auth output is captured, parsed or inferred. Onl
 version text may be parsed by doctor --detect-versions (stage 08). The only exception is
 the stage 11 usage exception (D14): usage windows, reset times and reset-credit counts
 from the allowlisted sources in [stage 11](../stages/11-usage.md). Account identity and
-auth inference stay forbidden; a plan appears only as a user-entered label.
+auth inference stay forbidden; a plan appears only as the user-entered label or
+the client-recorded LOCAL plan (D29), never from credentials.
 SwiftUI later executes the installed CLI; no library extraction.
 
 ## Framing and compatibility
@@ -138,16 +139,18 @@ mutation, parser failure and closed desktop dispatch.
 
 Additive amendment, schema stays 1. Read envelopes `usage` and `settings.usage`;
 mutation receipts `settings.usage.live|mode|interval|claude-statusline` and
-`profile.plan-label`; new error code `live_disabled` (exit 1). Grammar, sources,
+`profile.plan-label`; new error codes `live_disabled` and `statusline_exists`
+(both exit 1). Grammar, sources,
 reason codes, ordering, normalization and the pace formula are normative in
 [stage 11](../stages/11-usage.md); pace test vectors are in
 [usage-pace-vectors.json](usage-pace-vectors.json). `usage --live --json` is Larp's
 own bounded network request, not native IO, so it is not `json_native_io`;
 per-profile LIVE failures are row reasons in an `ok:true` envelope. Usage rows carry
-no tokens, account IDs, emails, provider plan names, spend, cost or token counts.
-`settings.usage.mode` carries the profile ID and name for a per-profile override and
-null/null installation-wide; the other `settings.usage.*` receipts carry null/null;
-`profile.plan-label` carries the profile ID and name.
+no tokens, account IDs, emails, spend, cost or token counts; `plan` is the user label
+or a client-recorded LOCAL plan value. `settings.usage.mode` carries the profile ID and
+name for a per-profile override and null/null installation-wide;
+`settings.usage.live|interval` carry null/null; `settings.usage.claude-statusline` and
+`profile.plan-label` carry the profile ID and name.
 
 ## Validation without installations
 
