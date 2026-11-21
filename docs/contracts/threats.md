@@ -30,3 +30,21 @@ implementation and per-file coverage before merge; no review pass claimed here.
 Stale GUI intent: require `--expected-revision` on GUI mutation/open requests,
 checked under the resolution lock before effects. Name reuse after rename must
 fail with conflict; internal post-resolution revalidation alone is insufficient.
+
+## Account summary
+
+These controls apply to [Stage 14 account status](../stages/14-account-summary.md).
+The email and plan are personal data the user chose to see (D25). LarpCC
+never stores them (D26).
+
+| Threat | Required control and discriminating acceptance |
+|---|---|
+| Email in scrollback, screenshots or shared terminals | User choice under D25. `--no-account` gives a view with no email. The app blurs by default, re-blurs on close/relaunch and offers Hide account emails. The menu bar never shows an email. Shipped docs state that LarpCC cannot clear scrollback or screenshots. |
+| Output-shape spoofing by a malicious or swapped binary | Admission pins the exact artifact SHA-256 and identity, rechecked before dispatch. The parser is bound to that exact row. Unknown, duplicate, ambiguous or control-bearing output gives `unknown`, never a guess. Feed forged shapes, extra fields, ANSI and oversized output to an invented row; none produces `signed_in` or leaks into output. A same-user attacker who can replace a qualified binary between checks is outside the guarantee. |
+| PII in JSON consumers | Email only in `status.account`, only for `signed_in`, schema-bounded. Strict consumers that lack support fail closed. Scripts and app views that must not see PII use `--no-account`. The app requests account status only on explicit open or refresh, never persists it and drops it on close, refresh or ID mismatch. |
+| Persistence or log leakage | No registry field, cache, temp file, log, crash output or telemetry holds email or plan. Display names refuse `@`. Sentinel PII and sentinel credentials from a fake client appear nowhere under the root, temp dirs or other commands' output. |
+| Credential or token reads to fill fields | None, ever. Absent fields stay null. No credential file, keychain, session or env lookup. Prove zero opens outside the fake's declared outputs. |
+| Status spawn hangs, floods or survives | Null stdin, 16 KiB per-pipe caps, 10 s deadline, reviewed cancel-and-reap before guard release. Overflow and timeout give `unknown`, never partial fields. |
+| Stale or crossed result | Expected revision before dispatch, snapshot recheck after reap (`conflict`, no account data). The app checks the returned profile ID and drops in-flight results on selection change. |
+| Qualification on the user's Mac touching real sign-ins | Throwaway profiles in a temporary root, the user does every sign-in, no access to `~/.claude*`, `~/.codex*` or default app data. Login is blocked unless the exact build's credential store is proven per-home (G0). Evidence records presence only (`email: present`). |
+| Email over SSH | Refused in v1: account mode under `--host` fails before SSH. |

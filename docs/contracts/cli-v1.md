@@ -144,3 +144,46 @@ implementation or native launch behavior.
 Skills source confinement uses `forbidden_source` with a fixed message and no
 source path. Recorded desktop version labels contain 1–128 ASCII letters, digits,
 `.`, `_`, `+` or `-`; labels remain unverified metadata.
+
+## Account summary
+
+[Stage 14](../stages/14-account-summary.md) adds one success variant,
+`status.account`, under schema 1. It amends three statements above for this
+variant only: "No account/auth output is captured, parsed or inferred",
+"`status --json` ... never invokes native `status`" and "No implementation may
+redirect/capture native stdout to manufacture a JSON account result". Every
+other command keeps them.
+
+| Invocation | `command` | Data | Runs official client |
+|---|---|---|---|
+| `status NAME [--json]` | `status.account` | `{profile,provider_version,account,usage,diagnostics}` | Only when an exact Status row admits |
+| `status NAME --no-account [--json]` | `status` | Frozen `status` data, unchanged | Never |
+
+`--no-account` is accepted only by `status`. Elsewhere it is `usage`, exit 2.
+An older CLI rejects it as `parse`, exit 2. `doctor` is unchanged. Under a
+stage 13 `--host` route, account mode fails `unsupported`, exit 2, before SSH.
+
+`account` is `{state,email,plan}`. `state` is `signed_in`, `signed_out`,
+`unknown`, `not_qualified` or `unavailable`. Email and plan may be non-null
+only for `signed_in`, and each is null when the row's exact shape lacks it.
+Email is printable ASCII `local@domain` with no further `@`, at most 64 and
+253 bytes. Plan is 1–64 printable ASCII with no leading or trailing space.
+A value outside those forms makes the parser return `unknown`. These values
+are display data, never stored by producer or consumer, and never a parsing
+API. `provider_version` is the admitted row's exact version, or the approved
+version-only probe's, or null. It is always null for `unavailable`.
+`usage` is null here. The stage 11 amendment widens it to that stage's local
+per-profile summary or null. `revision` is a non-null canonical decimal u64.
+
+Exit codes: every completed observation, including `signed_out`, `unknown`,
+`not_qualified` and `unavailable`, exits 0 with one envelope and empty stderr.
+`busy` and `conflict` (the snapshot changed before dispatch or before
+publishing) exit 1 and carry no account data. Errors use the `status.account`
+discriminator. `run|login|logout --json` keep failing `json_native_io`.
+
+Compatibility: a strict v1 consumer that does not know `status.account`
+rejects it. Consumers that must not cause provider activity send
+`--no-account`. The Mac app's frozen schema copy carries this variant, and its
+test asserts that decoding still fails closed until the app step adds support.
+Profile extras fields (`display_name`, `launch_args`) are not part of this
+amendment. They land with the registry v4 bump as a separate amendment.

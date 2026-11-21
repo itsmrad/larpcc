@@ -10,7 +10,16 @@ final class ProcessBridgeTests: XCTestCase {
         var bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]); bytes.append(10); return bytes
     }
     func testEveryFrozenExampleAndErrorVariant() throws {
+        let prospectiveCommands: Set<String> = ["status.account"]
+        var checkedProspective: Set<String> = []
         for (index, e) in try Self.examples().enumerated() {
+            if e["ok"] as? Bool == true, let command = e["command"] as? String,
+               prospectiveCommands.contains(command) {
+                let bytes = try Self.bytes(e)
+                XCTAssertThrowsError(try CLIContract.decode(bytes, exit: 0), "Prospective command \(command) must fail closed until app support lands")
+                checkedProspective.insert(command)
+                continue
+            }
             do {
                 let result = try CLIContract.decode(Self.bytes(e), exit: e["ok"] as? Bool == true ? 0 : 1)
                 XCTAssertEqual(result.command, e["command"] as? String)
@@ -18,6 +27,7 @@ final class ProcessBridgeTests: XCTestCase {
                 XCTFail("Frozen example index \(index), command \(e["command"] as? String ?? "missing") failed decoding")
             }
         }
+        XCTAssertEqual(checkedProspective, prospectiveCommands)
     }
     func testCopiesMatchMergedContract() throws {
         // The workflow also compares these bytes to the repository contract.
