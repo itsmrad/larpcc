@@ -252,6 +252,10 @@ fn header_name(value: &str) -> bool {
 /// It is NOT a secret detector and makes no completeness claim; the boundary
 /// is that no field accepts an arbitrary literal value at all.
 pub fn token_like(value: &str) -> bool {
+    token_prefix(value) || high_entropy(value)
+}
+/// Known credential prefixes only.
+fn token_prefix(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     const PREFIXES: [&str; 14] = [
         "sk-",
@@ -269,9 +273,9 @@ pub fn token_like(value: &str) -> bool {
         "eyj",
         "-----begin",
     ];
-    if PREFIXES.iter().any(|p| lower.starts_with(p)) {
-        return true;
-    }
+    PREFIXES.iter().any(|p| lower.starts_with(p))
+}
+fn high_entropy(value: &str) -> bool {
     value
         .split(|c: char| !(c.is_ascii_alphanumeric() || "+/=_-".contains(c)))
         .any(|run| {
@@ -318,13 +322,11 @@ fn command_syntax(command: &str) -> Result<(), InputError> {
         if part.is_empty() || part == "." || part == ".." {
             return Err(InputError::Usage);
         }
-        // `$`/`%` would be expanded by native config readers; `=`/quotes and
-        // token-shaped components can carry values. All refuse without echo.
-        if part.contains(['$', '%', '=', '"', '\'', '`'])
-            || part.starts_with('-')
-            || token_like(part)
-        {
-            return Err(InputError::SecretLiteral);
+        // Native config readers expand `$`/`%`; refuse rather than let a path
+        // become an environment reference. No token/entropy heuristic applies
+        // to paths: real install paths contain GUID and hash components.
+        if part.contains(['$', '%']) {
+            return Err(InputError::Usage);
         }
     }
     Ok(())
@@ -618,34 +620,51 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    const EXE: &str = if cfg!(windows) {
+        r"C:\bin\files-mcp.exe"
+    } else {
+        "/usr/local/bin/files-mcp"
+    };
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
     }
     #[test]
     fn stage07_secrets_input_positions_refuse_without_value() {
-        let ok = transport(
-            Some("/usr/local/bin/files-mcp"),
-            &s(&["--stdio"]),
-            &s(&["FILES_TOKEN"]),
-            None,
-            &[],
-        );
+        let ok = transport(Some(EXE), &s(&["--stdio"]), &s(&["FILES_TOKEN"]), None, &[]);
         assert!(ok.is_ok());
+        // Hashed/GUID path components are ordinary local paths; credential prefixes are not.
+        let sep = if cfg!(windows) { r"\" } else { "/" };
+        let root = if cfg!(windows) { "C:" } else { "" };
+        let hashed = format!(
+            "{root}{sep}nix{sep}store{sep}0123abcd4567efgh8901ijkl2345mnop-files{sep}bin{sep}files-mcp"
+        );
+        let guid = format!("{root}{sep}tmp{sep}4bbdac98-b7d0-457c-9168-fb946cea1607{sep}files-mcp");
+        for path in [hashed, guid] {
+            assert!(
+                transport(Some(&path), &[], &[], None, &[]).is_ok(),
+                "{path}"
+            );
+        }
+        let dollar = format!("{root}{sep}opt{sep}${{HOME}}{sep}files-mcp");
+        assert_eq!(
+            transport(Some(&dollar), &[], &[], None, &[]),
+            Err(InputError::Usage)
+        );
         for arg in ["--token=abc", "sk-live-123", "--verbose", "x"] {
             assert_eq!(
-                transport(Some("/usr/bin/x"), &s(&[arg]), &[], None, &[]),
+                transport(Some(EXE), &s(&[arg]), &[], None, &[]),
                 Err(InputError::SecretLiteral)
             );
         }
         for env in ["TOKEN=abc", "ghp_0123456789abcdefABCDEF", "A B"] {
             assert_eq!(
-                transport(Some("/usr/bin/x"), &[], &s(&[env]), None, &[]),
+                transport(Some(EXE), &[], &s(&[env]), None, &[]),
                 Err(InputError::SecretLiteral)
             );
         }
         for env in ["", "1BAD", "bad-name"] {
             assert_eq!(
-                transport(Some("/usr/bin/x"), &[], &s(&[env]), None, &[]),
+                transport(Some(EXE), &[], &s(&[env]), None, &[]),
                 Err(InputError::SecretReference)
             );
         }

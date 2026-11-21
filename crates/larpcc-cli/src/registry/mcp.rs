@@ -172,9 +172,11 @@ fn effective(catalog: &Catalog, server: &Server, p: &super::Profile) -> bool {
 }
 
 fn read_file(path: &Path, limit: usize) -> Result<Option<(Vec<u8>, FileIdentity)>, Error> {
-    let Some(object) = platform::inspect(path, ObjectKind::File)? else {
+    if platform::inspect(path, ObjectKind::File)?.is_none() {
         return Ok(None);
-    };
+    }
+    // Inspection handles are metadata-only on Windows; reopen for data with checks.
+    let object = platform::read_skill_object(path, ObjectKind::File, false)?;
     platform::single_link(&object.file)?;
     let mut bytes = vec![];
     (&object.file)

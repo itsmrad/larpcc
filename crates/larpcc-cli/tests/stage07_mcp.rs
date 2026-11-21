@@ -405,11 +405,6 @@ fn stage07_secrets_cli_refuses_literals_and_references_with_zero_secret_bytes() 
     );
     let secret = "InventedSecretValue9xQ7";
     let token = "ghp_InventedToken0123456789abcdef";
-    let secret_dir = f.temp.path().join(token);
-    common::create_directory(&secret_dir);
-    let secret_exe = secret_dir.join("server");
-    common::create_file(&secret_exe, b"synthetic\n");
-    let secret_exe = secret_exe.to_str().unwrap().to_owned();
     let arg_eq = format!("--arg=--token={secret}");
     let env_eq = format!("TOKEN={secret}");
     let userinfo = format!("https://user:{secret}@docs.example.com/mcp");
@@ -423,7 +418,6 @@ fn stage07_secrets_cli_refuses_literals_and_references_with_zero_secret_bytes() 
         (vec!["--command", &exe, "--arg", secret], secret),
         (vec!["--command", &exe, "--env-ref", &env_eq], secret),
         (vec!["--command", &exe, "--env-ref", token], token),
-        (vec!["--command", &secret_exe], token),
         (vec!["--url", &userinfo], secret),
         (vec!["--url", &query], secret),
         (vec!["--url", &fragment], secret),
@@ -553,6 +547,31 @@ fn stage07_secrets_cli_refuses_literals_and_references_with_zero_secret_bytes() 
         let hits: Vec<_> = files_containing(&f.root, needle.as_bytes());
         assert!(hits.is_empty(), "{hits:?}");
     }
+    // GUID/hash path components are ordinary install paths and are accepted.
+    let guid_dir = f.temp.path().join("4bbdac98-b7d0-457c-9168-fb946cea1607");
+    common::create_directory(&guid_dir);
+    let guid_exe = guid_dir.join(if cfg!(windows) {
+        "server.exe"
+    } else {
+        "server"
+    });
+    common::create_file(&guid_exe, b"synthetic\n");
+    let guid_exe = guid_exe.to_str().unwrap().to_owned();
+    let accepted = request(
+        &f,
+        &[
+            "cc",
+            "mcp",
+            "add",
+            "guided",
+            "--command",
+            &guid_exe,
+            "--json",
+        ],
+        0,
+    );
+    assert_eq!(accepted["data"]["name"], "guided");
+    request(&f, &["cc", "mcp", "remove", "guided", "--json"], 0);
     // A valid reference definition stores and renders names only.
     request(
         &f,
