@@ -789,7 +789,6 @@ pub(crate) fn skill_directory_identity(path: &Path) -> Result<CheckedObject, Err
     }
     if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
         || tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-        || tag.ReparseTag != 0
     {
         return Err(unsafe_path(path, "is not a plain directory"));
     }

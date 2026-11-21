@@ -818,6 +818,8 @@ fn stage06_source_parent_containing_managed_root_refuses() {
 fn stage06_store_credential_shaped_entries_refuse_without_copying() {
     for denied in [
         "auth.json",
+        "AUTH.JSON",
+        "nested/id_rsa.pub",
         "nested/.credentials.json",
         "nested/key.pem",
         "nested/KEY.PEM",
@@ -939,5 +941,84 @@ fn stage06_source_default_claude_config_file_alias_is_not_a_home() {
             ],
             0,
         );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn stage06_many_profiles_add_under_bounded_descriptor_limit() {
+    use std::os::unix::process::CommandExt;
+    #[cfg(target_os = "linux")]
+    let cases = [(8, 256 as libc::rlim_t), (40, 1024)];
+    #[cfg(not(target_os = "linux"))]
+    let cases = [(8, 256 as libc::rlim_t)];
+    for (profiles, bound) in cases {
+        let mut f = common::Fixture::new();
+        let nested = f.temp.path().join("nested");
+        common::create_directory(&nested);
+        f.root = nested.join("managed");
+        for i in 0..profiles {
+            request(
+                &f,
+                &[
+                    "cc",
+                    "profile",
+                    "add",
+                    &format!("claude-work-{i}"),
+                    "--provider",
+                    "claude",
+                    "--json",
+                ],
+                0,
+            );
+        }
+        let source = f.temp.path().join("package");
+        common::create_directory(&source);
+        common::create_file(&source.join("SKILL.md"), b"synthetic package");
+        let mut cmd = f.command(&[
+            "cc",
+            "skills",
+            "add",
+            source.to_str().unwrap(),
+            "--name",
+            "example",
+            "--json",
+        ]);
+        // SAFETY: the child closure uses only async-signal-safe resource-limit
+        // syscalls and captures a plain limit value; the parent limit is unchanged.
+        unsafe {
+            cmd.pre_exec(move || {
+                let mut limit = libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
+                };
+                if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                limit.rlim_cur = bound.min(limit.rlim_max);
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let out = common::capture(cmd).unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "profiles={profiles},limit={bound}: {} {}",
+            common::stdout(&out),
+            common::stderr(&out)
+        );
+        assert!(out.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["data"]["changed"], true);
+        for id in 1..=profiles {
+            assert!(
+                f.root
+                    .join(format!("profiles/{id}/cli/skills/example/SKILL.md"))
+                    .is_file()
+            );
+        }
     }
 }

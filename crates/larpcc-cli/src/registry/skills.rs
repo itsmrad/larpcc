@@ -25,6 +25,16 @@ impl From<skills::Error> for Error {
     fn from(e: skills::Error) -> Self {
         match e {
             skills::Error::TooLarge => Error::TooLarge,
+            skills::Error::Io => Error::Io {
+                action: "access skill filesystem",
+                path: PathBuf::from("skills"),
+                source: std::io::Error::other("skill filesystem I/O failed"),
+            },
+            skills::Error::FileLimit => Error::Io {
+                action: "open skill metadata",
+                path: PathBuf::from("skills"),
+                source: std::io::Error::other("file descriptor limit exhausted"),
+            },
             skills::Error::Drift | skills::Error::Collision => Error::Drift,
             _ => Error::Unsafe {
                 path: PathBuf::from("skills"),
@@ -200,12 +210,24 @@ impl VendorHomes {
         panic!("skills unit tests must inject private vendor homes");
     }
 }
-fn source_package(
-    root: &Path,
-    source: &Path,
-    vendor: &VendorHomes,
-    profiles: &[super::Profile],
-) -> Result<Package, Error> {
+fn home_io_error(source: std::io::Error) -> Error {
+    if platform::fd_exhausted(&source) {
+        Error::Io {
+            action: "inspect skill exclusion",
+            path: PathBuf::from("skills"),
+            source,
+        }
+    } else {
+        Error::ForbiddenSource
+    }
+}
+fn home_error(error: Error) -> Error {
+    match error {
+        Error::Io { source, .. } => home_io_error(source),
+        _ => Error::ForbiddenSource,
+    }
+}
+fn source_package(root: &Path, source: &Path, vendor: &VendorHomes) -> Result<Package, Error> {
     for component in source.components() {
         if let std::path::Component::Normal(name) = component {
             let name = name.to_string_lossy().to_ascii_lowercase();
@@ -219,14 +241,6 @@ fn source_package(
     }
     let (object, held) = skills::source_directory(source)?;
     let mut homes = vec![root.to_path_buf()];
-    for profile in profiles {
-        let container = root.join("profiles").join(profile.id.to_string());
-        homes.extend([
-            container.clone(),
-            container.join("cli"),
-            container.join("desktop"),
-        ]);
-    }
     for home in &vendor.configured {
         if home.as_os_str().is_empty() {
             return Err(Error::ForbiddenSource);
@@ -237,25 +251,26 @@ fn source_package(
         let entries = match fs::read_dir(home) {
             Ok(entries) => Some(entries),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(_) => return Err(Error::ForbiddenSource),
+            Err(error) => return Err(home_io_error(error)),
         };
         for entry in entries.into_iter().flatten() {
-            let entry = entry.map_err(|_| Error::ForbiddenSource)?;
+            let entry = entry.map_err(home_io_error)?;
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
             if name.starts_with(".claude") || name.starts_with(".codex") || name == ".agents" {
                 // Default namespaces constrain directories only. Resolve aliases
                 // using metadata; file/dangling aliases never open file contents.
-                if fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()) {
-                    homes.push(entry.path());
+                match fs::metadata(entry.path()) {
+                    Ok(metadata) if metadata.is_dir() => homes.push(entry.path()),
+                    Err(error) if platform::fd_exhausted(&error) => {
+                        return Err(home_io_error(error));
+                    }
+                    _ => (),
                 }
             }
         }
     }
-    let mut exclusions = Vec::new();
     for home in homes {
-        let Some((directory, ancestors)) =
-            platform::skill_home(&home).map_err(|_| Error::ForbiddenSource)?
-        else {
+        let Some((directory, ancestors)) = platform::skill_home(&home).map_err(home_error)? else {
             continue;
         };
         if object.identity == directory.identity
@@ -270,7 +285,9 @@ fn source_package(
         {
             return Err(Error::ForbiddenSource);
         }
-        exclusions.push((directory, ancestors));
+        // Each home is compared and closed here; only source handles survive.
+        drop(directory);
+        drop(ancestors);
     }
     Package::source(source, &object.identity).map_err(Into::into)
 }
@@ -930,7 +947,7 @@ impl Registry {
                         .join(source)
                 };
                 let homes = homes.cloned().unwrap_or_else(VendorHomes::from_environment);
-                let snapshot = source_package(self.root(), &source, &homes, &data.profiles)?;
+                let snapshot = source_package(self.root(), &source, &homes)?;
                 target_name = Some(name.clone());
                 index.skills.push(Skill {
                     name: name.clone(),
@@ -1657,5 +1674,26 @@ mod tests {
         assert!(Package::source(&source, &expected).is_err());
         let current = skills::source_directory(&source).unwrap().0.identity;
         assert!(Package::source(&source, &current).is_ok());
+    }
+    #[test]
+    fn stage06_exclusion_descriptor_exhaustion_is_io_not_forbidden_source() {
+        #[cfg(unix)]
+        let codes = [libc::EMFILE, libc::ENFILE];
+        #[cfg(windows)]
+        let codes = [4, 1450];
+        for code in codes {
+            assert!(matches!(
+                home_error(Error::Io {
+                    action: "test",
+                    path: "private-home".into(),
+                    source: std::io::Error::from_raw_os_error(code)
+                }),
+                Error::Io { .. }
+            ));
+        }
+        assert!(matches!(
+            home_io_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            Error::ForbiddenSource
+        ));
     }
 }

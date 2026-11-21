@@ -20,6 +20,7 @@ pub const MAX_DEPTH: usize = 16;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     Unsafe,
+    FileLimit,
     TooLarge,
     Collision,
     Drift,
@@ -42,9 +43,24 @@ pub struct Package {
     pub sha256: String,
 }
 
+fn io_error(error: std::io::Error) -> Error {
+    if platform::fd_exhausted(&error) {
+        Error::FileLimit
+    } else {
+        Error::Io
+    }
+}
+fn safety_error(error: crate::registry::Error) -> Error {
+    if matches!(error,crate::registry::Error::Io{ref source,..} if platform::fd_exhausted(source)) {
+        Error::FileLimit
+    } else {
+        Error::Unsafe
+    }
+}
+
 fn checked(path: &Path, kind: ObjectKind) -> Result<CheckedObject> {
     platform::inspect(path, kind)
-        .map_err(|_| Error::Unsafe)?
+        .map_err(safety_error)?
         .ok_or(Error::Unsafe)
 }
 
@@ -61,7 +77,7 @@ fn ancestry(path: &Path) -> Result<platform::AnchoredPath> {
         return Err(Error::Unsafe);
     }
     for parent in path.ancestors().skip(1) {
-        let meta = fs::symlink_metadata(parent).map_err(|_| Error::Unsafe)?;
+        let meta = fs::symlink_metadata(parent).map_err(io_error)?;
         if !meta.is_dir() || meta.file_type().is_symlink() {
             return Err(Error::Unsafe);
         }
@@ -73,11 +89,11 @@ fn ancestry(path: &Path) -> Result<platform::AnchoredPath> {
             }
         }
     }
-    platform::anchor(path).map_err(|_| Error::Unsafe)
+    platform::anchor(path).map_err(safety_error)
 }
 
 fn single_link(file: &File) -> Result<()> {
-    platform::single_link(file).map_err(|_| Error::Unsafe)
+    platform::single_link(file).map_err(safety_error)
 }
 
 // Portable spelling prevents ADS/device paths and case-insensitive collisions.
@@ -117,8 +133,8 @@ fn component(name: &str) -> Result<()> {
 pub(crate) fn source_directory(path: &Path) -> Result<(CheckedObject, platform::AnchoredPath)> {
     let held = ancestry(path)?;
     let path: PathBuf = path.components().collect();
-    let object = platform::read_skill_object(&path, ObjectKind::Directory, true)
-        .map_err(|_| Error::Unsafe)?;
+    let object =
+        platform::read_skill_object(&path, ObjectKind::Directory, true).map_err(safety_error)?;
     Ok((object, held))
 }
 
@@ -137,13 +153,13 @@ impl Package {
         let _ancestors = ancestry(source)?;
         let source: PathBuf = source.components().collect();
         let _root = platform::read_skill_object(&source, ObjectKind::Directory, trusted_source)
-            .map_err(|_| Error::Unsafe)?;
+            .map_err(safety_error)?;
         if expected.is_some_and(|identity| identity != &_root.identity) {
             return Err(Error::Unsafe);
         }
         let entry =
             platform::read_skill_object(&source.join("SKILL.md"), ObjectKind::File, trusted_source)
-                .map_err(|_| Error::Unsafe)?;
+                .map_err(safety_error)?;
         single_link(&entry.file)?;
         let mut package = Self {
             files: Vec::new(),
@@ -182,10 +198,10 @@ impl Package {
             root.join(relative)
         };
         let _directory = platform::read_skill_object(&path, ObjectKind::Directory, trusted_source)
-            .map_err(|_| Error::Unsafe)?;
+            .map_err(safety_error)?;
         let mut names = BTreeSet::new();
-        for entry in fs::read_dir(&path).map_err(|_| Error::Io)? {
-            let entry = entry.map_err(|_| Error::Io)?;
+        for entry in fs::read_dir(&path).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
             let name = entry.file_name().into_string().map_err(|_| Error::Unsafe)?;
             component(&name)?;
             if !names.insert(name.to_ascii_lowercase()) {
@@ -200,7 +216,7 @@ impl Package {
                 format!("{relative}/{name}")
             };
             let path = root.join(&relative);
-            let meta = fs::symlink_metadata(&path).map_err(|_| Error::Io)?;
+            let meta = fs::symlink_metadata(&path).map_err(io_error)?;
             if meta.is_dir() && !meta.file_type().is_symlink() {
                 // Bound empty directories too, so enumeration cannot exhaust memory.
                 if self.directories.len() >= MAX_FILES {
@@ -213,9 +229,9 @@ impl Package {
                     return Err(Error::TooLarge);
                 }
                 let object = platform::read_skill_object(&path, ObjectKind::File, trusted_source)
-                    .map_err(|_| Error::Unsafe)?;
+                    .map_err(safety_error)?;
                 single_link(&object.file)?;
-                let len = object.file.metadata().map_err(|_| Error::Io)?.len();
+                let len = object.file.metadata().map_err(io_error)?.len();
                 if len > MAX_BYTES - *total {
                     return Err(Error::TooLarge);
                 }
@@ -223,7 +239,7 @@ impl Package {
                 (&object.file)
                     .take(MAX_BYTES - *total + 1)
                     .read_to_end(&mut bytes)
-                    .map_err(|_| Error::Io)?;
+                    .map_err(io_error)?;
                 if bytes.len() as u64 != len {
                     return Err(Error::Unsafe);
                 }
@@ -246,16 +262,16 @@ impl Package {
         use std::io::Write;
         let _ancestors = ancestry(destination)?;
         absent(destination)?;
-        let directory = platform::create_directory(destination).map_err(|_| Error::Io)?;
+        let directory = platform::create_directory(destination).map_err(safety_error)?;
         for relative in &self.directories {
-            platform::create_directory(&destination.join(relative)).map_err(|_| Error::Io)?;
+            platform::create_directory(&destination.join(relative)).map_err(safety_error)?;
         }
         for entry in &self.files {
             let mut file = platform::create_file(&destination.join(&entry.path))
-                .map_err(|_| Error::Io)?
+                .map_err(safety_error)?
                 .file;
-            file.write_all(&entry.bytes).map_err(|_| Error::Io)?;
-            file.sync_all().map_err(|_| Error::Io)?;
+            file.write_all(&entry.bytes).map_err(io_error)?;
+            file.sync_all().map_err(io_error)?;
         }
         Ok(directory.identity)
     }
@@ -362,7 +378,7 @@ impl OwnedCopy {
             Ok(unsafe { File::from_raw_fd(fd) })
         }
         fn identity(file: &File) -> Result<FileIdentity> {
-            let meta = file.metadata().map_err(|_| Error::Io)?;
+            let meta = file.metadata().map_err(io_error)?;
             Ok(FileIdentity::Unix {
                 dev: meta.dev(),
                 ino: meta.ino(),
@@ -388,7 +404,7 @@ impl OwnedCopy {
         let _ancestors = ancestry(path)?;
         let parent = checked(path.parent().ok_or(Error::Unsafe)?, ObjectKind::Directory)?.file;
         let leaf = path.file_name().ok_or(Error::Unsafe)?;
-        if !path.try_exists().map_err(|_| Error::Io)? {
+        if !path.try_exists().map_err(io_error)? {
             return Ok(());
         }
         let root = open_directory(&parent, leaf)?;
@@ -403,7 +419,7 @@ impl OwnedCopy {
                 .parent()
                 .and_then(Path::to_str)
                 .ok_or(Error::Unsafe)?;
-            if !path.join(relative).try_exists().map_err(|_| Error::Io)? {
+            if !path.join(relative).try_exists().map_err(io_error)? {
                 continue;
             }
             let directory = open_directory(
@@ -416,7 +432,7 @@ impl OwnedCopy {
             held.insert(relative.clone(), directory);
         }
         for (relative, _, _, _) in &self.files {
-            if !path.join(relative).try_exists().map_err(|_| Error::Io)? {
+            if !path.join(relative).try_exists().map_err(io_error)? {
                 continue;
             }
             let relative_path = Path::new(relative);
@@ -431,7 +447,7 @@ impl OwnedCopy {
             )?;
         }
         for (relative, _) in self.directories.iter().rev() {
-            if !path.join(relative).try_exists().map_err(|_| Error::Io)? {
+            if !path.join(relative).try_exists().map_err(io_error)? {
                 continue;
             }
             let relative_path = Path::new(relative);
@@ -467,8 +483,8 @@ impl OwnedLink {
             return Err(Error::Drift);
         }
         absent(path)?;
-        std::os::unix::fs::symlink(&target, path).map_err(|_| Error::Io)?;
-        let meta = fs::symlink_metadata(path).map_err(|_| Error::Io)?;
+        std::os::unix::fs::symlink(&target, path).map_err(io_error)?;
+        let meta = fs::symlink_metadata(path).map_err(io_error)?;
         Ok(Self {
             identity: FileIdentity::Unix {
                 dev: meta.dev(),
@@ -494,7 +510,7 @@ impl OwnedLink {
     }
     pub fn remove(&self, path: &Path) -> Result<()> {
         self.verify(path)?;
-        fs::remove_file(path).map_err(|_| Error::Io)
+        fs::remove_file(path).map_err(io_error)
     }
 }
 
@@ -547,7 +563,7 @@ impl Package {
         self.validate()?;
         let _ancestors = ancestry(path)?;
         if fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
-            platform::create_directory(path).map_err(|_| Error::Io)?;
+            platform::create_directory(path).map_err(safety_error)?;
         }
         io_phase("directory")?;
         let mut held = vec![checked(path, ObjectKind::Directory)?];
@@ -555,14 +571,14 @@ impl Package {
             let child = path.join(relative);
             if fs::symlink_metadata(&child).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
             {
-                platform::create_directory(&child).map_err(|_| Error::Io)?;
+                platform::create_directory(&child).map_err(safety_error)?;
             }
             held.push(checked(&child, ObjectKind::Directory)?);
         }
         // Enumerate names only; never read an unplanned file's contents.
         for dir in std::iter::once("").chain(self.directories.iter().map(String::as_str)) {
-            for child in fs::read_dir(path.join(dir)).map_err(|_| Error::Io)? {
-                let child = child.map_err(|_| Error::Io)?;
+            for child in fs::read_dir(path.join(dir)).map_err(io_error)? {
+                let child = child.map_err(io_error)?;
                 let relative = child
                     .path()
                     .strip_prefix(path)
@@ -581,30 +597,30 @@ impl Package {
             let child = path.join(&entry.path);
             if fs::symlink_metadata(&child).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
             {
-                platform::create_file(&child).map_err(|_| Error::Io)?;
+                platform::create_file(&child).map_err(safety_error)?;
             }
             io_phase("file_created")?;
             let object = platform::read_skill_object(&child, ObjectKind::File, false)
-                .map_err(|_| Error::Unsafe)?;
+                .map_err(safety_error)?;
             single_link(&object.file)?;
             let mut bytes = Vec::new();
             (&object.file)
                 .take(entry.bytes.len() as u64 + 1)
                 .read_to_end(&mut bytes)
-                .map_err(|_| Error::Io)?;
+                .map_err(io_error)?;
             if !entry.bytes.starts_with(&bytes) {
                 return Err(Error::Drift);
             }
             let identity = object.identity;
             drop(object.file);
             platform::append_skill_file(&child, &identity, &entry.bytes[bytes.len()..])
-                .map_err(|_| Error::Unsafe)?;
+                .map_err(safety_error)?;
             io_phase("file_written")?;
         }
         #[cfg(unix)]
         {
             for object in held.iter().rev() {
-                object.file.sync_all().map_err(|_| Error::Io)?;
+                object.file.sync_all().map_err(io_error)?;
             }
         }
         Ok(())
@@ -689,11 +705,11 @@ impl OwnedCopy {
         }
         for dir in std::iter::once("").chain(self.directories.iter().map(|d| d.0.as_str())) {
             let directory = path.join(dir);
-            if !directory.try_exists().map_err(|_| Error::Io)? {
+            if !directory.try_exists().map_err(io_error)? {
                 continue;
             }
-            for child in fs::read_dir(directory).map_err(|_| Error::Io)? {
-                let child = child.map_err(|_| Error::Io)?;
+            for child in fs::read_dir(directory).map_err(io_error)? {
+                let child = child.map_err(io_error)?;
                 let relative = child
                     .path()
                     .strip_prefix(path)
@@ -719,7 +735,7 @@ impl OwnedCopy {
                 }
             }
             let object = platform::read_skill_object(&child, ObjectKind::File, false)
-                .map_err(|_| Error::Unsafe)?;
+                .map_err(safety_error)?;
             single_link(&object.file)?;
             if object.identity != *id {
                 return Err(Error::Drift);
@@ -728,7 +744,7 @@ impl OwnedCopy {
             (&object.file)
                 .take(*len + 1)
                 .read_to_end(&mut bytes)
-                .map_err(|_| Error::Io)?;
+                .map_err(io_error)?;
             if bytes.len() as u64 != *len || format!("{:x}", Sha256::digest(bytes)) != *digest {
                 return Err(Error::Drift);
             }
@@ -771,7 +787,7 @@ impl OwnedCopy {
             let child = path.join(relative);
             if fs::symlink_metadata(&child).is_ok() {
                 platform::remove_skill_leaf(&child, identity, ObjectKind::File)
-                    .map_err(|_| Error::Unsafe)?;
+                    .map_err(safety_error)?;
                 io_phase("unlink")?;
             }
         }
@@ -779,7 +795,7 @@ impl OwnedCopy {
             let identity = object.identity;
             drop(object.file);
             platform::remove_skill_leaf(&path.join(relative), &identity, ObjectKind::Directory)
-                .map_err(|_| Error::Unsafe)?;
+                .map_err(safety_error)?;
         }
         drop(root.file);
         platform::remove_skill_leaf(path, &self.identity, ObjectKind::Directory)
@@ -798,8 +814,8 @@ impl OwnedLink {
     pub(crate) fn capture_internal(root: &Path, name: &ProfileName, path: &Path) -> Result<Self> {
         use std::os::unix::fs::MetadataExt;
         let target = store_path(root, name);
-        let meta = fs::symlink_metadata(path).map_err(|_| Error::Io)?;
-        if !meta.file_type().is_symlink() || fs::read_link(path).map_err(|_| Error::Io)? != target {
+        let meta = fs::symlink_metadata(path).map_err(io_error)?;
+        if !meta.file_type().is_symlink() || fs::read_link(path).map_err(io_error)? != target {
             return Err(Error::Drift);
         }
         let receipt = Self {

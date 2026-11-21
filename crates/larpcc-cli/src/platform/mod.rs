@@ -38,6 +38,25 @@ mod macos;
 #[path = "../../tests/fixtures/windows/private.rs"]
 pub(crate) mod fixture_private;
 
+pub(crate) fn fd_exhausted(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            ERROR_NO_SYSTEM_RESOURCES, ERROR_TOO_MANY_OPEN_FILES,
+        };
+        error.raw_os_error().is_some_and(|code| {
+            matches!(
+                code as u32,
+                ERROR_TOO_MANY_OPEN_FILES | ERROR_NO_SYSTEM_RESOURCES
+            )
+        })
+    }
+}
+
 /// Directory metadata only: resolve an excluded vendor-home alias, then retain
 /// its target/ancestor identities without trust checks or reading home contents.
 /// These handles authorize exclusion only, never managed reads or writes.

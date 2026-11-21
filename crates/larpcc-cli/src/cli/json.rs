@@ -55,6 +55,7 @@ fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
             "Skill sources inside managed or vendor homes are forbidden.",
             1,
         ),
+        Error::Io { .. } => ("io", "Local filesystem I/O could not be completed.", 1),
         Error::Drift => (
             "drift",
             "Owned content or filesystem identity has changed.",
@@ -188,5 +189,19 @@ mod tests {
         assert!(!message.contains("private-path"));
         assert_eq!(failure_details(Error::Conflict).2, 1);
         assert_eq!(failure_details(Error::InvalidVersionLabel).2, 2);
+    }
+    #[test]
+    fn stage06_descriptor_exhaustion_has_redacted_io_envelope_code() {
+        #[cfg(unix)]
+        let code = libc::EMFILE;
+        #[cfg(windows)]
+        let code = 4;
+        let (name, message, exit) = failure_details(Error::Io {
+            action: "test",
+            path: "private-home".into(),
+            source: std::io::Error::from_raw_os_error(code),
+        });
+        assert_eq!((name, exit), ("io", 1));
+        assert!(!message.contains("private-home"));
     }
 }
