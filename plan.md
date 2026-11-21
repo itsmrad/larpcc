@@ -80,6 +80,27 @@ returns local launched/focused outcomes. No exact Rust signature frozen here.
 MAC waits merged v3 seed for CLI integration; SwiftUI scaffolding is independent.
 SwiftUI shells out to stable JSON; no library extraction or Tauri.
 
+## Remote
+
+Stage 13 follows the local CLI and GUI contracts. [Remote hosts over SSH](docs/stages/13-remote-hosts.md)
+freezes user-installed remote Larp, machine-scoped metadata in the app, and
+explicit MCP/skills copy and sync. The menu bar may list profiles from data
+already loaded. Remote native run remains closed pending qualification.
+
+- Use LarpCC only with one person's own machines and accounts. Include this
+  notice in shipped documentation when the feature is delivered.
+- Each machine signs in through its own official clients. Never copy login
+  state, credential files, tokens, keychain items or SSH authentication
+  material across machines.
+- Contact hosts only for explicit open, refresh, edit, check, copy or sync
+  actions. No background polling, schedules, unattended runs or automatic
+  account switching. The user selects the machine and profile.
+- The user-invoked system SSH child is the only network transport used by
+  Larp for remote management. Remote Larp follows the same safety rules.
+  Stage 11 usage is LOCAL-only for remote profiles, even when a host permits
+  LIVE for local callers. A routed request never reads a usage token or
+  contacts a provider endpoint.
+
 ## Ordered slices and gates
 
 | Slice | Contract and order | Deliverable / failure boundary |

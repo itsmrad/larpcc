@@ -676,5 +676,189 @@
       "code": "conflict",
       "message": "Registry revision changed; refresh before retrying."
     }
+  },
+  {
+    "schema": 1,
+    "command": "host.add",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "dev-vm",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.list",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "hosts": [
+        {
+          "name": "dev-vm",
+          "ssh": {
+            "destination": "sandbox-dev",
+            "resolved": "dev@sandbox.example:2222"
+          },
+          "larp": "/opt/Larp Tools/larp",
+          "larpcc_home": null
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.show",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "host": {
+        "name": "dev-vm",
+        "ssh": {
+          "destination": "sandbox-dev",
+          "resolved": "dev@sandbox.example:2222"
+        },
+        "larp": "/opt/Larp Tools/larp",
+        "larpcc_home": null
+      }
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.check",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "name": "dev-vm",
+      "status": "ok"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.check",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "name": "dev-vm",
+      "status": "larp_missing"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.check",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "name": "dev-vm",
+      "status": "unreachable"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.check",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "name": "dev-vm",
+      "status": "incompatible"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.remove",
+    "ok": true,
+    "revision": "2",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "dev-vm",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.list",
+    "ok": true,
+    "revision": "12",
+    "data": {
+      "kind": "skills",
+      "entries": [
+        {
+          "name": "review",
+          "all_machines": true
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.share",
+    "ok": true,
+    "revision": "12",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "review",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.apply",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "review",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.list",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "profiles": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.rename",
+    "ok": false,
+    "error": {
+      "code": "conflict",
+      "message": "The displayed revision is stale."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.rename",
+    "ok": false,
+    "error": {
+      "code": "remote_outcome_unknown",
+      "message": "Refresh the machine before trying again."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.apply",
+    "ok": false,
+    "error": {
+      "code": "catalog_unavailable",
+      "message": "The target dependency is unavailable."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "ssh_failed",
+      "message": "Verify connectivity, host key and SSH authentication."
+    }
   }
 ]

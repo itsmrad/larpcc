@@ -127,6 +127,55 @@ See [examples](cli-v1.examples.json) for SwiftUI decoding fixtures including
 profile/provider/surfaces/desktop, alias, MCP, skills, matrices, status/doctor,
 mutation, parser failure and closed desktop dispatch.
 
+## Remote
+
+[Stage 13](../stages/13-remote-hosts.md) adds host commands and a global
+`--host NAME` selector before the child `--`. Existing local invocations and
+envelope shapes are preserved. A forwarded invocation returns the same dotted
+command and data shape as the target's metadata command. The consumer binds
+the response to the route used in its request. There is no host field in the
+forwarded envelope, and names, IDs and revisions are machine-scoped. An app
+that supports this amendment sends a remote command only through a compatible
+local CLI and validates new envelopes with the amended schema. An older CLI
+can reject the new syntax as `parse`.
+
+| Command | Success data | Revision domain |
+|---|---|---|
+| `host.add`, `host.remove` | Common mutation receipt, non-null host `name` and null `profile_id` | Local host store |
+| `host.list` | `{hosts:[Host]}`, ASCII name order, unique names | Local host store |
+| `host.show` | `{host:Host}` | Local host store |
+| `host.check` | `{name,status}` for the explicitly checked host. Status is `ok`, `unreachable`, `larp_missing` or `incompatible`. A classified probe failure is a completed check with exit 0. | Local host store |
+| `host.catalog.list` | `{kind,entries:[{name,all_machines}]}`, ASCII name order, unique names | Selected machine's registry |
+| `host.catalog.share`, `host.catalog.apply` | Common mutation receipt, non-null entry `name` and null `profile_id` | Selected machine's registry |
+
+`Host` is `{name,ssh:{destination,resolved},larp,larpcc_home}` with nullable
+paths. `destination` is the input alias or direct destination and `resolved`
+is the normalized direct destination with an explicit port. Paths and SSH
+destination fields are display data in the app. Host store success revisions
+are canonical u64 strings, including `"0"` for a missing host store.
+
+For host-store commands, `--expected-revision` is a host-store precondition.
+For forwarded commands it guards the remote registry. Forwarded app reads and
+mutations also require `--expected-host-revision` (a canonical decimal u64),
+which guards local routing. A direct CLI caller may omit either precondition.
+The selector and host revision never pass through SSH. A routing or target
+conflict returns exit 1 under the requested command and requires renewed user
+intent. Host remove requires `--yes`. Closed native admission and JSON native
+IO refusal keep their early precedence.
+
+New operational error codes are `ssh_unavailable`, `ssh_failed`,
+`remote_larp_missing`, `remote_incompatible`, `remote_timeout`,
+`remote_output`, `remote_outcome_unknown` and `catalog_unavailable`, all
+with exit 1. Error messages contain fixed safe text. An unknown mutation
+outcome requires an explicit read before deciding whether to retry. The
+ordinary JSON `too_large`, `conflict` and other applicable codes remain valid.
+An unsupported route/operation exits 2 with `usage` or `unsupported`.
+
+Remote profiles use LOCAL usage mode only. If the destination has LIVE enabled,
+forwarded reads still use LOCAL and the receiver refuses requests to read or
+enable LIVE before accessing tokens or contacting a provider. This applies
+independently of the app's controls.
+
 ## Validation without installations
 
 Run `python3 docs/contracts/validate.py` from the repo. This stdlib-only fixture

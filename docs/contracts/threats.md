@@ -30,3 +30,20 @@ implementation and per-file coverage before merge; no review pass claimed here.
 Stale GUI intent: require `--expected-revision` on GUI mutation/open requests,
 checked under the resolution lock before effects. Name reuse after rename must
 fail with conflict; internal post-resolution revalidation alone is insufficient.
+
+## Remote
+
+These controls apply to [Stage 13 SSH requests](../stages/13-remote-hosts.md).
+The user must control and trust the SSH server. An authenticated but
+compromised server can fabricate valid metadata or mutate its own state.
+
+| Threat | Required control and discriminating acceptance |
+|---|---|
+| Malicious or compromised server output | Enforce schema, semantics, command/exit matching, stream caps, deadlines and empty stderr. Replace arbitrary messages with fixed local text. Treat display fields as inert, machine-scoped metadata. Feed forged identifiers, ANSI/control strings, wrong commands and schema-valid misleading paths; none selects a local target, starts a process, or reaches a second host automatically. |
+| DEST or remote argument injection | Parse a strict destination grammar, split user/host/port into separate argv, and invoke OpenSSH directly. Use one fixed SSH remote command and a POSIX script with every data word quoted. Verify spaces and apostrophes round trip and shell metacharacters stay data. |
+| Implicit ssh_config commands or forwarding | Disable ambient SSH config and multiplexing. Parse only a private inert alias subset; reject Match, Include, ProxyCommand, LocalCommand and forwarding directives. Use no PTY for metadata, no agent/X11 forwarding, no askpass and no user-supplied SSH options. Assert no fallback on BatchMode refusal. |
+| MITM, first contact or changed host key | Require StrictHostKeyChecking=yes. Trust is established out of band by the user. Simulated unknown/changed keys fail without prompts, retries, accepts or changed trust state. Never expose raw SSH diagnostics. |
+| Data exfiltration via MCP copy or sync | Require an explicit source, target and preview of approved data. Never use remote-provided paths, URLs or raw command/argument strings as target inputs. Target command/endpoint validation remains Stage 07; no server execution or endpoint check. Test a malicious source trying to redirect a copy or cause a second request. |
+| Secrets or arbitrary files in copied catalog entries | Copy reference identifiers only for secrets, with no literal env/header values, OAuth state, keychain lookups or credential interpolation. A skill transfer enrolls a matching target-local package by digest. Assert invented secret values and package bytes never enter SSH input, stdout, stderr or logs. |
+| Stale routing, stale registry or lost receipt | Check host and target revisions independently. Never fall back or retry on conflict. After uncertain mutation outcome, refresh explicitly to reconcile. Mixed sync results preserve confirmed successes and expose unattempted destinations/entries. |
+| Remote usage or native launch bypass | Gate forwarded requests on both sides. Refuse LIVE before token access and closed native operations before SSH; prove zero provider requests and zero native child creation with fakes. |

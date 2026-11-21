@@ -495,7 +495,15 @@
             "io",
             "corrupt",
             "newer_schema",
-            "exhausted"
+            "exhausted",
+            "ssh_unavailable",
+            "ssh_failed",
+            "remote_larp_missing",
+            "remote_incompatible",
+            "remote_timeout",
+            "remote_output",
+            "remote_outcome_unknown",
+            "catalog_unavailable"
           ]
         },
         "message": {
@@ -536,6 +544,92 @@
         "surface",
         "outcome",
         "native_auth"
+      ],
+      "additionalProperties": false
+    },
+    "host": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "ssh": {
+          "type": "object",
+          "properties": {
+            "destination": {
+              "type": "string"
+            },
+            "resolved": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "destination",
+            "resolved"
+          ],
+          "additionalProperties": false
+        },
+        "larp": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "larpcc_home": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "ssh",
+        "larp",
+        "larpcc_home"
+      ],
+      "additionalProperties": false
+    },
+    "host_status": {
+      "enum": [
+        "ok",
+        "unreachable",
+        "larp_missing",
+        "incompatible"
+      ]
+    },
+    "host_mutation": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        },
+        "profile_id": {
+          "type": "null"
+        },
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/diagnostic"
+          }
+        }
+      },
+      "required": [
+        "changed",
+        "profile_id",
+        "name",
+        "warnings"
       ],
       "additionalProperties": false
     }
@@ -1890,6 +1984,327 @@
           "const": 1
         },
         "command": {
+          "const": "host.add"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "$ref": "#/$defs/host_mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "host.list"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "hosts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/host"
+              },
+              "maxItems": 32
+            }
+          },
+          "required": [
+            "hosts"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "host.show"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "host": {
+              "$ref": "#/$defs/host"
+            }
+          },
+          "required": [
+            "host"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "host.remove"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "$ref": "#/$defs/host_mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "host.check"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/name"
+            },
+            "status": {
+              "$ref": "#/$defs/host_status"
+            }
+          },
+          "required": [
+            "name",
+            "status"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "host.catalog.list"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "mcp",
+                "skills"
+              ]
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "$ref": "#/$defs/name"
+                  },
+                  "all_machines": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "all_machines"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 256
+            }
+          },
+          "required": [
+            "kind",
+            "entries"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "host.catalog.share"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/host_mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "host.catalog.apply"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/host_mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
           "enum": [
             "profile.list",
             "profile.show",
@@ -1929,7 +2344,15 @@
             "login",
             "logout",
             "parse",
-            "app.bind"
+            "app.bind",
+            "host.add",
+            "host.list",
+            "host.show",
+            "host.remove",
+            "host.check",
+            "host.catalog.list",
+            "host.catalog.share",
+            "host.catalog.apply"
           ]
         },
         "ok": {
