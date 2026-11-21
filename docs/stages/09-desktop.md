@@ -24,10 +24,24 @@ swap or token meter.
 
 ## Lead desktop admission amendment — 2026-11-17
 
+**Dispatch paused:** ChatGPT.app open and focus return `qualification_pending`
+before effects until the observed `~/.codex` changes are attributed. Binding
+and its identity checks remain available. The named dispatch gate may be
+reopened only after that attribution re-test.
+
+Bind performs strict, all-architecture, nested signature validation and may
+take approximately six seconds; human mode prints one progress line and JSON
+prints none. A bounded private verdict in the registry is keyed by the bundle
+executable and Info.plist device, inode, size, nanosecond mtime and ctime, plus
+the static code directory hash. It is replaced on bind under the registry lock.
+Open rechecks that identity and uses the cached verdict; a mismatch triggers a
+fresh full validation. Normal cached admission targets the two-second budget;
+signature revalidation after an identity change may take longer.
+
 This amendment supersedes the earlier desktop-only closed-table requirement and
 restores D4 warn-and-launch for local macOS dispatch. CLI native qualification
 ROWS remain empty: no CLI provider execution or account operation is authorized.
-Ordinary `app open` is enabled only for unmodified `/Applications/ChatGPT.app`
+Before the dispatch pause above, ordinary `app open` was enabled only for unmodified `/Applications/ChatGPT.app`
 with strict, all-architecture signature validation against identifier
 `com.openai.codex`, Apple generic anchor, Developer ID certificate constraints,
 and team `2DC432GLL2`. Native Claude binding/open remains closed because its

@@ -149,6 +149,15 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
     {
         return failure(command, e);
     }
+    if matches!(
+        action,
+        CcAction::App {
+            command: AppCommand::Open { .. }
+        }
+    ) && let Err(e) = crate::desktop::open_preflight()
+    {
+        return failure(command, e);
+    }
     let r = match Registry::locate() {
         Ok(r) => r.expecting(expected),
         Err(e) => return failure(command, e),

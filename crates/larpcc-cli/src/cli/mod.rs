@@ -296,7 +296,12 @@ pub fn run() -> ExitCode {
     let expected = cli.expected_revision;
     let command = match command {
         CcAction::App { command } => {
-            if let Err(e) = crate::desktop::preflight() {
+            let preflight = if matches!(&command, AppCommand::Open { .. }) {
+                crate::desktop::open_preflight()
+            } else {
+                crate::desktop::preflight()
+            };
+            if let Err(e) = preflight {
                 return operational_error(e);
             }
             return match Registry::locate().and_then(|r| {
@@ -307,9 +312,11 @@ pub fn run() -> ExitCode {
                         path,
                         recorded_version,
                         replace,
-                    } => r
-                        .bind_desktop(provider, path, recorded_version, replace)
-                        .map(|_| "Desktop binding saved.\n".to_owned()),
+                    } => {
+                        eprintln!("Checking desktop app signature; this may take a few seconds.");
+                        r.bind_desktop(provider, path, recorded_version, replace)
+                            .map(|_| "Desktop binding saved.\n".to_owned())
+                    }
                     AppCommand::Open { name } => r
                         .open_desktop(&name, false)
                         .map(|receipt| format!("Desktop {}.\n", receipt.outcome)),

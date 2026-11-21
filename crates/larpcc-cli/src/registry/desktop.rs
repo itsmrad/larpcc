@@ -53,7 +53,10 @@ impl Registry {
         };
         // Lifecycle guard precedes registry lock and survives all native effects.
         let guard = acquire_auth_guard(self.root(), id)?;
-        let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        let (mut data, _lock) = store::snapshot(self.root(), self.expected)?;
+        if _lock.is_none() {
+            return Err(Error::AdmissionChanged);
+        }
         if data.revision != revision {
             return Err(Error::AdmissionChanged);
         }
@@ -72,13 +75,26 @@ impl Registry {
             .ok_or(Error::Unbound {
                 provider: p.provider,
             })?;
-        let app = desktop::validate_binding(p.provider, &b.path)?;
+        let provider = p.provider;
+        let recorded_version = b.recorded_version.clone();
+        let (app, cache) = desktop::validate_binding(
+            p.provider,
+            &b.path,
+            data.desktop_signature_cache.as_ref(),
+            false,
+        )?;
+        if cache != data.desktop_signature_cache {
+            data.desktop_signature_cache = cache;
+            let bytes = store::serialize(&data)?;
+            app.recheck()?;
+            store::persist(self.root(), &bytes, &mut false, &mut false)?;
+        }
         let container = self.root().join("profiles").join(id.to_string());
         let snapshot = CheckedSnapshot {
             profile_id: id,
-            provider: p.provider,
+            provider,
             revision,
-            recorded_version: b.recorded_version.clone(),
+            recorded_version,
             root: directory(self.root().to_owned())?,
             cli: directory(container.join("cli"))?,
             desktop: directory(container.join("desktop"))?,
@@ -128,7 +144,7 @@ impl Registry {
         {
             return Err(Error::InvalidVersionLabel);
         }
-        let checked = desktop::validate_binding(provider, &path)?;
+        let (checked, cache) = desktop::validate_binding(provider, &path, None, true)?;
         let binding = DesktopBinding {
             provider,
             path,
@@ -139,9 +155,14 @@ impl Registry {
             .iter()
             .position(|b| b.provider == provider);
         if !binding_changed(old.map(|i| &data.desktop_bindings[i]), &binding, replace)? {
+            data.desktop_signature_cache = cache;
+            let bytes = store::serialize(&data)?;
+            checked.recheck()?;
+            store::persist(self.root(), &bytes, &mut false, &mut false)?;
             self.observed.set(Some(data.revision));
             return Ok(false);
         }
+        data.desktop_signature_cache = cache;
         if let Some(i) = old {
             data.desktop_bindings[i] = binding;
         } else {
