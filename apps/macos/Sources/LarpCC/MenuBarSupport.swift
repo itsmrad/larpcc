@@ -110,10 +110,11 @@ struct MenuBarSettingsSection: View {
     }
 }
 
-// MARK: - Screenshot hook
+// MARK: - Screenshot hook (debug builds only)
 
+#if DEBUG
 /// `--menubar-panel-snapshot=<abs path.png>`: renders the panel with sample data at 2x and exits.
-/// Honoured only in sample mode; it never runs larp or reads usage from anywhere else.
+/// Debug builds only; sample data only. It never runs larp or reads usage from anywhere else.
 enum MenuBarSnapshot {
     private static let prefix = "--menubar-panel-snapshot="
 
@@ -152,3 +153,4 @@ enum MenuBarSnapshot {
         do { try png.write(to: URL(fileURLWithPath: path)); return true } catch { return false }
     }
 }
+#endif

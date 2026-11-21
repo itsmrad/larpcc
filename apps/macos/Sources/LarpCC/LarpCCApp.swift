@@ -10,7 +10,9 @@ struct LarpCCApp: App {
             do { try ProcessLarpClient.validateBundledContract(); exit(0) }
             catch { exit(1) }
         }
+        #if DEBUG
         MenuBarSnapshot.runIfRequested()
+        #endif
     }
     var body: some Scene {
         Window("LarpCC", id: "settings") {

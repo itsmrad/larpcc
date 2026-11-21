@@ -67,8 +67,10 @@ only the panel's Refresh or the opt-in interval reads live usage. "Hide Dock ico
 when the window is closed" switches to a menu-bar-only app after the window closes
 and restores the Dock icon when the window opens again; it needs the menu bar item.
 
-Screenshots (sample mode only): `--menubar-panel-snapshot=/abs/path.png` renders
-the panel with sample data at 2x, honouring `--appearance=light|dark`, and exits.
+Screenshots: in debug builds only (`swift run LarpCC --menubar-panel-snapshot=/abs/path.png
+--appearance=dark`), the snapshot option renders the panel with sample data at 2x,
+honouring `--appearance=light|dark`, and exits. Release builds have no such hook;
+capture the live panel there with `screencapture -x -l <windowID>`.
 `--page=general` shows the Menu Bar settings, and `--page=profile-1` (2 resets),
 `profile-2` (no reset info) or `profile-3` (no resets) show the usage section.
 
@@ -79,7 +81,7 @@ swift test
 swift run LarpCC
 ./scripts/bundle.sh
 open dist/LarpCC.app --args --appearance=light
-dist/LarpCC.app/Contents/MacOS/LarpCC --appearance=dark --menubar-panel-snapshot="$PWD/panel-dark.png"
+swift run LarpCC --appearance=dark --menubar-panel-snapshot="$PWD/panel-dark.png"  # debug only
 # Quit before relaunching with --appearance=dark.
 ```
 

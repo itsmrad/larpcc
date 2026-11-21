@@ -199,7 +199,7 @@ struct MenuBarPanel: View {
     }
 }
 
-private struct MenuBarCardsHeight: PreferenceKey {
+private struct MenuBarCardsHeight: SwiftUI.PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
