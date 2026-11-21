@@ -86,6 +86,9 @@ fn record(stat: &libc::stat, pid: i32) -> Lock {
         size: stat.st_size,
         changed: (stat.st_ctime, stat.st_ctime_nsec),
         modified: (stat.st_mtime, stat.st_mtime_nsec),
+        #[cfg(target_os = "macos")]
+        created: (stat.st_birthtime, stat.st_birthtime_nsec),
+        #[cfg(not(target_os = "macos"))]
         created: (stat.st_ctime, stat.st_ctime_nsec),
     }
 }
@@ -135,4 +138,24 @@ pub(super) fn hostname() -> Result<Vec<u8>, InspectionCode> {
         return Err(InspectionCode::Malformed);
     }
     Ok(bytes.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn desktop_singleton_creation_stamp_uses_birthtime_on_macos() {
+        // SAFETY: stat consists only of integer fields; no OS resource is represented.
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        stat.st_ctime = 100;
+        stat.st_ctime_nsec = 200;
+        #[cfg(target_os = "macos")]
+        {
+            stat.st_birthtime = 10;
+            stat.st_birthtime_nsec = 20;
+            assert_eq!(record(&stat, 1).created, (10, 20));
+        }
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(record(&stat, 1).created, (100, 200));
+    }
 }

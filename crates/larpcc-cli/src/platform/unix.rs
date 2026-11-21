@@ -880,6 +880,46 @@ pub(crate) fn append_skill_file(
         .map_err(|e| io_error("write skill file", path, e))
 }
 
+// Vendor-app trust is established by the desktop signature validator, not directory modes.
+// These no-follow identity pins MUST NOT replace anchor/inspect for Larp-managed data.
+pub(crate) fn vendor_app_object(path: &Path, kind: ObjectKind) -> Result<CheckedObject, Error> {
+    let before = fs::symlink_metadata(path).map_err(|e| io_error("inspect", path, e))?;
+    let valid_kind = match kind {
+        ObjectKind::Directory => before.is_dir(),
+        ObjectKind::File => before.is_file(),
+    };
+    if before.file_type().is_symlink() || !valid_kind {
+        return Err(unsafe_path(path, "vendor app object has an invalid type"));
+    }
+    let file = open(path, kind, false)?;
+    let after = file.metadata().map_err(|e| io_error("inspect", path, e))?;
+    if identity(&before) != identity(&after) {
+        return Err(Error::AdmissionChanged);
+    }
+    Ok(CheckedObject {
+        file,
+        identity: identity(&after),
+    })
+}
+pub(crate) fn vendor_app_anchor(path: &Path) -> Result<AnchoredPath, Error> {
+    use std::path::Component;
+    if !path.is_absolute() {
+        return Err(Error::ArtifactInvalid);
+    }
+    let mut current = PathBuf::from("/");
+    let mut ancestors = vec![vendor_app_object(&current, ObjectKind::Directory)?];
+    let parent = path.parent().ok_or(Error::ArtifactInvalid)?;
+    for component in parent.components() {
+        match component {
+            Component::RootDir => continue,
+            Component::Normal(name) => current.push(name),
+            _ => return Err(Error::ArtifactInvalid),
+        }
+        ancestors.push(vendor_app_object(&current, ObjectKind::Directory)?);
+    }
+    Ok(AnchoredPath { ancestors })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

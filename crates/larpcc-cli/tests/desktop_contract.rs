@@ -47,6 +47,10 @@ impl Fixture {
             &app.join("Contents/MacOS/ChatGPT"),
             b"invented executable metadata fixture",
         );
+        common::create_file(
+            &app.join("Contents/Info.plist"),
+            b"invented bundle metadata",
+        );
         let snapshot = CheckedSnapshot {
             profile_id: serde_json::from_str("1").unwrap(),
             provider,
@@ -164,10 +168,34 @@ fn desktop_synthetic_launch_focus_receipt_and_environment_names() {
         .to_vec();
         let cmd = command(&f.target, &env).unwrap();
         assert_eq!(cmd.remove_env, env[..4]);
-        assert_eq!(cmd.argv.len(), 5);
-        assert_eq!(cmd.argv[0], "-n");
-        assert_eq!(cmd.argv[1], "-a");
-        assert_eq!(cmd.argv[3], "--args");
+        let variable = if provider == registry::Provider::Codex {
+            "CODEX_HOME="
+        } else {
+            "CLAUDE_CONFIG_DIR="
+        };
+        let mut assignment = OsString::from(variable);
+        assignment.push(&f.target.snapshot().cli.path);
+        let mut data = OsString::from("--user-data-dir=");
+        data.push(&f.target.snapshot().desktop.path);
+        assert_eq!(
+            cmd.argv,
+            vec![
+                OsString::from("-n"),
+                "-a".into(),
+                f.base.temp.path().join("Invented App.app").into_os_string(),
+                "--env".into(),
+                assignment,
+                "--args".into(),
+                data
+            ]
+        );
+        if provider == registry::Provider::Codex {
+            assert!(
+                !cmd.argv
+                    .iter()
+                    .any(|arg| arg.to_string_lossy().contains("CLAUDE"))
+            );
+        }
         assert_eq!(
             cmd.set_env.1,
             f.base.temp.path().join("LARPCC_HOME/profiles/1/cli")
@@ -425,4 +453,75 @@ fn desktop_native_entry_never_executes_invented_targets_or_closed_claude() {
         );
         assert_eq!(checks, 0);
     }
+}
+
+#[test]
+fn desktop_claude_binding_is_qualification_pending() {
+    assert!(matches!(
+        validate_binding(
+            registry::Provider::Claude,
+            std::path::Path::new("/Applications/Claude.app")
+        ),
+        Err(registry::Error::QualificationPending)
+    ));
+}
+#[test]
+fn desktop_open_env_version_gate_refuses_unknown_and_old_os() {
+    for version in [
+        b"12.6.9".as_slice(),
+        b"",
+        b"unknown",
+        b"13.bad",
+        b"13.",
+        b"999999999999999",
+        b"13.0\0",
+    ] {
+        assert!(!desktop::synthetic::supports_environment(version));
+    }
+    for version in [b"13.0".as_slice(), b"14.7.1", b"26.1"] {
+        assert!(desktop::synthetic::supports_environment(version));
+    }
+}
+#[cfg(unix)]
+#[test]
+fn desktop_vendor_hook_accepts_group_writable_ancestor_but_managed_anchor_refuses() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = common::Fixture::new();
+    let applications = base.temp.path().join("Applications");
+    common::create_directory(&applications);
+    let app = applications.join("Invented App.app");
+    for path in [&app, &app.join("Contents"), &app.join("Contents/MacOS")] {
+        common::create_directory(path);
+    }
+    common::create_file(&app.join("Contents/MacOS/ChatGPT"), b"invented executable");
+    common::create_file(&app.join("Contents/Info.plist"), b"invented metadata");
+    std::fs::set_permissions(&applications, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let checked = fixture_app(app.clone()).unwrap();
+    assert!(platform::anchor(&app.join("Contents/MacOS/ChatGPT")).is_err());
+    checked.recheck().unwrap();
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(app.join("Contents/Info.plist"))
+        .unwrap();
+    file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(42))
+        .unwrap();
+    assert!(checked.recheck().is_err());
+}
+#[test]
+fn desktop_cheap_recheck_detects_same_inode_executable_size_change() {
+    let f = Fixture::new(registry::Provider::Codex);
+    let path = f
+        .base
+        .temp
+        .path()
+        .join("Invented App.app/Contents/MacOS/ChatGPT");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_len(2)
+        .unwrap();
+    let mut rt = Fake::default();
+    assert!(dispatch_ok(&f.target, &mut rt).is_err());
+    assert_eq!((rt.launches, rt.focuses), (0, 0));
 }

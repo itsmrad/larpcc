@@ -48,17 +48,9 @@ pub(crate) fn command(
             remove_env.push(name.clone());
         }
     }
-    let mut data = OsString::from("--user-data-dir=");
-    data.push(&target.snapshot.desktop.path);
     Ok(Command {
         executable: "/usr/bin/open",
-        argv: vec![
-            "-n".into(),
-            "-a".into(),
-            target.app.path.clone().into_os_string(),
-            "--args".into(),
-            data,
-        ],
+        argv: super::open_arguments(target),
         remove_env,
         set_env: (
             match target.snapshot.provider {
@@ -200,10 +192,16 @@ pub(crate) fn dispatch(
 
 pub(crate) fn fixture_app(path: PathBuf) -> Result<CheckedApp, Error> {
     let exe = path.join("Contents/MacOS/ChatGPT");
+    let executable = app_file(&exe)?;
+    let info = app_file(&path.join("Contents/Info.plist"))?;
     Ok(CheckedApp {
+        ancestry: app_anchor(&exe)?,
         path,
-        ancestry: platform::anchor(&exe)?,
-        executable: platform::inspect(&exe, ObjectKind::File)?.ok_or(Error::ArtifactInvalid)?,
+        executable_stamp: AppFileStamp::of(&executable)?,
+        info_stamp: AppFileStamp::of(&info)?,
+        executable,
+        info,
+        bundle_id: "com.openai.codex",
     })
 }
 pub(crate) fn fixture_directory(path: &Path) -> Result<CheckedDirectory, Error> {
@@ -229,4 +227,8 @@ pub(crate) fn singleton_pid(path: &Path, hostname: &[u8]) -> Result<i32, Inspect
 #[cfg(unix)]
 pub(crate) fn singleton_parse(target: &[u8], hostname: &[u8]) -> Result<i32, InspectionCode> {
     super::singleton::parse(target, hostname)
+}
+
+pub(crate) fn supports_environment(version: &[u8]) -> bool {
+    super::supports_open_environment(version)
 }
