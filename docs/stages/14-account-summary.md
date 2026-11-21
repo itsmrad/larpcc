@@ -122,7 +122,7 @@ Compatibility matrix:
 | Caller | CLI | Result |
 |---|---|---|
 | Script/app using `status NAME --json` | old | `status` (metadata). Unchanged. |
-| Script/app using `status NAME --json` | new | `status.account`. An old strict decoder rejects the unknown variant (fails closed). The official client did run. Callers that must not cause provider activity switch to `--no-account`. |
+| Script/app using `status NAME --json` | new | `status.account`. An old strict decoder rejects the unknown variant (fails closed). The official client ran if a row admitted. Callers that must not cause provider activity switch to `--no-account`. |
 | New caller using `--no-account --json` | old | `parse` error, exit 2 (unknown option). The app shows "update larp". |
 | New caller using `--no-account --json` | new | `status`, byte-compatible with today. |
 
