@@ -403,6 +403,10 @@ pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
     }
     const PROC_PIDREGIONPATHINFO: libc::c_int = 8;
     // SAFETY: dyld's image index zero is the main image; only use its address.
+    #[allow(
+        deprecated,
+        reason = "libc deprecates the binding, while the Darwin SDK still provides it"
+    )]
     let address = unsafe { libc::_dyld_get_image_header(0) } as u64;
     let mut region = std::mem::MaybeUninit::<Region>::zeroed();
     let size = std::mem::size_of::<Region>() as libc::c_int;
