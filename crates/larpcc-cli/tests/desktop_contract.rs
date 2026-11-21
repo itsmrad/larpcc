@@ -534,15 +534,35 @@ fn desktop_ambiguous_root_paths_refuse_before_target_admission() {
         ));
     }
 }
-#[cfg(unix)]
+fn non_utf8_root_name() -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(b"root-\xff".to_vec())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        let units: Vec<_> = "root-".encode_utf16().chain([0xd800]).collect();
+        OsString::from_wide(&units)
+    }
+}
+#[test]
+fn desktop_non_utf8_launch_path_refuses_without_filesystem_access() {
+    let root = non_utf8_root_name();
+    assert!(root.to_str().is_none());
+    assert!(matches!(
+        desktop::synthetic::validate_launch_path(std::path::Path::new(&root)),
+        Err(registry::Error::QualificationPending)
+    ));
+}
+// APFS refuses creation of an invalid-byte name; the pure validator test above
+// covers that input on macOS without asking the filesystem to represent it.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn desktop_non_utf8_root_refuses_before_target_admission() {
-    use std::os::unix::ffi::OsStringExt;
     assert!(matches!(
-        Fixture::with_root(
-            registry::Provider::Codex,
-            OsString::from_vec(b"root-\xff".to_vec())
-        ),
+        Fixture::with_root(registry::Provider::Codex, non_utf8_root_name()),
         Err(registry::Error::QualificationPending)
     ));
 }
