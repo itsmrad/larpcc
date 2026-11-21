@@ -1306,3 +1306,77 @@ fn atomic_unsafe_replacement_refuses_without_retry() {
         }
     }
 }
+
+#[test]
+fn stage09_desktop_precondition_precedes_name_and_guard() {
+    let (_temp, r) = fixture();
+    r.add(name("codex-45"), Provider::Codex).unwrap();
+    let stale = Registry::at(r.root().to_owned())
+        .unwrap()
+        .expecting(Some(0));
+    assert!(matches!(
+        stale.desktop_target(&name("missing")),
+        Err(Error::Conflict)
+    ));
+    assert!(!r.root().join("auth-locks").exists());
+    assert!(matches!(
+        r.desktop_target(&name("codex-45")),
+        Err(Error::RecoveryRequired)
+    ));
+    r.add(name("claude-work"), Provider::Claude).unwrap();
+    assert!(matches!(
+        r.desktop_target(&name("claude-work")),
+        Err(Error::QualificationPending)
+    ));
+}
+
+#[test]
+fn stage09_desktop_recheck_revision_binding_surface_and_pending_gate() {
+    let (_temp, r) = fixture();
+    r.add(name("codex-45"), Provider::Codex).unwrap();
+    r.surface(name("codex-45"), Surface::Desktop, true).unwrap();
+    let mut data = store::load(r.root()).unwrap();
+    let binding = r.root().parent().unwrap().join("ChatGPT.app");
+    data.desktop_bindings.push(model::DesktopBinding {
+        provider: Provider::Codex,
+        path: binding.clone(),
+        recorded_version: None,
+    });
+    store::persist(
+        r.root(),
+        &store::serialize(&data).unwrap(),
+        &mut false,
+        &mut false,
+    )
+    .unwrap();
+    let dir = crate::desktop::synthetic::fixture_directory;
+    let container = r.root().join("profiles/1");
+    let snapshot = crate::desktop::CheckedSnapshot {
+        profile_id: ProfileId::new(1),
+        provider: Provider::Codex,
+        revision: data.revision,
+        recorded_version: None,
+        root: dir(r.root()).unwrap(),
+        container: dir(&container).unwrap(),
+        cli: dir(&container.join("cli")).unwrap(),
+        desktop: dir(&container.join("desktop")).unwrap(),
+    };
+    r.recheck_desktop(&snapshot, &binding).unwrap();
+    assert!(matches!(
+        r.recheck_desktop(&snapshot, &r.root().parent().unwrap().join("wrong.app")),
+        Err(Error::AdmissionChanged)
+    ));
+    crate::platform::create_file(&r.root().join("share-journal.json")).unwrap();
+    assert!(matches!(
+        r.recheck_desktop(&snapshot, &binding),
+        Err(Error::RecoveryRequired)
+    ));
+    fs::remove_file(r.root().join("share-journal.json")).unwrap();
+    r.surface(name("codex-45"), Surface::Desktop, false)
+        .unwrap();
+    assert!(matches!(
+        r.recheck_desktop(&snapshot, &binding),
+        Err(Error::AdmissionChanged)
+    ));
+    drop(snapshot);
+}

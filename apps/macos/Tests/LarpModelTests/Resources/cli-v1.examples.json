@@ -862,5 +862,14 @@
       "code": "ssh_failed",
       "message": "Verify connectivity, host key and SSH authentication."
     }
+  },
+  {
+    "schema": 1,
+    "command": "skills.add",
+    "ok": false,
+    "error": {
+      "code": "forbidden_source",
+      "message": "Skill sources inside managed or vendor homes are forbidden."
+    }
   }
 ]

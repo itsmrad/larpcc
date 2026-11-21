@@ -4,6 +4,18 @@ use serde_json::{Value, json};
 fn binding(path: Option<&std::path::Path>, label: Option<&str>, state: &str) -> Value {
     json!({"path":path.map(super::display::path),"recorded_version":label,"detected_version":null,"state":state,"qualified":false})
 }
+// Display is path presence/type only; full signing validation belongs to bind/open.
+fn desktop_state(binding: Option<&super::model::DesktopBinding>) -> &'static str {
+    binding
+        .map(|b| {
+            if crate::desktop::binding_path_present(b.provider, &b.path) {
+                "ok"
+            } else {
+                "invalid"
+            }
+        })
+        .unwrap_or("unbound")
+}
 impl Registry {
     fn profile_json(&self, p: &Profile, data: &store::Data) -> Result<Value, Error> {
         let container = self.root().join("profiles").join(p.id.to_string());
@@ -37,7 +49,7 @@ impl Registry {
         Ok(
             json!({"id":p.id.to_string(),"name":p.name,"provider":p.provider,"state":p.state.unwrap_or(super::ProfileState::Active),
             "surfaces":{"cli":surface("cli",enabled.cli)?,"desktop":surface("desktop",enabled.desktop)?},"aliases":[],
-            "desktop_binding":binding(desktop.map(|b| b.path.as_path()),desktop.and_then(|b| b.recorded_version.as_deref()),if desktop.is_some(){"invalid"}else{"unbound"})}),
+            "desktop_binding":binding(desktop.map(|b| b.path.as_path()),desktop.and_then(|b| b.recorded_version.as_deref()),desktop_state(desktop))}),
         )
     }
     pub fn metadata_json(
@@ -84,7 +96,7 @@ impl Registry {
             let desktop = data.desktop_bindings.iter().find(|b| b.provider == p);
             let state = b.map(|b| if crate::provider::validate(p,&b.executable,self.root()).is_ok(){"ok"}else{"invalid"}).unwrap_or("unbound");
             [json!({"provider":p,"surface":"cli","binding":binding(b.map(|b| b.executable.as_path()),None,state)}),
-             json!({"provider":p,"surface":"desktop","binding":binding(desktop.map(|b| b.path.as_path()),desktop.and_then(|b| b.recorded_version.as_deref()),if desktop.is_some(){"invalid"}else{"unbound"})})]
+             json!({"provider":p,"surface":"desktop","binding":binding(desktop.map(|b| b.path.as_path()),desktop.and_then(|b| b.recorded_version.as_deref()),desktop_state(desktop))})]
         }).collect();
         Ok(json!({"bindings":bindings}))
     }

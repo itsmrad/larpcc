@@ -7,6 +7,17 @@ fn help_fixtures_and_missing_subcommands() {
     for (args, fixture) in [
         (vec![], "larp"),
         (vec!["cc"], "cc"),
+        (vec!["cc", "app"], "app"),
+        (vec!["cc", "app", "bind"], "app-bind"),
+        (vec!["cc", "app", "open"], "app-open"),
+        (vec!["cc", "skills"], "skills"),
+        (vec!["cc", "skills", "add"], "skills-add"),
+        (vec!["cc", "skills", "remove"], "skills-remove"),
+        (vec!["cc", "skills", "enable"], "skills-enable"),
+        (vec!["cc", "skills", "disable"], "skills-disable"),
+        (vec!["cc", "skills", "list"], "skills-list"),
+        (vec!["cc", "skills", "matrix"], "skills-matrix"),
+        (vec!["cc", "skills", "sync"], "skills-sync"),
         (vec!["cc", "profile"], "profile"),
         (vec!["cc", "provider"], "provider"),
         (vec!["cc", "provider", "bind"], "bind"),
@@ -88,4 +99,32 @@ fn version_and_usage_errors_do_not_create_root() {
     assert!(err.contains("<NEW_NAME>") && err.contains("invalid profile name"));
     assert!(!f.root.exists());
     assert_eq!(before, f.outside_snapshot());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn stage09_app_closed_os_json_gate_precedes_root_io() {
+    let f = Fixture::new();
+    for (args, command) in [
+        (vec!["cc", "app", "open", "codex-45", "--json"], "app.open"),
+        (
+            vec![
+                "cc",
+                "app",
+                "bind",
+                "codex",
+                "/invented/ChatGPT.app",
+                "--json",
+            ],
+            "app.bind",
+        ),
+    ] {
+        let out = capture(f.command(&args)).unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        assert!(out.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["command"], command);
+        assert_eq!(value["error"]["code"], "qualification_pending");
+        assert!(!f.root.exists());
+    }
 }
