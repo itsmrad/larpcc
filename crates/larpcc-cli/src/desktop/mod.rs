@@ -21,13 +21,13 @@ pub(crate) struct CheckedApp {
     info: CheckedObject,
     executable_stamp: AppFileStamp,
     info_stamp: AppFileStamp,
-    // The checked Info.plist fingerprint retains this signed metadata association.
-    bundle_id: &'static str,
 }
 #[derive(PartialEq, Eq)]
 struct AppFileStamp {
     size: u64,
     modified: std::time::SystemTime,
+    #[cfg(unix)]
+    changed: (i64, i64),
 }
 impl AppFileStamp {
     fn of(object: &CheckedObject) -> Result<Self, Error> {
@@ -35,7 +35,11 @@ impl AppFileStamp {
             .file
             .metadata()
             .map_err(|_| Error::AdmissionChanged)?;
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
         Ok(Self {
+            #[cfg(unix)]
+            changed: (meta.ctime(), meta.ctime_nsec()),
             size: meta.len(),
             modified: meta.modified().map_err(|_| Error::AdmissionChanged)?,
         })
@@ -54,16 +58,18 @@ fn app_file(path: &Path) -> Result<CheckedObject, Error> {
     platform::inspect(path, ObjectKind::File)?.ok_or(Error::ArtifactInvalid)
 }
 // Shared fixed argument vector for the native launcher and invented-target tests.
-fn open_arguments(target: &ValidatedDesktopTarget) -> Vec<std::ffi::OsString> {
+fn open_arguments(target: &ValidatedDesktopTarget) -> Result<Vec<std::ffi::OsString>, Error> {
     use std::ffi::OsString;
+    let cli = launch_path(&target.snapshot.cli.path)?;
+    let desktop = launch_path(&target.snapshot.desktop.path)?;
     let mut environment = OsString::from(match target.snapshot.provider {
         Provider::Codex => "CODEX_HOME=",
         Provider::Claude => "CLAUDE_CONFIG_DIR=",
     });
-    environment.push(&target.snapshot.cli.path);
+    environment.push(cli);
     let mut data = OsString::from("--user-data-dir=");
-    data.push(&target.snapshot.desktop.path);
-    vec![
+    data.push(desktop);
+    Ok(vec![
         "-n".into(),
         "-a".into(),
         target.app.path.clone().into_os_string(),
@@ -71,7 +77,19 @@ fn open_arguments(target: &ValidatedDesktopTarget) -> Vec<std::ffi::OsString> {
         environment,
         "--args".into(),
         data,
-    ]
+    ])
+}
+fn launch_path(path: &Path) -> Result<&str, Error> {
+    let value = path.to_str().ok_or(Error::QualificationPending)?;
+    if value.bytes().any(|b| b == b'=' || b < 0x20 || b == 0x7f) {
+        return Err(Error::QualificationPending);
+    }
+    Ok(value)
+}
+fn provider_environment_name(name: &[u8]) -> bool {
+    [b"CLAUDE".as_slice(), b"ANTHROPIC_", b"CODEX_", b"OPENAI_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
 }
 fn supports_open_environment(version: &[u8]) -> bool {
     let Ok(version) = std::str::from_utf8(version) else {
@@ -202,6 +220,8 @@ impl ValidatedDesktopTarget {
         Ok(target)
     }
     fn recheck(&self) -> Result<(), Error> {
+        launch_path(&self.snapshot.cli.path)?;
+        launch_path(&self.snapshot.desktop.path)?;
         self.app.recheck()?;
         let s = &self.snapshot;
         if !s.root.path.is_absolute()
@@ -244,9 +264,6 @@ impl CheckedApp {
                 .zip(&self.ancestry.ancestors)
                 .any(|(a, b)| a.identity != b.identity)
         {
-            return Err(Error::AdmissionChanged);
-        }
-        if self.bundle_id != "com.openai.codex" {
             return Err(Error::AdmissionChanged);
         }
         for (path, held, expected) in [

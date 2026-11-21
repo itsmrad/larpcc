@@ -29,7 +29,6 @@ pub(crate) struct Command {
     pub executable: &'static str,
     pub argv: Vec<OsString>,
     pub remove_env: Vec<OsString>,
-    pub set_env: (&'static str, PathBuf),
 }
 pub(crate) fn command(
     target: &ValidatedDesktopTarget,
@@ -40,25 +39,14 @@ pub(crate) fn command(
     }
     let mut remove_env = Vec::new();
     for name in env_names {
-        let name_text = name.to_str().ok_or(InspectionCode::Malformed)?;
-        if name_text.starts_with("CLAUDE")
-            || name_text.starts_with("ANTHROPIC_")
-            || name_text == "CODEX_HOME"
-        {
+        if super::provider_environment_name(name.as_encoded_bytes()) {
             remove_env.push(name.clone());
         }
     }
     Ok(Command {
         executable: "/usr/bin/open",
-        argv: super::open_arguments(target),
+        argv: super::open_arguments(target).map_err(|_| InspectionCode::Malformed)?,
         remove_env,
-        set_env: (
-            match target.snapshot.provider {
-                Provider::Claude => "CLAUDE_CONFIG_DIR",
-                Provider::Codex => "CODEX_HOME",
-            },
-            target.snapshot.cli.path.clone(),
-        ),
     })
 }
 fn matches(process: &Process, target: &ValidatedDesktopTarget) -> Result<bool, InspectionCode> {
@@ -201,7 +189,6 @@ pub(crate) fn fixture_app(path: PathBuf) -> Result<CheckedApp, Error> {
         info_stamp: AppFileStamp::of(&info)?,
         executable,
         info,
-        bundle_id: "com.openai.codex",
     })
 }
 pub(crate) fn fixture_directory(path: &Path) -> Result<CheckedDirectory, Error> {
@@ -231,4 +218,8 @@ pub(crate) fn singleton_parse(target: &[u8], hostname: &[u8]) -> Result<i32, Ins
 
 pub(crate) fn supports_environment(version: &[u8]) -> bool {
     super::supports_open_environment(version)
+}
+
+pub(crate) fn validate_launch_path(path: &Path) -> Result<(), Error> {
+    super::launch_path(path).map(|_| ())
 }
