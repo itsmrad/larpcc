@@ -166,7 +166,7 @@ public enum MenuBarSummary {
         var parts = ["\(kind.title) window", "\(Int(window.leftPercent.rounded())) percent left",
                      ResetCountdown.spoken(resetsAt: window.resetsAt, now: now)]
         if let word = UsageLevel(leftPercent: window.leftPercent).word { parts.append(word.lowercased()) }
-        if UsagePace.isAhead(window, kind: kind, now: now) { parts.append("ahead of pace") }
+        if UsagePace.isAhead(window, kind: kind, now: now) { parts.append("faster than even pace") }
         return parts.joined(separator: ", ")
     }
 }

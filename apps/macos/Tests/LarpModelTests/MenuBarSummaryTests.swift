@@ -116,7 +116,7 @@ final class MenuBarSummaryTests: XCTestCase {
                        "5-hour window, 9 percent left, resets in 41 minutes, almost out")
         let ahead = UsageWindow(usedPercent: 62, resetsAt: now.addingTimeInterval(3.5 * 86_400))
         XCTAssertEqual(MenuBarSummary.spokenRow(kind: .weekly, window: ahead, now: now),
-                       "Weekly window, 38 percent left, resets in 3 days 12 hours, ahead of pace")
+                       "Weekly window, 38 percent left, resets in 3 days 12 hours, faster than even pace")
         let unknown = UsageWindow(usedPercent: 38, resetsAt: nil)
         XCTAssertEqual(MenuBarSummary.spokenRow(kind: .fiveHour, window: unknown, now: now),
                        "5-hour window, 62 percent left, reset time unknown")

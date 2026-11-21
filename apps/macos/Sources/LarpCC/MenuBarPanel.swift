@@ -344,7 +344,7 @@ struct MenuBarWindowRow: View {
                         .monospacedDigit()
                     Spacer()
                     if UsagePace.isAhead(window, kind: kind, now: now) {
-                        Text("Ahead of pace")
+                        Text("Faster than even pace")
                     }
                 }
                 .font(.caption)

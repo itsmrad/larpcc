@@ -78,6 +78,14 @@ extension AppStore {
     }
 }
 
+/// SwiftUI quits an app whose only window closes. While the menu bar item is shown,
+/// closing the window keeps LarpCC running so the panel (and "Hide Dock icon") still work.
+final class MenuBarAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !MenuBarPreferences.shown
+    }
+}
+
 // MARK: - General › Menu Bar
 
 struct MenuBarSettingsSection: View {

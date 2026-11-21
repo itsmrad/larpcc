@@ -54,7 +54,7 @@ and both windows, one chosen profile's tightest window, or the glyph alone; with
 usage data it is always the glyph alone. The needle drops below 25% and 10% left.
 
 The panel lists one card per enabled profile, tightest first: 5-hour and weekly
-bars of percent left with an even-pace tick ("Ahead of pace" when usage runs
+bars of percent left with an even-pace tick ("Faster than even pace" when usage runs
 faster), "Resets in 2h 13m" countdowns, limit-reset availability (always shown,
 also on each profile page as "Limit resets"), when it was updated, and an Open
 desktop app button (enabled surfaces, never with sample data). Open in Terminal

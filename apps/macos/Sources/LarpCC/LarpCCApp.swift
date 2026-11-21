@@ -5,6 +5,7 @@ import LarpModel
 struct LarpCCApp: App {
     @StateObject private var store = AppStore(client: FixtureLarpClient())
     @AppStorage(MenuBarPreferences.shownKey) private var menuBarShown = true
+    @NSApplicationDelegateAdaptor(MenuBarAppDelegate.self) private var menuBarDelegate
     init() {
         if CommandLine.arguments.contains("--validate-contract-resource") {
             do { try ProcessLarpClient.validateBundledContract(); exit(0) }
