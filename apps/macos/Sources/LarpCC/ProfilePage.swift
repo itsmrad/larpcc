@@ -6,12 +6,31 @@ struct ProfilePage: View {
     let snapshot: Snapshot
     let profile: Profile
     @State private var confirmingDelete = false
+    @State private var renaming = false
+    @State private var binding: BindTarget?
+    @State private var confirmation: Confirmation?
 
     var body: some View {
         Form {
             Section {
                 header
-                if profile.needsAttention {
+                if profile.recoverable {
+                    LabeledContent {
+                        Button("Finish Deleting…", role: .destructive) {
+                            confirmation = Confirmation(title: "Finish deleting “\(profile.name)”?",
+                                message: "Larp completes the interrupted delete and removes this profile's folder. Quit any Claude or Codex sessions using this profile first — the command line and the desktop app.",
+                                button: "Finish Deleting", action: .recover(profileID: profile.id))
+                        }
+                        .foregroundStyle(.red)
+                    } label: {
+                        Label {
+                            Text("Delete was interrupted")
+                            Text("The profile's folder is still on disk until the delete finishes.")
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill").symbolRenderingMode(.multicolor)
+                        }
+                    }
+                } else if profile.needsAttention {
                     Label {
                         Text("Needs attention")
                         Text("A folder, alias or app link differs from what larp expects.")
@@ -25,8 +44,14 @@ struct ProfilePage: View {
                     Text("Desktop app")
                     Text("Keeps a separate \(profile.provider.desktopApp) data folder for this profile.")
                 }
-                if profile.desktopEnabled {
-                    ValueRow("App version", value: profile.desktopBinding?.versionTitle ?? "Not detected")
+                LabeledContent {
+                    Button("Bind…") { binding = BindTarget(provider: profile.provider, kind: .app) }
+                } label: {
+                    Text("\(profile.provider.desktopApp)")
+                    Text(profile.desktopBinding?.state == .ok
+                         ? [profile.desktopBinding?.displayPath, profile.desktopBinding.map(\.versionTitle)].compactMap { $0 }.joined(separator: " · ")
+                         : "Not bound. Shared by every \(profile.provider.title) profile.")
+                        .truncationMode(.middle)
                 }
                 ValueRow("Command aliases", value: profile.aliases.isEmpty ? "None" : profile.aliases.joined(separator: ", "))
                 ValueRow("Folder", value: profile.folder, selectable: true)
@@ -58,6 +83,17 @@ struct ProfilePage: View {
 
             Section {
                 LabeledContent {
+                    Button("Forget…") {
+                        confirmation = Confirmation(title: "Forget “\(profile.name)”?",
+                            message: "Larp stops managing this profile and keeps its folder on disk. Remove its command names and shared items first. The ID is retired and the folder can't be re-attached. Keychain items and remote grants are unchanged.",
+                            button: "Forget Profile", action: .forget(profileID: profile.id))
+                    }
+                } label: {
+                    Text("Forget profile")
+                    Text(store.isFixture ? "Removes this sample profile from memory."
+                         : "Stops managing it and keeps the folder. Remove its command names first.")
+                }
+                LabeledContent {
                     Button("Delete…", role: .destructive) { confirmingDelete = true }
                         .foregroundStyle(.red)
                 } label: {
@@ -69,15 +105,19 @@ struct ProfilePage: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $renaming) { RenameProfileSheet(store: store, profile: profile) }
+        .bindSheet($binding, store: store)
+        .confirming($confirmation, store: store)
         .confirmationDialog("Delete “\(profile.name)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button(store.isFixture ? "Delete Sample Profile" : "Delete Profile Folder", role: .destructive) {
                 store.perform(.delete(profileID: profile.id))
             }
+            .disabled(store.busy)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(store.isFixture
                  ? "This removes the sample profile and its sample assignments from memory. No folder or alias on disk is removed."
-                 : "Larp removes the managed profile folder and its aliases. This deletes files; it is not a metadata-only forget. Keychain items and remote grants may remain, and no logout is performed.")
+                 : "Quit any Claude or Codex sessions using this profile first — the command line and the desktop app. Larp removes the managed profile folder and its aliases. This deletes files; it is not a metadata-only forget. Keychain items and remote grants may remain, and no logout is performed.")
         }
     }
 
@@ -91,6 +131,8 @@ struct ProfilePage: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            Spacer(minLength: 12)
+            Button("Rename…") { renaming = true }
         }
         .padding(.vertical, 4)
     }
