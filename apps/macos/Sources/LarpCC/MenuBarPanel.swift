@@ -148,11 +148,6 @@ struct MenuBarPanel: View {
             hasKeyboardFocus = true
             store.menuBarPanelOpened()
         }
-        .onChange(of: profiles.map(\.id)) { _, ids in
-            if let desktopProfileID, !ids.contains(desktopProfileID) {
-                self.desktopProfileID = nil
-            }
-        }
         .onChange(of: store.busy) { _, busy in
             guard !busy, recoverAfterAction else { return }
             recoverAfterAction = false
@@ -368,7 +363,7 @@ struct MenuBarPanel: View {
 
     private var refreshTitle: String {
         if store.usageLoading { return "Updating Usage…" }
-        return source == .live ? "Refresh" : "Re-read Usage"
+        return "Refresh"
     }
 
     private func menuRow(_ item: Item, title: String, shortcut: String = "", enabled: Bool = true) -> some View {

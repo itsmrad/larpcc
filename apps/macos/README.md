@@ -75,7 +75,8 @@ and a real CLI configuration.
 
 Use ↑/↓ to move between sections and footer actions. Use ←/→ or Tab to switch
 tabs. Return opens Settings for a profile section or activates a footer row.
-Esc closes the panel. ⌘R refreshes, ⌘, opens Settings, and ⌘Q quits.
+Esc closes the panel. The footer reads “Refresh ⌘R” in both Local and Live
+modes. ⌘R refreshes, ⌘, opens Settings, and ⌘Q quits.
 
 In **Local** mode, opening the panel re-reads saved usage. In **Live** mode,
 only Refresh or the existing opt-in interval reads usage. The panel uses
@@ -103,6 +104,7 @@ Release builds exclude the snapshot hook. Capture the live panel there with
   provider tabs. Confirm reserve, deficit, on-pace, all three reset-credit
   states, and the profile with no saved usage. Check the full-width hover
   highlight, disabled sample desktop action, and overflow on a small screen.
+  Confirm the footer reads “Refresh ⌘R” in both Local and Live modes.
 - **C. Refresh** Reopen in Local mode and check the update age. Use ⌘R to
   re-read usage.
 - **D. Keyboard and VoiceOver** Move through sections and footer rows, switch
