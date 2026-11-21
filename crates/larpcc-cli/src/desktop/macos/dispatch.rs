@@ -324,10 +324,7 @@ fn environment_names() -> Result<Vec<std::ffi::OsString>, Error> {
             if !complete || name.is_empty() {
                 return Err(Error::AdmissionChanged);
             }
-            if name.starts_with(b"CLAUDE")
-                || name.starts_with(b"ANTHROPIC_")
-                || name == b"CODEX_HOME"
-            {
+            if crate::desktop::provider_environment_name(&name) {
                 names.push(std::ffi::OsString::from_vec(name));
             }
         }
@@ -343,7 +340,7 @@ fn launch(
     require_open_environment()?;
     let names = environment_names()?;
     let mut command = Command::new("/usr/bin/open");
-    command.args(crate::desktop::open_arguments(target));
+    command.args(crate::desktop::open_arguments(target)?);
     for name in names {
         command.env_remove(name);
     }

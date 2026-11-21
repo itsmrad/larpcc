@@ -29,8 +29,14 @@ struct Fixture {
 }
 impl Fixture {
     fn new(provider: registry::Provider) -> Self {
+        Self::with_root(provider, "LARPCC_HOME".into()).unwrap()
+    }
+    fn with_root(
+        provider: registry::Provider,
+        root_name: OsString,
+    ) -> Result<Self, registry::Error> {
         let base = common::Fixture::new();
-        let root = base.temp.path().join("LARPCC_HOME");
+        let root = base.temp.path().join(root_name);
         common::create_directory(&root);
         common::create_directory(&root.join("profiles"));
         let container = root.join("profiles/1");
@@ -61,9 +67,8 @@ impl Fixture {
             cli: fixture_directory(&cli).unwrap(),
             desktop: fixture_directory(&desktop).unwrap(),
         };
-        let target =
-            ValidatedDesktopTarget::from_checked(snapshot, fixture_app(app).unwrap()).unwrap();
-        Self { base, target }
+        let target = ValidatedDesktopTarget::from_checked(snapshot, fixture_app(app).unwrap())?;
+        Ok(Self { base, target })
     }
     fn process(&self) -> Process {
         // Invented identities only; never query or address an operating-system PID.
@@ -160,6 +165,8 @@ fn desktop_synthetic_launch_focus_receipt_and_environment_names() {
             "CLAUDE_EXTRA",
             "ANTHROPIC_API_KEY",
             "CODEX_HOME",
+            "CODEX_EXTRA",
+            "OPENAI_API_KEY",
             "HOME",
             "PATH",
             "UNRELATED",
@@ -167,7 +174,7 @@ fn desktop_synthetic_launch_focus_receipt_and_environment_names() {
         .map(Into::into)
         .to_vec();
         let cmd = command(&f.target, &env).unwrap();
-        assert_eq!(cmd.remove_env, env[..4]);
+        assert_eq!(cmd.remove_env, env[..6]);
         let variable = if provider == registry::Provider::Codex {
             "CODEX_HOME="
         } else {
@@ -196,18 +203,6 @@ fn desktop_synthetic_launch_focus_receipt_and_environment_names() {
                     .any(|arg| arg.to_string_lossy().contains("CLAUDE"))
             );
         }
-        assert_eq!(
-            cmd.set_env.1,
-            f.base.temp.path().join("LARPCC_HOME/profiles/1/cli")
-        );
-        assert_eq!(
-            cmd.set_env.0,
-            if provider == registry::Provider::Claude {
-                "CLAUDE_CONFIG_DIR"
-            } else {
-                "CODEX_HOME"
-            }
-        );
         rt.processes = vec![f.process()];
         assert_eq!(dispatch_ok(&f.target, &mut rt).unwrap().outcome, "focused");
         assert_eq!((rt.launches, rt.focuses), (1, 1));
@@ -524,4 +519,86 @@ fn desktop_cheap_recheck_detects_same_inode_executable_size_change() {
     let mut rt = Fake::default();
     assert!(dispatch_ok(&f.target, &mut rt).is_err());
     assert_eq!((rt.launches, rt.focuses), (0, 0));
+}
+
+#[test]
+fn desktop_ambiguous_root_paths_refuse_before_target_admission() {
+    #[cfg(unix)]
+    let roots = ["root=other", "root\nother", "root\tother", "root\x7fother"];
+    #[cfg(windows)]
+    let roots = ["root=other"];
+    for root in roots {
+        assert!(matches!(
+            Fixture::with_root(registry::Provider::Codex, root.into()),
+            Err(registry::Error::QualificationPending)
+        ));
+    }
+}
+#[cfg(unix)]
+#[test]
+fn desktop_non_utf8_root_refuses_before_target_admission() {
+    use std::os::unix::ffi::OsStringExt;
+    assert!(matches!(
+        Fixture::with_root(
+            registry::Provider::Codex,
+            OsString::from_vec(b"root-\xff".to_vec())
+        ),
+        Err(registry::Error::QualificationPending)
+    ));
+}
+#[cfg(unix)]
+#[test]
+fn desktop_same_inode_rewrite_with_restored_mtime_refuses() {
+    use std::{io::Write, os::unix::fs::MetadataExt};
+    for relative in ["Contents/MacOS/ChatGPT", "Contents/Info.plist"] {
+        let f = Fixture::new(registry::Provider::Codex);
+        let path = f.base.temp.path().join("Invented App.app").join(relative);
+        let before = std::fs::metadata(&path).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(&vec![b'X'; before.len() as usize]).unwrap();
+        file.set_modified(before.modified().unwrap()).unwrap();
+        let after = file.metadata().unwrap();
+        assert_eq!(
+            (
+                after.dev(),
+                after.ino(),
+                after.len(),
+                after.modified().unwrap()
+            ),
+            (
+                before.dev(),
+                before.ino(),
+                before.len(),
+                before.modified().unwrap()
+            )
+        );
+        assert_ne!(
+            (after.ctime(), after.ctime_nsec()),
+            (before.ctime(), before.ctime_nsec())
+        );
+        let mut rt = Fake::default();
+        assert!(dispatch_ok(&f.target, &mut rt).is_err());
+        assert_eq!((rt.launches, rt.focuses), (0, 0));
+    }
+}
+
+#[test]
+fn desktop_forwarded_paths_refuse_open_delimiters_and_controls() {
+    for path in [
+        "/root/cli=other",
+        "/root/\0cli",
+        "/root/\x01cli",
+        "/root/\x1fcli",
+        "/root/\x7fcli",
+    ] {
+        assert!(matches!(
+            desktop::synthetic::validate_launch_path(std::path::Path::new(path)),
+            Err(registry::Error::QualificationPending)
+        ));
+    }
+    assert!(
+        desktop::synthetic::validate_launch_path(std::path::Path::new("/root/with space/é"))
+            .is_ok()
+    );
 }

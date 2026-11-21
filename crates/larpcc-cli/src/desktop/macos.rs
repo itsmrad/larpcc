@@ -8,6 +8,9 @@ use std::{
     },
 };
 type Ref = *const c_void;
+// SecStaticCode.h: StrictValidate | CheckAllArchitectures | CheckNestedCode.
+// Real-bundle timing proof is pending; keep the flags together for the budget decision.
+const STATIC_CODE_FLAGS: u32 = (1 << 4) | (1 << 0) | (1 << 3);
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CFURLCreateFromFileSystemRepresentation(
@@ -84,8 +87,7 @@ pub(super) fn verify_signature(path: &Path) -> Result<(), Error> {
             return Err(Error::ArtifactInvalid);
         }
         let code = Owned::new(code)?;
-        // kSecCSStrictValidate | kSecCSCheckAllArchitectures.
-        if SecStaticCodeCheckValidity(code.0, (1 << 4) | 1, req.0) != 0 {
+        if SecStaticCodeCheckValidity(code.0, STATIC_CODE_FLAGS, req.0) != 0 {
             return Err(Error::ArtifactInvalid);
         }
     }
@@ -135,7 +137,6 @@ pub(super) fn validate(path: &Path) -> Result<CheckedApp, Error> {
         info,
         executable_stamp,
         info_stamp,
-        bundle_id: "com.openai.codex",
     };
     app.recheck()?;
     Ok(app)
