@@ -25,6 +25,16 @@ impl From<skills::Error> for Error {
     fn from(e: skills::Error) -> Self {
         match e {
             skills::Error::TooLarge => Error::TooLarge,
+            skills::Error::Io => Error::Io {
+                action: "access skill filesystem",
+                path: PathBuf::from("skills"),
+                source: std::io::Error::other("skill filesystem I/O failed"),
+            },
+            skills::Error::FileLimit => Error::Io {
+                action: "open skill metadata",
+                path: PathBuf::from("skills"),
+                source: std::io::Error::other("file descriptor limit exhausted"),
+            },
             skills::Error::Drift | skills::Error::Collision => Error::Drift,
             _ => Error::Unsafe {
                 path: PathBuf::from("skills"),
@@ -171,8 +181,53 @@ impl SkillsAction {
         }
     }
 }
-// Refuse known homes before opening the selected source or any package file.
-fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
+// Compare excluded directory identities before opening any package file.
+#[derive(Clone, Default)]
+struct VendorHomes {
+    configured: Vec<PathBuf>,
+    default_home: Option<PathBuf>,
+}
+impl VendorHomes {
+    #[cfg(not(test))]
+    fn from_environment() -> Self {
+        #[cfg(unix)]
+        let default_home = std::env::var_os("HOME").map(PathBuf::from);
+        #[cfg(windows)]
+        let default_home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from);
+        Self {
+            configured: ["CLAUDE_CONFIG_DIR", "CODEX_HOME"]
+                .into_iter()
+                .filter_map(std::env::var_os)
+                .map(PathBuf::from)
+                .collect(),
+            default_home,
+        }
+    }
+    #[cfg(test)]
+    fn from_environment() -> Self {
+        panic!("skills unit tests must inject private vendor homes");
+    }
+}
+fn home_io_error(source: std::io::Error) -> Error {
+    if platform::fd_exhausted(&source) {
+        Error::Io {
+            action: "inspect skill exclusion",
+            path: PathBuf::from("skills"),
+            source,
+        }
+    } else {
+        Error::ForbiddenSource
+    }
+}
+fn home_error(error: Error) -> Error {
+    match error {
+        Error::Io { source, .. } => home_io_error(source),
+        _ => Error::ForbiddenSource,
+    }
+}
+fn source_package(root: &Path, source: &Path, vendor: &VendorHomes) -> Result<Package, Error> {
     for component in source.components() {
         if let std::path::Component::Normal(name) = component {
             let name = name.to_string_lossy().to_ascii_lowercase();
@@ -181,29 +236,60 @@ fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
             }
         }
     }
-    for forbidden in std::iter::once(root.to_path_buf()).chain(
-        ["CLAUDE_CONFIG_DIR", "CODEX_HOME"]
-            .into_iter()
-            .filter_map(std::env::var_os)
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute()),
-    ) {
-        if platform::contains_path(source, &forbidden)? {
-            return Err(Error::ForbiddenSource);
-        }
+    if platform::contains_path(source, root)? {
+        return Err(Error::ForbiddenSource);
     }
     let (object, held) = skills::source_directory(source)?;
-    // Retained directory identities catch native alternate spellings of the root.
-    if let Some(root_object) = platform::inspect(root, ObjectKind::Directory)?
-        && (object.identity == root_object.identity
+    let mut homes = vec![root.to_path_buf()];
+    for home in &vendor.configured {
+        if home.as_os_str().is_empty() {
+            return Err(Error::ForbiddenSource);
+        }
+        homes.push(home.clone());
+    }
+    if let Some(home) = &vendor.default_home {
+        let entries = match fs::read_dir(home) {
+            Ok(entries) => Some(entries),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(home_io_error(error)),
+        };
+        for entry in entries.into_iter().flatten() {
+            let entry = entry.map_err(home_io_error)?;
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.starts_with(".claude") || name.starts_with(".codex") || name == ".agents" {
+                // Default namespaces constrain directories only. Resolve aliases
+                // using metadata; file/dangling aliases never open file contents.
+                match fs::metadata(entry.path()) {
+                    Ok(metadata) if metadata.is_dir() => homes.push(entry.path()),
+                    Err(error) if platform::fd_exhausted(&error) => {
+                        return Err(home_io_error(error));
+                    }
+                    _ => (),
+                }
+            }
+        }
+    }
+    for home in homes {
+        let Some((directory, ancestors)) = platform::skill_home(&home).map_err(home_error)? else {
+            continue;
+        };
+        if object.identity == directory.identity
+            || ancestors
+                .ancestors
+                .iter()
+                .any(|p| p.identity == object.identity)
             || held
                 .ancestors
                 .iter()
-                .any(|p| p.identity == root_object.identity))
-    {
-        return Err(Error::ForbiddenSource);
+                .any(|p| p.identity == directory.identity)
+        {
+            return Err(Error::ForbiddenSource);
+        }
+        // Each home is compared and closed here; only source handles survive.
+        drop(directory);
+        drop(ancestors);
     }
-    Package::source(source).map_err(Into::into)
+    Package::source(source, &object.identity).map_err(Into::into)
 }
 
 fn digest_valid(d: &str) -> bool {
@@ -771,6 +857,13 @@ fn fault(_phase: &str) -> Result<(), Error> {
 
 impl Registry {
     pub fn skills(&self, action: SkillsAction) -> Result<Value, Error> {
+        self.skills_with_homes(action, None)
+    }
+    fn skills_with_homes(
+        &self,
+        action: SkillsAction,
+        homes: Option<&VendorHomes>,
+    ) -> Result<Value, Error> {
         let _ancestors = platform::anchor(self.root())?;
         let read_only = matches!(action, SkillsAction::List | SkillsAction::Matrix);
         if read_only
@@ -853,7 +946,8 @@ impl Registry {
                         .map_err(|e| paths::io("resolve source", Path::new("skills"), e))?
                         .join(source)
                 };
-                let snapshot = source_package(self.root(), &source)?;
+                let homes = homes.cloned().unwrap_or_else(VendorHomes::from_environment);
+                let snapshot = source_package(self.root(), &source, &homes)?;
                 target_name = Some(name.clone());
                 index.skills.push(Skill {
                     name: name.clone(),
@@ -1052,11 +1146,26 @@ mod tests {
         let r = Registry::at(temp.path().join("root")).unwrap();
         (temp, r, source)
     }
+    fn private_skills(r: &Registry, action: SkillsAction) -> Result<Value, Error> {
+        let homes = VendorHomes {
+            configured: vec![],
+            default_home: Some(r.root().parent().unwrap().join("fake-home")),
+        };
+        r.skills_with_homes(action, Some(&homes))
+    }
+    #[test]
+    #[should_panic(expected = "skills unit tests must inject private vendor homes")]
+    fn stage06_unit_tests_forbid_ambient_vendor_home_access() {
+        VendorHomes::from_environment();
+    }
     fn add(r: &Registry, source: &Path) -> Value {
-        r.skills(SkillsAction::Add {
-            source: source.into(),
-            name: name("example"),
-        })
+        private_skills(
+            r,
+            SkillsAction::Add {
+                source: source.into(),
+                name: name("example"),
+            },
+        )
         .unwrap()
     }
     fn switch(r: &Registry, enabled: bool) -> Result<Value, Error> {
@@ -1165,10 +1274,13 @@ mod tests {
             r.add(name("claude-work"), Provider::Claude).unwrap();
             set_fault(Some(phase));
             assert!(
-                r.skills(SkillsAction::Add {
-                    source,
-                    name: name("example")
-                })
+                private_skills(
+                    &r,
+                    SkillsAction::Add {
+                        source,
+                        name: name("example")
+                    }
+                )
                 .is_err()
             );
             set_fault(None);
@@ -1196,10 +1308,13 @@ mod tests {
             let (_temp, r, source) = fixture();
             skills::set_io_fault(Some(phase));
             assert!(
-                r.skills(SkillsAction::Add {
-                    source,
-                    name: name("example")
-                })
+                private_skills(
+                    &r,
+                    SkillsAction::Add {
+                        source,
+                        name: name("example")
+                    }
+                )
                 .is_err()
             );
             skills::set_io_fault(None);
@@ -1314,10 +1429,13 @@ mod tests {
         platform::create_directory(&dir.join("example")).unwrap();
         let before = fs::read(r.root().join("registry.json")).unwrap();
         assert!(matches!(
-            r.skills(SkillsAction::Add {
-                source: source.clone(),
-                name: name("example")
-            }),
+            private_skills(
+                &r,
+                SkillsAction::Add {
+                    source: source.clone(),
+                    name: name("example")
+                }
+            ),
             Err(Error::Drift)
         ));
         assert_eq!(fs::read(r.root().join("registry.json")).unwrap(), before);
@@ -1363,7 +1481,13 @@ mod tests {
         .unwrap();
         assert!(!copy.exists());
         fs::hard_link(source.join("SKILL.md"), source.join("hardlink")).unwrap();
-        assert!(Package::source(&source).is_err());
+        assert!(
+            Package::source(
+                &source,
+                &skills::source_directory(&source).unwrap().0.identity
+            )
+            .is_err()
+        );
     }
     fn remove_profile_artifact(path: &Path) {
         #[cfg(unix)]
@@ -1498,10 +1622,13 @@ mod tests {
         let guard =
             crate::launch::admission::acquire_auth_guard(r.root(), ProfileId::new(2)).unwrap();
         assert!(matches!(
-            r.skills(SkillsAction::Add {
-                source,
-                name: name("example")
-            }),
+            private_skills(
+                &r,
+                SkillsAction::Add {
+                    source,
+                    name: name("example")
+                }
+            ),
             Err(Error::AuthBusy)
         ));
         let first =
@@ -1517,7 +1644,11 @@ mod tests {
         let parent = source.parent().unwrap().join("copies");
         platform::create_directory(&parent).unwrap();
         let copy = parent.join("example");
-        let package = Package::source(&source).unwrap();
+        let package = Package::source(
+            &source,
+            &skills::source_directory(&source).unwrap().0.identity,
+        )
+        .unwrap();
         package.resume_copy(&copy).unwrap();
         let receipt = OwnedCopy::capture(&copy, &package.sha256).unwrap();
         receipt.resume_remove(&copy).unwrap();
@@ -1525,5 +1656,44 @@ mod tests {
         Artifact::Copy { receipt }.remove(&copy).unwrap();
         assert!(!copy.exists());
         assert!(!r.root().exists());
+    }
+    #[test]
+    fn stage06_source_reopened_identity_must_match_authorized_directory() {
+        let (temp, _r, source) = fixture();
+        let (checked, ancestors) = skills::source_directory(&source).unwrap();
+        let expected = checked.identity;
+        drop(checked.file);
+        drop(ancestors);
+        fs::rename(&source, temp.path().join("original-source")).unwrap();
+        platform::create_directory(&source).unwrap();
+        platform::create_file(&source.join("SKILL.md"))
+            .unwrap()
+            .file
+            .write_all(b"replacement")
+            .unwrap();
+        assert!(Package::source(&source, &expected).is_err());
+        let current = skills::source_directory(&source).unwrap().0.identity;
+        assert!(Package::source(&source, &current).is_ok());
+    }
+    #[test]
+    fn stage06_exclusion_descriptor_exhaustion_is_io_not_forbidden_source() {
+        #[cfg(unix)]
+        let codes = [libc::EMFILE, libc::ENFILE];
+        #[cfg(windows)]
+        let codes = [4, 1450];
+        for code in codes {
+            assert!(matches!(
+                home_error(Error::Io {
+                    action: "test",
+                    path: "private-home".into(),
+                    source: std::io::Error::from_raw_os_error(code)
+                }),
+                Error::Io { .. }
+            ));
+        }
+        assert!(matches!(
+            home_io_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            Error::ForbiddenSource
+        ));
     }
 }

@@ -44,8 +44,10 @@ A package requires `SKILL.md` and portable ASCII relative filenames. Trusted
 0755/0644 sources are accepted; symlinks, reparse points, hardlinks, special files,
 unsafe ancestry and case-insensitive collisions refuse. Limits are 1,000 files,
 16 MiB and 16 path levels, with at most 1,000 directories. Nothing executes.
-Sources inside the managed root, `.claude*`, `.codex*`, `.agents` or configured
-vendor homes are refused before any package contents are read.
+Sources equal to, containing, or inside managed/vendor homes are refused by
+directory identity before package contents are read. Dot entries, `auth.json`,
+`*.pem` and `id_*` names at any depth refuse the entire package before those
+entries are read. Vendor directory permissions do not authorize content reads.
 The package is copied once into `shared/skills/<name>` and verified by a canonical
 SHA-256 digest. Existing store entries and occupied profile destinations are never
 replaced. Unix uses internal-store symlinks; Windows uses owned digest copies

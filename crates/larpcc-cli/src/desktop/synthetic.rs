@@ -29,7 +29,6 @@ pub(crate) struct Command {
     pub executable: &'static str,
     pub argv: Vec<OsString>,
     pub remove_env: Vec<OsString>,
-    pub set_env: (&'static str, PathBuf),
 }
 pub(crate) fn command(
     target: &ValidatedDesktopTarget,
@@ -40,33 +39,14 @@ pub(crate) fn command(
     }
     let mut remove_env = Vec::new();
     for name in env_names {
-        let name_text = name.to_str().ok_or(InspectionCode::Malformed)?;
-        if name_text.starts_with("CLAUDE")
-            || name_text.starts_with("ANTHROPIC_")
-            || name_text == "CODEX_HOME"
-        {
+        if super::provider_environment_name(name.as_encoded_bytes()) {
             remove_env.push(name.clone());
         }
     }
-    let mut data = OsString::from("--user-data-dir=");
-    data.push(&target.snapshot.desktop.path);
     Ok(Command {
         executable: "/usr/bin/open",
-        argv: vec![
-            "-n".into(),
-            "-a".into(),
-            target.app.path.clone().into_os_string(),
-            "--args".into(),
-            data,
-        ],
+        argv: super::open_arguments(target).map_err(|_| InspectionCode::Malformed)?,
         remove_env,
-        set_env: (
-            match target.snapshot.provider {
-                Provider::Claude => "CLAUDE_CONFIG_DIR",
-                Provider::Codex => "CODEX_HOME",
-            },
-            target.snapshot.cli.path.clone(),
-        ),
     })
 }
 fn matches(process: &Process, target: &ValidatedDesktopTarget) -> Result<bool, InspectionCode> {
@@ -200,10 +180,15 @@ pub(crate) fn dispatch(
 
 pub(crate) fn fixture_app(path: PathBuf) -> Result<CheckedApp, Error> {
     let exe = path.join("Contents/MacOS/ChatGPT");
+    let executable = app_file(&exe)?;
+    let info = app_file(&path.join("Contents/Info.plist"))?;
     Ok(CheckedApp {
+        ancestry: app_anchor(&exe)?,
         path,
-        ancestry: platform::anchor(&exe)?,
-        executable: platform::inspect(&exe, ObjectKind::File)?.ok_or(Error::ArtifactInvalid)?,
+        executable_stamp: AppFileStamp::of(&executable)?,
+        info_stamp: AppFileStamp::of(&info)?,
+        executable,
+        info,
     })
 }
 pub(crate) fn fixture_directory(path: &Path) -> Result<CheckedDirectory, Error> {
@@ -229,4 +214,12 @@ pub(crate) fn singleton_pid(path: &Path, hostname: &[u8]) -> Result<i32, Inspect
 #[cfg(unix)]
 pub(crate) fn singleton_parse(target: &[u8], hostname: &[u8]) -> Result<i32, InspectionCode> {
     super::singleton::parse(target, hostname)
+}
+
+pub(crate) fn supports_environment(version: &[u8]) -> bool {
+    super::supports_open_environment(version)
+}
+
+pub(crate) fn validate_launch_path(path: &Path) -> Result<(), Error> {
+    super::launch_path(path).map(|_| ())
 }

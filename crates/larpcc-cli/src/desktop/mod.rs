@@ -18,11 +18,105 @@ pub(crate) struct CheckedApp {
     path: PathBuf,
     ancestry: AnchoredPath,
     executable: CheckedObject,
+    info: CheckedObject,
+    executable_stamp: AppFileStamp,
+    info_stamp: AppFileStamp,
+}
+#[derive(PartialEq, Eq)]
+struct AppFileStamp {
+    size: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    changed: (i64, i64),
+}
+impl AppFileStamp {
+    fn of(object: &CheckedObject) -> Result<Self, Error> {
+        let meta = object
+            .file
+            .metadata()
+            .map_err(|_| Error::AdmissionChanged)?;
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Ok(Self {
+            #[cfg(unix)]
+            changed: (meta.ctime(), meta.ctime_nsec()),
+            size: meta.len(),
+            modified: meta.modified().map_err(|_| Error::AdmissionChanged)?,
+        })
+    }
+}
+fn app_anchor(path: &Path) -> Result<AnchoredPath, Error> {
+    #[cfg(unix)]
+    return platform::vendor_app_anchor(path);
+    #[cfg(windows)]
+    platform::anchor(path)
+}
+fn app_file(path: &Path) -> Result<CheckedObject, Error> {
+    #[cfg(unix)]
+    return platform::vendor_app_object(path, ObjectKind::File);
+    #[cfg(windows)]
+    platform::inspect(path, ObjectKind::File)?.ok_or(Error::ArtifactInvalid)
+}
+// Shared fixed argument vector for the native launcher and invented-target tests.
+fn open_arguments(target: &ValidatedDesktopTarget) -> Result<Vec<std::ffi::OsString>, Error> {
+    use std::ffi::OsString;
+    let cli = launch_path(&target.snapshot.cli.path)?;
+    let desktop = launch_path(&target.snapshot.desktop.path)?;
+    let mut environment = OsString::from(match target.snapshot.provider {
+        Provider::Codex => "CODEX_HOME=",
+        Provider::Claude => "CLAUDE_CONFIG_DIR=",
+    });
+    environment.push(cli);
+    let mut data = OsString::from("--user-data-dir=");
+    data.push(desktop);
+    Ok(vec![
+        "-n".into(),
+        "-a".into(),
+        target.app.path.clone().into_os_string(),
+        "--env".into(),
+        environment,
+        "--args".into(),
+        data,
+    ])
+}
+fn launch_path(path: &Path) -> Result<&str, Error> {
+    let value = path.to_str().ok_or(Error::QualificationPending)?;
+    if value.bytes().any(|b| b == b'=' || b < 0x20 || b == 0x7f) {
+        return Err(Error::QualificationPending);
+    }
+    Ok(value)
+}
+fn provider_environment_name(name: &[u8]) -> bool {
+    [b"CLAUDE".as_slice(), b"ANTHROPIC_", b"CODEX_", b"OPENAI_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+fn supports_open_environment(version: &[u8]) -> bool {
+    let Ok(version) = std::str::from_utf8(version) else {
+        return false;
+    };
+    let mut parts = version.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    if major.is_empty() || !major.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    if !parts
+        .clone()
+        .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return false;
+    }
+    major.parse::<u32>().is_ok_and(|major| major >= 13)
 }
 
 /// Path spelling is necessary but never sufficient evidence of stock identity.
 /// Only static code validation is performed; no vendor process is executed.
 pub(crate) fn validate_binding(provider: Provider, path: &Path) -> Result<CheckedApp, Error> {
+    if provider == Provider::Claude {
+        return Err(Error::QualificationPending);
+    }
     let expected = match provider {
         Provider::Claude => Path::new("/Applications/Claude.app"),
         Provider::Codex => Path::new("/Applications/ChatGPT.app"),
@@ -126,6 +220,8 @@ impl ValidatedDesktopTarget {
         Ok(target)
     }
     fn recheck(&self) -> Result<(), Error> {
+        launch_path(&self.snapshot.cli.path)?;
+        launch_path(&self.snapshot.desktop.path)?;
         self.app.recheck()?;
         let s = &self.snapshot;
         if !s.root.path.is_absolute()
@@ -159,18 +255,8 @@ impl CheckedApp {
         &self.path
     }
     pub(crate) fn recheck(&self) -> Result<(), Error> {
-        #[cfg(target_os = "macos")]
-        {
-            #[cfg(test)]
-            let fixture = self.path != Path::new("/Applications/ChatGPT.app");
-            #[cfg(not(test))]
-            let fixture = false;
-            if !fixture {
-                macos::verify_signature(&self.path)?;
-            }
-        }
         let exe = self.path.join("Contents/MacOS/ChatGPT");
-        let now = platform::anchor(&exe)?;
+        let now = app_anchor(&exe)?;
         if now.ancestors.len() != self.ancestry.ancestors.len()
             || now
                 .ancestors
@@ -180,27 +266,19 @@ impl CheckedApp {
         {
             return Err(Error::AdmissionChanged);
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let held = self
-                .executable
-                .file
-                .metadata()
-                .map_err(|_| Error::AdmissionChanged)?;
-            let current = std::fs::symlink_metadata(&exe).map_err(|_| Error::AdmissionChanged)?;
-            if current.file_type().is_symlink()
-                || held.dev() != current.dev()
-                || held.ino() != current.ino()
+        for (path, held, expected) in [
+            (&exe, &self.executable, &self.executable_stamp),
+            (
+                &self.path.join("Contents/Info.plist"),
+                &self.info,
+                &self.info_stamp,
+            ),
+        ] {
+            let current = app_file(path)?;
+            if current.identity != held.identity
+                || AppFileStamp::of(&current)? != *expected
+                || AppFileStamp::of(held)? != *expected
             {
-                return Err(Error::AdmissionChanged);
-            }
-        }
-        #[cfg(windows)]
-        {
-            let current =
-                platform::inspect(&exe, ObjectKind::File)?.ok_or(Error::AdmissionChanged)?;
-            if current.identity != self.executable.identity {
                 return Err(Error::AdmissionChanged);
             }
         }
@@ -244,4 +322,26 @@ pub(crate) fn open_target(
         let _ = (target, revalidate, notice);
         Err(Error::QualificationPending)
     }
+}
+
+/// Metadata display checks presence/type only. It does not certify a signature or qualification.
+pub(crate) fn binding_path_present(provider: Provider, path: &Path) -> bool {
+    if provider != Provider::Codex
+        || path.as_os_str() != Path::new("/Applications/ChatGPT.app").as_os_str()
+    {
+        return false;
+    }
+    [
+        path.to_path_buf(),
+        path.join("Contents"),
+        path.join("Contents/MacOS"),
+    ]
+    .iter()
+    .all(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir()))
+        && [
+            path.join("Contents/MacOS/ChatGPT"),
+            path.join("Contents/Info.plist"),
+        ]
+        .iter()
+        .all(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file()))
 }

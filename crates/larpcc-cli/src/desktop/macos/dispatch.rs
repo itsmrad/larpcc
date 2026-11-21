@@ -324,10 +324,7 @@ fn environment_names() -> Result<Vec<std::ffi::OsString>, Error> {
             if !complete || name.is_empty() {
                 return Err(Error::AdmissionChanged);
             }
-            if name.starts_with(b"CLAUDE")
-                || name.starts_with(b"ANTHROPIC_")
-                || name == b"CODEX_HOME"
-            {
+            if crate::desktop::provider_environment_name(&name) {
                 names.push(std::ffi::OsString::from_vec(name));
             }
         }
@@ -339,26 +336,15 @@ fn launch(
     deadline: Instant,
     revalidate: &mut impl FnMut() -> Result<(), Error>,
 ) -> Result<(), Error> {
-    use std::{
-        ffi::OsString,
-        process::{Command, Stdio},
-    };
+    use std::process::{Command, Stdio};
+    require_open_environment()?;
     let names = environment_names()?;
-    let mut data = OsString::from("--user-data-dir=");
-    data.push(&target.snapshot.desktop.path);
     let mut command = Command::new("/usr/bin/open");
-    command.args([
-        OsString::from("-n"),
-        OsString::from("-a"),
-        target.app.path.clone().into_os_string(),
-        OsString::from("--args"),
-        data,
-    ]);
+    command.args(crate::desktop::open_arguments(target)?);
     for name in names {
         command.env_remove(name);
     }
     command
-        .env("CODEX_HOME", &target.snapshot.cli.path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -415,4 +401,29 @@ fn launch(
             }
         }
     }
+}
+
+// macOS 13 introduced open --env; never fall back to an inherited LaunchServices environment.
+fn require_open_environment() -> Result<(), Error> {
+    let mut version = [0u8; 64];
+    let mut length = version.len();
+    // SAFETY: bounded output buffer and valid size pointer; this queries OS metadata only.
+    let status = unsafe {
+        libc::sysctlbyname(
+            c"kern.osproductversion".as_ptr(),
+            version.as_mut_ptr().cast(),
+            &mut length,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0
+        || length == 0
+        || length > version.len()
+        || version[length - 1] != 0
+        || !crate::desktop::supports_open_environment(&version[..length - 1])
+    {
+        return Err(Error::QualificationPending);
+    }
+    Ok(())
 }

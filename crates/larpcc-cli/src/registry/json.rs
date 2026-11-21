@@ -4,10 +4,11 @@ use serde_json::{Value, json};
 fn binding(path: Option<&std::path::Path>, label: Option<&str>, state: &str) -> Value {
     json!({"path":path.map(super::display::path),"recorded_version":label,"detected_version":null,"state":state,"qualified":false})
 }
+// Display is path presence/type only; full signing validation belongs to bind/open.
 fn desktop_state(binding: Option<&super::model::DesktopBinding>) -> &'static str {
     binding
         .map(|b| {
-            if crate::desktop::validate_binding(b.provider, &b.path).is_ok() {
+            if crate::desktop::binding_path_present(b.provider, &b.path) {
                 "ok"
             } else {
                 "invalid"
