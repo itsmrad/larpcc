@@ -1,9 +1,14 @@
+mod desktop;
 pub mod display;
 mod error;
 mod json;
 mod model;
+pub(crate) use model::parse_recorded_version;
 mod paths;
+mod skills;
 mod store;
+#[allow(unused_imports)]
+pub use skills::SkillsAction;
 #[cfg(test)]
 mod tests;
 pub use error::{Error, NameError};

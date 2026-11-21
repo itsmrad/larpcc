@@ -1,0 +1,12 @@
+Usage: larp cc app bind [OPTIONS] <PROVIDER> <PATH>
+
+Arguments:
+  <PROVIDER>  [possible values: claude, codex]
+  <PATH>      
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --version <RECORDED_VERSION>             
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+      --replace                                
+  -h, --help                                   Print help

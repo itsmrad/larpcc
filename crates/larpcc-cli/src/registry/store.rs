@@ -138,6 +138,9 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     let mut desktop_providers = HashSet::new();
     for b in &data.desktop_bindings {
         if !desktop_providers.insert(b.provider)
+            || b.recorded_version
+                .as_deref()
+                .is_some_and(|v| super::parse_recorded_version(v).is_err())
             || !b.path.is_absolute()
             || b.path
                 .components()
@@ -172,18 +175,17 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     }
     Ok(data)
 }
-type RegistryLock = (File, Vec<crate::platform::CheckedObject>);
+pub(super) type RegistryLock = (File, Vec<crate::platform::CheckedObject>);
 pub(super) fn snapshot(
     root: &Path,
     expected: Option<u64>,
 ) -> Result<(Data, Option<RegistryLock>), Error> {
     let _ancestors = crate::platform::anchor(root)?.ancestors;
-    let _lock = if expected.is_some()
-        && crate::platform::inspect_replaceable(&root.join("registry.json"))
-            .map_err(|_| Error::RecoveryRequired)?
-            .is_some()
+    let _lock = if crate::platform::inspect_replaceable(&root.join("registry.lock"))
+        .map_err(|_| Error::RecoveryRequired)?
+        .is_some()
     {
-        Some(lock(root, Duration::from_secs(10))?)
+        Some(admission_lock(root)?)
     } else {
         None
     };
@@ -192,6 +194,12 @@ pub(super) fn snapshot(
     Ok((data, _lock))
 }
 pub(super) fn load(root: &Path) -> Result<Data, Error> {
+    if crate::share::pending(root) {
+        return Err(Error::RecoveryRequired);
+    }
+    load_with(root, |_| {})
+}
+pub(super) fn load_unchecked(root: &Path) -> Result<Data, Error> {
     load_with(root, |_| {})
 }
 pub(super) fn load_with(root: &Path, mut before_open: impl FnMut(&Path)) -> Result<Data, Error> {
@@ -422,7 +430,7 @@ pub(super) fn mutate_checked(
     expected: Option<u64>,
 ) -> Result<(ProfileEntry, u64, bool), Error> {
     let _ancestors = crate::platform::anchor(root)?.ancestors;
-    let _lock = lock(root, timeout)?;
+    let mut registry_lock = Some(lock(root, timeout)?);
     let _fixed = fixed(root)?;
     let mut data = load(root)?;
     precondition(&data, expected)?;
@@ -502,6 +510,7 @@ pub(super) fn mutate_checked(
                 .aliases
                 .iter()
                 .any(|a| a.profile_id == data.profiles[index].id)
+                || super::skills::has_profile_references(root, &data, data.profiles[index].id)?
             {
                 return Err(Error::Conflict);
             }
@@ -567,10 +576,14 @@ pub(super) fn mutate_checked(
         } else {
             serialize(&data)?
         };
-        persist(root, &bytes, &mut applied, &mut created_temp)?;
+        if super::skills::profile_commit(root, &data, &mut registry_lock, expected)? {
+            applied = true;
+        } else {
+            persist(root, &bytes, &mut applied, &mut created_temp)?;
+        }
         Ok(())
     })();
-    if operation.is_err() && !applied {
+    if operation.is_err() && !applied && !crate::share::pending(root) {
         if let Some(home) = created_home {
             let _ = fs::remove_dir(home.join("cli"));
             let _ = fs::remove_dir(home.join("desktop"));
@@ -599,7 +612,7 @@ pub(super) fn mutate_checked(
         })
         .map(|entry| (entry, data.revision, true))
 }
-fn replace(from: &Path, to: &Path) -> Result<(), Error> {
+pub(super) fn replace(from: &Path, to: &Path) -> Result<(), Error> {
     #[cfg(windows)]
     for _ in 0..10 {
         match fs::rename(from, to) {

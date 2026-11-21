@@ -1,0 +1,11 @@
+Remove a package after disabling all profile references
+
+Usage: larp cc skills remove [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>  
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

@@ -17,28 +17,65 @@ it does not open app or qualify it. JSON `app.bind` uses common mutation receipt
 CORE passes provider plus derived cli/desktop dirs and checked binding to MAC;
 MAC revalidates app/path/snapshot immediately before dispatch and retains handles
 as required. Exact Rust signature is deliberately unfrozen. Claude app gets
-CLAUDE_CONFIG_DIR=cli, ChatGPT app CODEX_HOME=cli; both proposed --user-data-dir=
-desktop require exact app-version proof. Claude desktop chat auth is separate;
-ChatGPT sharing with CLI is an unqualified hypothesis until native proof.
-No modified app, copy/re-sign, executable swap or token meter.
+CLAUDE_CONFIG_DIR=cli for a future qualified Claude path; current ChatGPT dispatch
+sets CODEX_HOME=cli and passes --user-data-dir=desktop. These switches do not
+establish account or storage isolation. No modified app, copy/re-sign, executable
+swap or token meter.
 
-Open/focus returns [JSON local dispatch receipt](../contracts/cli-v1.md), never
-account/auth success. Current ordinary implementation must qualification-refuse;
-unknown versions may produce safe warnings/diagnostics, **never launch** despite
-handoff D4's earlier warn-and-launch suggestion. This is explicit prospective
-resolution retaining stage-3 fail-closed safety. Focus only a verified matching
-profile process under reviewed singleton rules; process-name/PID string matching
-alone cannot prove it. No process argv harvesting in doctor. Refuse uncertain
-liveness, callbacks or ownership. No background manager or automated retry.
+## Lead desktop admission amendment — 2026-11-17
+
+This amendment supersedes the earlier desktop-only closed-table requirement and
+restores D4 warn-and-launch for local macOS dispatch. CLI native qualification
+ROWS remain empty: no CLI provider execution or account operation is authorized.
+Ordinary `app open` is enabled only for unmodified `/Applications/ChatGPT.app`
+with strict, all-architecture signature validation against identifier
+`com.openai.codex`, Apple generic anchor, Developer ID certificate constraints,
+and team `2DC432GLL2`. Native Claude binding/open remains closed because its
+signing identity is unverified. The observed ChatGPT version is `26.1111.21308`
+(build `27194`); other or unavailable versions produce a fixed warning and may
+launch after the same identity/snapshot checks. Version labels never grant
+identity, account, or isolation qualification. Security.framework reads static
+signed app metadata only, never user auth/config/session/keychain contents.
+
+Open/focus returns the [JSON local dispatch receipt](../contracts/cli-v1.md),
+never account/auth success. Users interact with the official app themselves;
+Larp never determines whether a profile is signed in. Engineering tests remain
+signed-out, throwaway profiles only; real-account agent testing is unauthorized.
+
+The accepted association boundary is Electron's per-directory `SingletonLock`
+symlink, read only with bounded `readlinkat` against the retained checked desktop
+directory. Never follow its target, read a cookie/socket target or connect to
+vendor IPC. Require matching hostname and positive PID, unchanged lock inode and
+timestamps, live same-user process, exact official executable path, strict app
+and running-code identity, process birth no later than lock timestamps, and
+process-instance identity retained/rechecked through activation. Process names or
+PID strings alone are insufficient. This replaces the earlier exact-argv check;
+no process argv or environment is read, and doctor does not perform this check.
+A missing lock or confirmed dead PID is Inactive; active verified association is
+KnownActive; malformed/foreign-host/denied/truncated/changed/unverifiable data is
+Unknown and refuses open/delete. A stale symlink is not removed by Larp. Delete
+still requires stage04 lifecycle guard and explicit `--yes` human attestation
+that externally started sessions are quiescent. Inactivity is bounded hygiene,
+not proof against arbitrary clients. Same-user lock forgery and privileged races
+are outside this boundary; Larp is not a same-user sandbox.
+
+CORE resolves one coherent v3 snapshot under the registry lock, with expected
+revision checked before name resolution. Acquire lifecycle guard before registry
+lock and retain it through dispatch/focus. Retain checked app/root/container/cli/
+desktop handles; revalidate immutable ID, provider, active state, desktop surface,
+binding/version, revision and pending journal immediately before each effect.
+Never hold the registry lock across native waits. Never focus a default or
+unrelated process; never kill vendor processes. No background manager, automatic
+switching/retry, vendor HTTP calls, or HOME/default-data rewrites.
 
 MAC implements native synthetic `desktop_contract` tests (execute
 `cargo test --workspace --locked --test desktop_contract`, zero cases fails):
-validated fixture binding, both directory inputs, closed admission, synthetic
+validated fixture binding, both directory inputs, unsupported/Claude admission, synthetic
 launched/focused receipt, stale binding/profile and wrong PID refusal, no auth
 strings/output, safe cleanup. Native app qualification is a distinct later
 finite authorization sheet: both launch orders, simultaneous windows, identity/
 history, callbacks, refresh/logout, restart/update, keychain denial, singleton
-focus, CLI↔desktop auth effects and no global writes. All unfilled combinations
-stay closed. Signed-out test app data only as RULES authorizes, fresh throwaway
+focus, CLI↔desktop auth effects and no global writes. Unfilled account/isolation combinations remain unqualified; local desktop
+dispatch is the explicitly authorized exception above. Signed-out test app data only as RULES authorizes, fresh throwaway
 homes, quit and delete all fixtures. Real-account work remains unauthorized.
 Windows desktop is later proof, Linux has no claimed official desktop support.

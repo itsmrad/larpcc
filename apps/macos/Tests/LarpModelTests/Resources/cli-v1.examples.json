@@ -676,5 +676,14 @@
       "code": "conflict",
       "message": "Registry revision changed; refresh before retrying."
     }
+  },
+  {
+    "schema": 1,
+    "command": "skills.add",
+    "ok": false,
+    "error": {
+      "code": "forbidden_source",
+      "message": "Skill sources inside managed or vendor homes are forbidden."
+    }
   }
 ]

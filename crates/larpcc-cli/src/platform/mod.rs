@@ -8,7 +8,8 @@ pub enum ObjectKind {
     Directory,
     File,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum FileIdentity {
     #[cfg(unix)]
     Unix { dev: u64, ino: u64 },
@@ -36,6 +37,67 @@ mod macos;
 #[cfg(all(test, windows))]
 #[path = "../../tests/fixtures/windows/private.rs"]
 pub(crate) mod fixture_private;
+
+pub(crate) fn fd_exhausted(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            ERROR_NO_SYSTEM_RESOURCES, ERROR_TOO_MANY_OPEN_FILES,
+        };
+        error.raw_os_error().is_some_and(|code| {
+            matches!(
+                code as u32,
+                ERROR_TOO_MANY_OPEN_FILES | ERROR_NO_SYSTEM_RESOURCES
+            )
+        })
+    }
+}
+
+/// Directory metadata only: resolve an excluded vendor-home alias, then retain
+/// its target/ancestor identities without trust checks or reading home contents.
+/// These handles authorize exclusion only, never managed reads or writes.
+pub(crate) fn skill_home(path: &Path) -> Result<Option<(CheckedObject, AnchoredPath)>, Error> {
+    let path = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|source| Error::Io {
+                action: "resolve skill home",
+                path: path.into(),
+                source,
+            })?
+            .join(path)
+    };
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(Error::Io {
+                action: "inspect skill home",
+                path,
+                source,
+            });
+        }
+        Ok(_) => (),
+    }
+    let resolved = std::fs::canonicalize(&path).map_err(|source| Error::Io {
+        action: "resolve skill home",
+        path: path.clone(),
+        source,
+    })?;
+    let object = skill_directory_identity(&resolved)?;
+    let ancestors = AnchoredPath {
+        ancestors: resolved
+            .ancestors()
+            .skip(1)
+            .map(skill_directory_identity)
+            .collect::<Result<_, _>>()?,
+    };
+    Ok(Some((object, ancestors)))
+}
 
 // Internal only: a namespace change is distinct from every validation or I/O failure.
 #[derive(Debug)]
