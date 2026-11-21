@@ -27,6 +27,15 @@ only through `larp cc app open`, with qualification enforced by Larp. A dispatch
 receipt describes only local launched/focused outcome, not auth, readiness or
 isolation. Configuration indicators never imply signed-in state.
 
+Every `larp cc` mutation in the CLI v1 contract has native UI: New Profile (⌘N
+or + in the sidebar), Rename, surfaces, Forget, Delete, Recover, Migrate, app and
+provider binding, aliases (with `--desktop` / `--shadow`), MCP servers (command or
+https URL, environment-variable references only, never secret values), skills
+(a chosen folder) and the per-profile switches. Input is validated like the CLI
+before any process runs. A larp build that lacks a command answers with a `parse`
+envelope, shown as "not supported yet"; other error codes map to fixed safe text.
+Sample mode applies every action to the in-memory fixture.
+
 Every mutation/open uses the displayed coherent snapshot's revision and immutable
 ID/name mapping. Matrix and metadata reads also carry that revision. A conflict
 refreshes metadata and requires a new action; a stale delete is never retried.
@@ -37,8 +46,9 @@ The current UI shows CLI folder metadata; binding versions remain undetected in
 presentation and null values are safe. Recovery/drift errors use fixed safe text.
 
 Process IO runs on a background queue, drains both pipes concurrently with
-nonblocking reads, caps each stream at 1 MiB and requires empty stderr. A 15-second
-deadline and cancellation terminate then kill/reap only the direct child. No
+nonblocking reads, caps each stream at 1 MiB and requires empty stderr. Reads have a
+15-second deadline; changes have none, because stopping one mid-transaction
+leaves an unknown outcome (Cancel warns first). A deadline or cancellation terminates then kill/reap only the direct child. No
 process-tree killing, polling service or automatic persistent tasks are used.
 Cancellation may occur after a CLI side effect: refresh before another action.
 Raw JSON failures, stderr, arbitrary diagnostic/error messages and secret

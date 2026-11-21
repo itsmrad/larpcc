@@ -209,7 +209,7 @@ private actor RecordingTransport: CLITransport {
     private let examples: [[String: Any]]
     init(mode: String = "") throws { examples = try ProcessBridgeTests.examples(); self.mode = mode }
     func renameAndReuseName() { reused = true }
-    func run(_ argv: [String]) async throws -> ProcessOutput {
+    func run(_ argv: [String], mutation: Bool) async throws -> ProcessOutput {
         calls.append(argv)
         let command = argv.first == "--help" ? "help" : argv.dropFirst().prefix(2).joined(separator: ".")
         if mode == "delay", command == "profile.list", !delayed {

@@ -11,7 +11,7 @@ enum CLIContract {
     }
     static func name(_ value: String) -> Bool {
         let reserved = ["larp", "con", "prn", "aux", "nul"] + (1...9).flatMap { ["com\($0)", "lpt\($0)"] }
-        return value.range(of: "^[a-z][a-z0-9_-]{0,31}$", options: .regularExpression) != nil && !reserved.contains(value)
+        return value.range(of: "^[a-z][a-z0-9_-]{0,31}\\z", options: .regularExpression) != nil && !reserved.contains(value)
     }
     private static let schema: [String: Any] = {
         let url = Bundle.module.url(forResource: "cli-v1.schema", withExtension: "json")!
