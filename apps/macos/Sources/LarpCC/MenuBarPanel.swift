@@ -148,6 +148,11 @@ struct MenuBarPanel: View {
             hasKeyboardFocus = true
             store.menuBarPanelOpened()
         }
+        .onChange(of: profiles.map(\.id)) { _, ids in
+            if let desktopProfileID, !ids.contains(desktopProfileID) {
+                self.desktopProfileID = nil
+            }
+        }
         .onChange(of: store.busy) { _, busy in
             guard !busy, recoverAfterAction else { return }
             recoverAfterAction = false
@@ -312,6 +317,7 @@ struct MenuBarPanel: View {
         if entered {
             guard items.contains(item) else { return }
             hoveredItem = item
+            keyboardItem = item
             if case let .profile(id) = item { desktopProfileID = id }
         } else if hoveredItem == item {
             hoveredItem = nil
