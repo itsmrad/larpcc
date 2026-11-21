@@ -28,9 +28,7 @@ struct LarpCCApp: App {
                 OpenSettingsWindow()
             }
             CommandGroup(replacing: .newItem) {
-                Button("New Profile…") { store.sheet = .addProfile }
-                    .keyboardShortcut("n", modifiers: .command)
-                    .disabled(store.snapshot == nil || store.busy)
+                NewProfileCommand(store: store)
             }
         }
         MenuBarExtra(isInserted: MenuBarDockPolicy.insertion($menuBarShown)) {
@@ -64,6 +62,20 @@ private struct OpenSettingsWindow: View {
     var body: some View {
         Button("Settings…") { openWindow(id: "settings") }
             .keyboardShortcut(",", modifiers: .command)
+    }
+}
+
+private struct NewProfileCommand: View {
+    @ObservedObject var store: AppStore
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("New Profile…") {
+            openWindow(id: "settings")
+            NSApp.activate(ignoringOtherApps: true)
+            store.sheet = .addProfile
+        }
+        .keyboardShortcut("n", modifiers: .command)
+        .disabled(store.snapshot == nil || store.busy)
     }
 }
 
