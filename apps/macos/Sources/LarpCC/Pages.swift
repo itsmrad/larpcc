@@ -389,7 +389,7 @@ struct DesktopAppsPage: View {
             }
         } label: {
             RowLabel(provider.desktopApp, subtitle: binding?.displayPath ?? "Not linked") {
-                ProviderTile(provider: provider)
+                DesktopAppIcon(provider: provider)
             }
         }
     }

@@ -57,8 +57,6 @@ struct IconTile: View {
 
 extension Provider {
     var desktopApp: String { self == .claude ? "Claude.app" : "ChatGPT.app" }
-    /// Neutral SF Symbol per provider (no vendor artwork).
-    var glyphSymbol: String { self == .claude ? "sparkle" : "chevron.left.forwardslash.chevron.right" }
 }
 
 /// Monochrome provider glyph, sized like a sidebar symbol.
@@ -68,10 +66,10 @@ struct ProviderGlyph: View {
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
-        // Explicit colors: the sidebar's vibrancy washes out glyphs drawn in .primary.
-        Image(systemName: provider.glyphSymbol)
-            .font(.system(size: size * 0.85, weight: .medium))
-            .foregroundStyle(prominence == .increased ? Color.white : Color(nsColor: .labelColor))
+        // Explicit colors: the sidebar's vibrancy washes out thin shapes drawn in .primary.
+        ProviderMark(provider: provider)
+            .fill(prominence == .increased ? Color.white : Color(nsColor: .labelColor))
+            .frame(width: size, height: size)
             .frame(width: size + 4, height: size + 4)
             .accessibilityLabel(provider.title)
     }
@@ -83,7 +81,39 @@ struct ProviderTile: View {
     var size: CGFloat = 20
 
     var body: some View {
-        IconTile(symbol: provider.glyphSymbol, color: Color(white: 0.42), size: size)
+        ProviderMark(provider: provider)
+            .fill(.white)
+            .padding(size * 0.2)
+            .frame(width: size, height: size)
+            .background(
+                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                    .fill(provider.tileColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                    .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+/// The installed desktop app's own icon from /Applications, or the provider tile when it isn't installed.
+/// Reads only the app bundle's icon through NSWorkspace; never its data.
+struct DesktopAppIcon: View {
+    let provider: Provider
+    var size: CGFloat = 20
+
+    var body: some View {
+        let path = "/Applications/\(provider.desktopApp)"
+        if FileManager.default.fileExists(atPath: path) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                .resizable()
+                .frame(width: size + 4, height: size + 4)
+                .padding(-2)
+                .accessibilityHidden(true)
+        } else {
+            ProviderTile(provider: provider, size: size)
+        }
     }
 }
 
