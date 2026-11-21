@@ -38,6 +38,8 @@ struct MenuBarPanel: View {
     @AppStorage(UsagePreferences.consentKey) private var consented = false
     @FocusState private var focusedProfile: String?
     @State private var cardsHeight: CGFloat = 0
+    /// Set while a launch started here is in flight; see `openDesktop`.
+    @State private var recoverAfterAction = false
 
     private var source: UsageSource { storedSource == UsageSource.live.rawValue && consented ? .live : .local }
     private var profiles: [Profile] { MenuBarSummary.orderedProfiles(store.snapshot?.profiles ?? [], usage: store.usage) }
@@ -68,6 +70,18 @@ struct MenuBarPanel: View {
             .accessibilityHidden(true)
         }
         .onAppear { if !isSnapshot { store.menuBarPanelOpened() } }
+        .onChange(of: store.busy) { _, busy in
+            guard !busy, recoverAfterAction else { return }
+            recoverAfterAction = false
+            // A failed action clears the snapshot; read it back once so the cards return
+            // next to the error notice. One-shot, so it can't loop when larp is unavailable.
+            if store.snapshot == nil { store.startRefresh() }
+        }
+    }
+
+    private func openDesktop(_ profileID: String) {
+        recoverAfterAction = true
+        store.perform(.open(profileID: profileID, surface: .desktop))
     }
 
     // MARK: Header
@@ -133,7 +147,8 @@ struct MenuBarPanel: View {
             }
             ForEach(profiles) { profile in
                 MenuBarProfileCard(store: store, profile: profile, report: store.usage[profile.id],
-                                   source: source, focused: focusedProfile == profile.id)
+                                   source: source, focused: focusedProfile == profile.id,
+                                   openDesktop: { openDesktop(profile.id) })
                     .focusable(!isSnapshot)
                     .focused($focusedProfile, equals: profile.id)
                     .focusEffectDisabled()
@@ -212,6 +227,7 @@ struct MenuBarProfileCard: View {
     let report: UsageReport?
     let source: UsageSource
     let focused: Bool
+    let openDesktop: () -> Void
 
     private var level: UsageLevel { report?.lowestLeftPercent.map(UsageLevel.init(leftPercent:)) ?? .normal }
 
@@ -291,7 +307,7 @@ struct MenuBarProfileCard: View {
                 .disabled(true)
                 .help(profile.cliEnabled ? "Open in Terminal: not available yet" : "Open in Terminal: command line is off")
                 .accessibilityLabel("Open \(profile.name) in Terminal, not available")
-            Button { store.perform(.open(profileID: profile.id, surface: .desktop)) } label: {
+            Button(action: openDesktop) {
                 Image(systemName: "macwindow")
             }
             .buttonStyle(MenuBarIconButtonStyle())
