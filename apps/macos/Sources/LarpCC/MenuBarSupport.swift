@@ -10,7 +10,6 @@ enum MenuBarPreferences {
     static let modeKey = "menuBarMode"
     static let codexProfileKey = "menuBarCodexProfileID"
     static let claudeProfileKey = "menuBarClaudeProfileID"
-    static let tabKey = "menuBarTab"
     static let hideDockKey = "menuBarHideDock"
 
     static var shown: Bool { UserDefaults.standard.object(forKey: shownKey) as? Bool ?? true }
@@ -147,32 +146,51 @@ struct MenuBarSettingsSection: View {
 
 #if DEBUG
 /// `--menubar-panel-snapshot=<abs path.png>`: renders the panel with sample data at 2x and exits.
+/// `--menubar-panel-expanded=<profile id>` opens that profile's details.
 /// Debug builds only; sample data only. It never runs larp or reads usage from anywhere else.
 enum MenuBarSnapshot {
     private static let prefix = "--menubar-panel-snapshot="
-    private static let tabPrefix = "--menubar-panel-tab="
+    private static let expandedPrefix = "--menubar-panel-expanded="
 
     static func runIfRequested() {
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) }) else { return }
         let path = String(arg.dropFirst(prefix.count))
         guard path.hasPrefix("/"), path.lowercased().hasSuffix(".png") else { exit(2) }
-        let tab: MenuBarTab
-        if let arg = CommandLine.arguments.first(where: { $0.hasPrefix(tabPrefix) }) {
-            guard let value = MenuBarTab(rawValue: String(arg.dropFirst(tabPrefix.count))) else { exit(2) }
-            tab = value
-        } else {
-            tab = .overview
-        }
-        Task { @MainActor in exit(await render(to: path, tab: tab) ? 0 : 1) }
+        let expanded = CommandLine.arguments.first { $0.hasPrefix(expandedPrefix) }
+            .map { String($0.dropFirst(expandedPrefix.count)) }
+        Task { @MainActor in exit(await render(to: path, expanded: expanded) ? 0 : 1) }
     }
 
-    @MainActor private static func render(to path: String, tab: MenuBarTab) async -> Bool {
+    /// `--menubar-status-snapshot=<abs path.png>`: the status item on a light and a dark bar.
+    private static func statusPath() -> String? {
+        let prefix = "--menubar-status-snapshot="
+        return CommandLine.arguments.first { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+    }
+
+    @MainActor private static func renderStatus(_ store: AppStore, to path: String) -> Bool {
+        let rings = MenuBarLabel.rings(store, codexProfileID: "", claudeProfileID: "")
+        guard let image = MenuBarLabel.templateImage(rings) else { return false }
+        func bar(_ dark: Bool) -> some View {
+            Image(nsImage: image).renderingMode(.template)
+                .foregroundStyle(dark ? Color.white : Color.black.opacity(0.85))
+                .padding(.horizontal, 12).frame(height: 24)
+                .background(dark ? Color(white: 0.16) : Color(white: 0.93))
+        }
+        let renderer = ImageRenderer(content: VStack(spacing: 0) { bar(false); bar(true) })
+        renderer.scale = 2
+        guard let cgImage = renderer.cgImage,
+              let png = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:]) else { return false }
+        return (try? png.write(to: URL(fileURLWithPath: path))) != nil
+    }
+
+    @MainActor private static func render(to path: String, expanded: String?) async -> Bool {
         let store = AppStore(client: FixtureLarpClient())
         guard store.isFixture else { return false }
         // Local usage follows the metadata refresh; Live (sample) usage is read once here.
         await store.refresh()
         if UsagePreferences.source == .live { store.refreshUsage() }
         for await loading in store.$usageLoading.values where !loading { break }
+        if let statusPath = statusPath(), !renderStatus(store, to: statusPath) { return false }
 
         AppearanceMode.launchOverride?.apply()
         let dark: Bool
@@ -181,7 +199,7 @@ enum MenuBarSnapshot {
         case .light?: dark = false
         default: dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         }
-        let renderer = ImageRenderer(content: MenuBarPanel(store: store, snapshotTab: tab)
+        let renderer = ImageRenderer(content: MenuBarPanel(store: store, isSnapshot: true, snapshotExpandedID: expanded)
             .environment(\.colorScheme, dark ? .dark : .light))
         renderer.scale = 2
         var png: Data?

@@ -9,13 +9,6 @@ public enum MenuBarMode: String, Sendable, CaseIterable {
     public var title: String { self == .icon ? "Icon only" : "Session usage" }
 }
 
-public enum MenuBarTab: String, Sendable, CaseIterable {
-    case overview, codex, claude
-
-    public var provider: Provider? { Provider(rawValue: rawValue) }
-    public var title: String { provider?.title ?? "Overview" }
-}
-
 /// The two rolling usage windows and their lengths.
 public enum UsageWindowKind: String, Sendable, CaseIterable {
     case fiveHour, weekly
@@ -138,21 +131,21 @@ public enum UsagePace {
 public enum MenuBarSummary {
     public static func isEnabled(_ profile: Profile) -> Bool { profile.cliEnabled || profile.desktopEnabled }
 
-    public static func tabs(profiles: [Profile]) -> [MenuBarTab] {
-        MenuBarTab.allCases.filter { tab in
-            guard let provider = tab.provider else { return true }
-            return profiles.contains { $0.provider == provider && isEnabled($0) }
-        }
-    }
-
-    /// Session text from the chosen enabled profile, or the most constrained one with a session window.
-    public static func statusText(provider: Provider, chosenProfileID: String, profiles: [Profile],
-                                  usage: [String: UsageReport]) -> String? {
+    /// Session percent left from the chosen enabled profile, or the most constrained one with a session window.
+    public static func sessionLeftPercent(provider: Provider, chosenProfileID: String, profiles: [Profile],
+                                          usage: [String: UsageReport]) -> Double? {
         let candidates = orderedProfiles(profiles, usage: usage, provider: provider)
         let profile = candidates.first { $0.id == chosenProfileID }
             ?? candidates.first { usage[$0.id]?.fiveHour != nil }
-        guard let profile, let window = usage[profile.id]?.fiveHour else { return nil }
-        return "5h \(Int(window.leftPercent.rounded()))%"
+        return profile.flatMap { usage[$0.id]?.fiveHour?.leftPercent }
+    }
+
+    /// Enabled profiles grouped by provider. Groups and profiles run tightest first.
+    public static func groups(_ profiles: [Profile], usage: [String: UsageReport]) -> [(provider: Provider, profiles: [Profile])] {
+        let ordered = orderedProfiles(profiles, usage: usage)
+        var providers: [Provider] = []
+        for profile in ordered where !providers.contains(profile.provider) { providers.append(profile.provider) }
+        return providers.map { provider in (provider, ordered.filter { $0.provider == provider }) }
     }
 
     public static func tightestLeftPercent(profiles: [Profile], usage: [String: UsageReport]) -> Double? {

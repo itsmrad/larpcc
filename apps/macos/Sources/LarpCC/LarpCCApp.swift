@@ -91,6 +91,8 @@ final class AppStore: ObservableObject {
     @Published var snapshot: Snapshot?
     @Published var busy = false
     @Published var message: String?
+    /// A profile the menu bar asked Settings to show.
+    @Published var requestedProfileID: String?
     @Published private(set) var isFixture = true
     @Published private(set) var selectedPath: String?
     /// Usage limits keyed by profile ID, from the last usage read.

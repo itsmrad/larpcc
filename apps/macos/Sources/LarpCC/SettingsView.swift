@@ -99,7 +99,8 @@ struct SettingsView: View {
             case .addSkill: AddSkillSheet(store: store)
             }
         }
-        .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply() }
+        .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply(); showRequestedProfile() }
+        .onChange(of: store.requestedProfileID) { _, _ in showRequestedProfile() }
         .onChange(of: appearance) { _, value in (AppearanceMode(rawValue: value) ?? .system).apply() }
         .onChange(of: store.snapshot?.profiles.map(\.id)) { _, ids in
             // Leave a profile page only once the profile is really gone (e.g. after Delete).
@@ -113,6 +114,12 @@ struct SettingsView: View {
     }
 
     // MARK: Sidebar
+
+    private func showRequestedProfile() {
+        guard let id = store.requestedProfileID else { return }
+        store.requestedProfileID = nil
+        selection = .profile(id)
+    }
 
     private var sidebar: some View {
         List(selection: $selection) {

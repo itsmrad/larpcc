@@ -25,22 +25,22 @@ final class MenuBarSummaryTests: XCTestCase {
         XCTAssertNil(MenuBarSummary.tightestLeftPercent(profiles: disabled, usage: usage))
     }
 
-    func testStatusTextPerProvider() async throws {
+    func testSessionPercentPerProvider() async throws {
         let (profiles, usage) = try await sample()
-        func label(_ provider: Provider, _ id: String = "") -> String? {
-            MenuBarSummary.statusText(provider: provider, chosenProfileID: id, profiles: profiles, usage: usage)
+        func left(_ provider: Provider, _ id: String = "") -> Double? {
+            MenuBarSummary.sessionLeftPercent(provider: provider, chosenProfileID: id, profiles: profiles, usage: usage)
         }
-        XCTAssertEqual(label(.codex), "5h 88%")
-        XCTAssertEqual(label(.claude), "5h 9%")
-        XCTAssertEqual(label(.claude, "1"), "5h 62%")
-        XCTAssertEqual(label(.claude, "3"), "5h 9%", "a selection from another provider is ignored")
-        XCTAssertEqual(label(.codex, "missing"), "5h 88%")
-        XCTAssertNil(label(.codex, "4"), "the chosen profile has no session data")
-        XCTAssertNil(MenuBarSummary.statusText(provider: .codex, chosenProfileID: "", profiles: profiles, usage: [:]))
+        XCTAssertEqual(left(.codex), 88)
+        XCTAssertEqual(left(.claude), 9)
+        XCTAssertEqual(left(.claude, "1"), 62)
+        XCTAssertEqual(left(.claude, "3"), 9, "a selection from another provider is ignored")
+        XCTAssertEqual(left(.codex, "missing"), 88)
+        XCTAssertNil(left(.codex, "4"), "the chosen profile has no session data")
+        XCTAssertNil(MenuBarSummary.sessionLeftPercent(provider: .codex, chosenProfileID: "", profiles: profiles, usage: [:]))
 
         let (fewer, usage2) = try await sample(disabling: "2")
-        XCTAssertEqual(MenuBarSummary.statusText(provider: .claude, chosenProfileID: "2",
-                                                 profiles: fewer, usage: usage2), "5h 62%")
+        XCTAssertEqual(MenuBarSummary.sessionLeftPercent(provider: .claude, chosenProfileID: "2",
+                                                         profiles: fewer, usage: usage2), 62)
         XCTAssertEqual(MenuBarMode(rawValue: "icon"), .icon)
     }
 
@@ -63,12 +63,13 @@ final class MenuBarSummaryTests: XCTestCase {
         XCTAssertEqual(MenuBarSummary.orderedProfiles(profiles, usage: [:]).map(\.name), ["personal", "research", "studio", "work"])
     }
 
-    func testTabsOnlyIncludeEnabledProvidersAndFilterInConstraintOrder() async throws {
+    func testGroupsAreEnabledProvidersInConstraintOrder() async throws {
         let (profiles, usage) = try await sample()
-        XCTAssertEqual(MenuBarSummary.tabs(profiles: profiles), [.overview, .codex, .claude])
-        XCTAssertEqual(MenuBarSummary.tabs(profiles: profiles.filter { $0.provider == .codex }), [.overview, .codex])
-        XCTAssertEqual(MenuBarSummary.tabs(profiles: profiles.filter { !MenuBarSummary.isEnabled($0) }), [.overview])
-        XCTAssertEqual(MenuBarSummary.orderedProfiles(profiles, usage: usage, provider: .claude).map(\.id), ["2", "1"])
+        let groups = MenuBarSummary.groups(profiles, usage: usage)
+        XCTAssertEqual(groups.map(\.provider), [.claude, .codex])
+        XCTAssertEqual(groups.map { $0.profiles.map(\.id) }, [["2", "1"], ["3", "4"]])
+        XCTAssertEqual(MenuBarSummary.groups(profiles.filter { $0.provider == .codex }, usage: usage).map(\.provider), [.codex])
+        XCTAssertTrue(MenuBarSummary.groups(profiles.filter { !MenuBarSummary.isEnabled($0) }, usage: usage).isEmpty)
         XCTAssertEqual(MenuBarSummary.orderedProfiles(profiles, usage: usage, provider: .codex).map(\.id), ["3", "4"])
     }
 
