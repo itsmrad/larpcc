@@ -1,3 +1,4 @@
+#![cfg(any(unix, feature = "synthetic-launch"))]
 mod common;
 use common::*;
 #[cfg(unix)]
@@ -8,6 +9,7 @@ use std::fs;
 #[cfg(any(unix, feature = "synthetic-launch"))]
 use std::path::Path;
 
+#[cfg(unix)]
 const PENDING: &str = "error: provider operation is disabled for this combination\nhint: review the documented qualification matrix\n";
 #[cfg(unix)]
 const INVALID: &str = "error: alias launcher, receipt or mapping cannot be verified\n";
@@ -363,6 +365,8 @@ fn stage05_dispatch_alias_reaches_fake_with_exact_args_home_and_exit() {
     assert!(output.stdout.is_empty());
     assert!(stderr(&output).contains("Profiles select native state"));
     let value: serde_json::Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
+    #[cfg(windows)]
+    let fake = fs::canonicalize(fake).unwrap();
     let expected: Vec<_> = std::iter::once(fake.as_os_str())
         .chain(alias_args::ARGS.iter().map(OsStr::new))
         .map(encode)

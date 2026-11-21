@@ -391,7 +391,7 @@ pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
     // XNU proc_regionwithpathinfo: region (including address and size), vnode stat, path.
     #[repr(C)]
     struct Region {
-        before_address: [u64; 8],
+        before_address: [u64; 10],
         address: u64,
         len: u64,
         dev: u32,
