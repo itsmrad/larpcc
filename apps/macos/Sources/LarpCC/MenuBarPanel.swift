@@ -55,12 +55,17 @@ struct MenuBarPanel: View {
             if isSnapshot { Color(nsColor: .windowBackgroundColor) }
         }
         .background {
-            // Esc closes the panel wherever focus is.
-            Button(action: closePanel) { EmptyView() }
-                .keyboardShortcut(.cancelAction)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .accessibilityHidden(true)
+            // Esc closes the panel and Return opens Settings, wherever focus is
+            // (Space still presses a focused button).
+            ZStack {
+                Button(action: closePanel) { EmptyView() }
+                    .keyboardShortcut(.cancelAction)
+                Button(action: openSettings) { EmptyView() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
         }
         .onAppear { if !isSnapshot { store.menuBarPanelOpened() } }
     }
@@ -138,11 +143,6 @@ struct MenuBarPanel: View {
         .padding(.bottom, 10)
         .onKeyPress(.downArrow) { moveFocus(by: 1) }
         .onKeyPress(.upArrow) { moveFocus(by: -1) }
-        .onKeyPress(.return) {
-            guard focusedProfile != nil else { return .ignored }
-            openSettings()
-            return .handled
-        }
     }
 
     private var emptyState: some View {
@@ -261,6 +261,17 @@ struct MenuBarProfileCard: View {
         return AnyShapeStyle(Color(nsColor: .separatorColor).opacity(0.6))
     }
 
+    private var desktopAvailable: Bool {
+        profile.desktopEnabled && !store.isFixture && !store.busy && store.snapshot != nil
+    }
+
+    private var desktopHelp: String {
+        let open = "Open \(profile.provider.desktopApp)"
+        if !profile.desktopEnabled { return "\(open): desktop app is off" }
+        if store.isFixture { return "\(open): not available with sample data" }
+        return open
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
             ProviderTile(provider: profile.provider, size: 28)
@@ -273,25 +284,20 @@ struct MenuBarProfileCard: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 6)
-            if let word = level.word {
-                Text(word)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(level.color)
-            }
-            Button { store.perform(.open(profileID: profile.id, surface: .cli)) } label: {
-                Image(systemName: "terminal")
-            }
-            .buttonStyle(MenuBarIconButtonStyle())
-            .disabled(!profile.cliEnabled || store.busy || store.snapshot == nil)
-            .help("Open in Terminal")
-            .accessibilityLabel("Open \(profile.name) in Terminal")
+            // Opening in Terminal has no larp command yet, and sample mode never launches,
+            // so those stay disabled rather than failing (a failed action clears the snapshot).
+            Button {} label: { Image(systemName: "terminal") }
+                .buttonStyle(MenuBarIconButtonStyle())
+                .disabled(true)
+                .help(profile.cliEnabled ? "Open in Terminal: not available yet" : "Open in Terminal: command line is off")
+                .accessibilityLabel("Open \(profile.name) in Terminal, not available")
             Button { store.perform(.open(profileID: profile.id, surface: .desktop)) } label: {
                 Image(systemName: "macwindow")
             }
             .buttonStyle(MenuBarIconButtonStyle())
-            .disabled(!profile.desktopEnabled || store.busy || store.snapshot == nil)
-            .help("Open \(profile.provider.desktopApp)")
-            .accessibilityLabel("Open \(profile.name) in \(profile.provider.desktopApp)")
+            .disabled(!desktopAvailable)
+            .help(desktopHelp)
+            .accessibilityLabel("Open \(profile.name) in \(profile.provider.desktopApp)" + (desktopAvailable ? "" : ", not available"))
         }
     }
 }
@@ -309,7 +315,7 @@ struct MenuBarWindowRow: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(kind.title).font(.callout.weight(.medium))
                     Spacer()
-                    Text("\(Int(window.leftPercent.rounded()))% left")
+                    Text("\(Int(window.leftPercent.rounded()))% left" + (level.word.map { " · \($0)" } ?? ""))
                         .font(.callout)
                         .monospacedDigit()
                         .foregroundStyle(level == .normal ? AnyShapeStyle(.secondary) : AnyShapeStyle(level.color))

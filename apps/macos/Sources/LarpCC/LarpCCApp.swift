@@ -27,7 +27,7 @@ struct LarpCCApp: App {
                 OpenSettingsWindow()
             }
         }
-        MenuBarExtra(isInserted: $menuBarShown) {
+        MenuBarExtra(isInserted: MenuBarDockPolicy.insertion($menuBarShown)) {
             MenuBarPanel(store: store)
         } label: {
             MenuBarLabel(store: store)

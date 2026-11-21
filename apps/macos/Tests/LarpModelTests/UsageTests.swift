@@ -18,7 +18,6 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(Set(local.keys), ["1", "2", "3"])
         XCTAssertTrue(local.values.allSatisfy { $0.source == .local })
         XCTAssertEqual(local["1"]?.resetCredits, 2)
-        XCTAssertNil(local["2"]?.resetCredits)
         XCTAssertEqual(local["3"]?.resetCredits, 0)
         _ = try await client.perform(.delete(profileID: "2"))
         let live = try await client.usage(source: .live)

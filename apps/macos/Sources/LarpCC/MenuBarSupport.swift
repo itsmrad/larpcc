@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import LarpModel
 
 // MARK: - Preferences (UserDefaults; never sent anywhere)
@@ -20,21 +21,20 @@ enum MenuBarPreferences {
 extension AppStore {
     /// D14: opening the panel re-reads Local usage. Live waits for the user or the opt-in interval.
     func menuBarPanelOpened() {
+        guard UsagePreferences.source == .local else { return }
         if snapshot == nil {
             // A metadata refresh also re-reads Local usage.
-            if !busy { startRefresh() }
-        } else if UsagePreferences.source == .local {
-            refreshUsage()
-        }
-    }
-
-    /// The panel's Refresh: reads usage from the current source, loading profiles first if needed.
-    func menuBarRefresh() {
-        if snapshot == nil {
             if !busy { startRefresh() }
         } else {
             refreshUsage()
         }
+    }
+
+    /// The panel's Refresh: reads usage from the current source, recovering profiles first if needed.
+    func menuBarRefresh() {
+        if snapshot == nil, !busy { startRefresh() }
+        // A metadata refresh re-reads Local usage itself; Live usage is only read on request.
+        if snapshot != nil || UsagePreferences.source == .live { refreshUsage() }
     }
 }
 
@@ -57,6 +57,15 @@ extension AppStore {
         observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
             guard isSettingsWindow(note.object) else { return }
             Task { @MainActor in showDockIcon() }
+        })
+    }
+
+    /// The status item's insertion binding. Removing the item from the menu bar (⌘-drag)
+    /// brings the Dock icon back, so the app never runs without a way to reach it.
+    static func insertion(_ shown: Binding<Bool>) -> Binding<Bool> {
+        Binding(get: { shown.wrappedValue }, set: { value in
+            shown.wrappedValue = value
+            if !value { Task { @MainActor in showDockIcon() } }
         })
     }
 
@@ -128,9 +137,10 @@ enum MenuBarSnapshot {
     @MainActor private static func render(to path: String) async -> Bool {
         let store = AppStore(client: FixtureLarpClient())
         guard store.isFixture else { return false }
+        // Local usage follows the metadata refresh; Live (sample) usage is read once here.
         await store.refresh()
-        store.refreshUsage()
-        while store.usageLoading { try? await Task.sleep(nanoseconds: 20_000_000) }
+        if UsagePreferences.source == .live { store.refreshUsage() }
+        for await loading in store.$usageLoading.values where !loading { break }
 
         AppearanceMode.launchOverride?.apply()
         let dark: Bool
