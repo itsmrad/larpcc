@@ -4,11 +4,13 @@ import LarpModel
 @main
 struct LarpCCApp: App {
     @StateObject private var store = AppStore(client: FixtureLarpClient())
+    @AppStorage(MenuBarPreferences.shownKey) private var menuBarShown = true
     init() {
         if CommandLine.arguments.contains("--validate-contract-resource") {
             do { try ProcessLarpClient.validateBundledContract(); exit(0) }
             catch { exit(1) }
         }
+        MenuBarSnapshot.runIfRequested()
     }
     var body: some Scene {
         Window("LarpCC", id: "settings") {
@@ -23,6 +25,12 @@ struct LarpCCApp: App {
                 OpenSettingsWindow()
             }
         }
+        MenuBarExtra(isInserted: $menuBarShown) {
+            MenuBarPanel(store: store)
+        } label: {
+            MenuBarLabel(store: store)
+        }
+        .menuBarExtraStyle(.window)
     }
 }
 

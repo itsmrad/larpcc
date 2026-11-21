@@ -122,19 +122,12 @@ struct UsageSection: View {
             if let report {
                 if let window = report.fiveHour { UsageWindowRow(title: "5-hour window", window: window) }
                 if let window = report.weekly { UsageWindowRow(title: "Weekly window", window: window) }
-                if let credits = report.resetCredits {
-                    LabeledContent {
-                        Text("\(credits) available").monospacedDigit()
-                    } label: {
-                        Text("Reset credits")
-                        Text("Each one resets a window early.")
-                    }
-                }
             } else {
                 Text(store.usageLoading ? "Reading usage…"
                      : store.usageError ?? "No usage saved for this profile yet.")
                     .foregroundStyle(.secondary)
             }
+            ResetAvailabilityRow(credits: report?.resetCredits)
         } header: {
             HStack(alignment: .firstTextBaseline) {
                 Text("Usage")
@@ -152,6 +145,21 @@ struct UsageSection: View {
             if report != nil {
                 UsageUpdatedText(report: report, loading: false)
                     .font(.footnote)
+            }
+        }
+    }
+}
+
+/// "Limit resets" row; always shown, with wording shared with the menu bar.
+struct ResetAvailabilityRow: View {
+    let credits: Int?
+    var body: some View {
+        LabeledContent {
+            Text(ResetAvailability.text(credits: credits)).monospacedDigit()
+        } label: {
+            Text("Limit resets")
+            if let credits, credits > 0 {
+                Text("Each one resets a window early.")
             }
         }
     }

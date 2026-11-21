@@ -22,6 +22,7 @@ struct GeneralPage: View {
             }
 
             UsageSettingsSection(store: store)
+            MenuBarSettingsSection(store: store)
 
             Section("Command-line tool") {
                 LabeledContent {

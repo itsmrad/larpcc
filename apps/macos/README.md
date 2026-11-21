@@ -46,6 +46,32 @@ references are never displayed or logged. The bundled frozen schema validates
 required fields, enums, numeric strings and rejects unknown fields before typed
 decoding; the workflow checks its bytes against the merged source contract.
 
+## Menu bar
+
+LarpCC also adds a menu bar item (General › Menu Bar › Show in menu bar, on by
+default). Its template glyph shows the tightest "% left" across enabled profiles
+and both windows, one chosen profile's tightest window, or the glyph alone; with no
+usage data it is always the glyph alone. The needle drops below 25% and 10% left.
+
+The panel lists one card per enabled profile, tightest first: 5-hour and weekly
+bars of percent left with an even-pace tick ("Ahead of pace" when usage runs
+faster), "Resets in 2h 13m" countdowns, limit-reset availability (always shown,
+also on each profile page as "Limit resets"), when it was updated, and Open in
+Terminal / desktop app buttons for enabled surfaces. Orange (below 25%) and red
+(below 10%) always come with "Low" / "Almost out" text. ↑/↓ move between cards,
+Return opens Settings, Esc closes; ⌘R refreshes, ⌘, opens Settings, ⌘Q quits.
+
+Refresh rules follow the usage source. **Local**: opening the panel re-reads the
+data already saved on this Mac (no timer). **Live**: nothing is read on open;
+only the panel's Refresh or the opt-in interval reads live usage. "Hide Dock icon
+when the window is closed" switches to a menu-bar-only app after the window closes
+and restores the Dock icon when the window opens again; it needs the menu bar item.
+
+Screenshots (sample mode only): `--menubar-panel-snapshot=/abs/path.png` renders
+the panel with sample data at 2x, honouring `--appearance=light|dark`, and exits.
+`--page=general` shows the Menu Bar settings, and `--page=profile-1` (2 resets),
+`profile-2` (no reset info) or `profile-3` (no resets) show the usage section.
+
 From this directory:
 
 ```sh
@@ -53,6 +79,7 @@ swift test
 swift run LarpCC
 ./scripts/bundle.sh
 open dist/LarpCC.app --args --appearance=light
+dist/LarpCC.app/Contents/MacOS/LarpCC --appearance=dark --menubar-panel-snapshot="$PWD/panel-dark.png"
 # Quit before relaunching with --appearance=dark.
 ```
 
