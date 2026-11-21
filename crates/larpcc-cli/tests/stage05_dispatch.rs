@@ -374,7 +374,7 @@ fn stage05_dispatch_alias_reaches_fake_with_exact_args_home_and_exit() {
     assert_eq!(value["args"], serde_json::json!(expected));
     assert_eq!(
         value["CODEX_HOME"],
-        encode(f.root.join("profiles/1/cli").as_os_str())
+        encode(f.root.join("profiles").join("1").join("cli").as_os_str())
     );
     assert!(value["CLAUDE_CONFIG_DIR"].is_null() && !ambient.exists());
 }
