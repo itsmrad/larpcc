@@ -57,6 +57,35 @@ reference-only renders and fixed redacted output. Provider account restrictions
 cannot be ruled out. Native identity/refresh/logout support requires separately
 authorized finite stage-3 sheets; names/status/desktop receipts prove none of it.
 
+## Stage 11 usage-limits exception (D14)
+
+User decision 2026-11-17, explicit and informed (the lead explained the ban
+risk first): show each profile's 5-hour and weekly limits and reset times in the
+CLI and the Mac app, with **both** modes, LOCAL as the default and LIVE opt-in in
+settings. Scope is this feature only, exactly as [stage 11](docs/stages/11-usage.md)
+specifies; every other invariant stays binding.
+
+- Invariant 2 ("no usage meter reading tokens") is amended only for LIVE: when
+  the user has enabled LIVE and acknowledged the warning, Larp reads that
+  profile's own access token in memory for one request to that provider's usage
+  endpoint. It is never stored, logged, refreshed, put in argv/env or sent
+  elsewhere. LOCAL reads no tokens. A usage meter from LOCAL records is allowed.
+- Invariant 3 (no network to Anthropic/OpenAI) is amended only for that LIVE
+  request: one pinned HTTPS host/path per provider, no proxy, no redirects,
+  bounded, no retries. LOCAL and every other command make no provider requests.
+- Invariant 5 is unchanged: LIVE runs only in a foreground `usage` invocation
+  (user action, or the GUI's opt-in interval while a usage view is visible).
+  No daemon, schedule, login item or background refresh is started by Larp.
+- Stage 04's "never reads auth/history/session contents" is narrowed for LOCAL
+  Codex only: a bounded, confined streaming reader extracts allowlisted
+  rate-limit fields from the profile's own session logs and retains nothing else.
+  LIVE reads only the named credential fields. Native config is still never read.
+- Plan/account identity is never read from tokens, files or logs; a plan shows
+  only as a user-entered label. Account email/plan display is stage 14 (D25/D26).
+- Agents never read real tokens or call real endpoints (RULES 4a); LIVE is built
+  and tested against fakes and labelled unverified until the user authorizes a
+  real-account qualification.
+
 ## Data and ownership amendments
 
 Registry v3 adds surfaces, aliases and desktop bindings in **one** bump; derive
@@ -92,6 +121,7 @@ SwiftUI shells out to stable JSON; no library extraction or Tauri.
 | 08 | [JSON/doctor/injection](docs/stages/08-json-launch-doctor.md), completes CLI | frozen schema:1, version-only detection, invented-row injection; native ROWS empty |
 | 09 | [desktop](docs/stages/09-desktop.md), after CLI | MAC local dispatch interface and separate native proof; uncertain binding/focus/qualification refuses |
 | 10 | [native GUI](docs/stages/10-native-gui.md), after CLI/desktop | SwiftUI consumes CLI JSON, explicit toggles; stale/unknown schema fails safely |
+| 11 | [usage limits](docs/stages/11-usage.md), after 08 (D14) | `usage`/settings/plan-label CLI first; LOCAL readers, fake-only LIVE; app/menu bar wait for the lead's go |
 
 Stages 05–07 can be independently implemented after the exact seed if lead
 allocates disjoint files; shared changes serialize through CORE. Contracts freeze

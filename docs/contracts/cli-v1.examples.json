@@ -685,5 +685,279 @@
       "code": "forbidden_source",
       "message": "Skill sources inside managed or vendor homes are forbidden."
     }
+  },
+  {
+    "schema": 1,
+    "command": "usage",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "requested_mode": "settings",
+      "generated_at": "2026-11-21T12:30:00Z",
+      "profiles": [
+        {
+          "profile_id": "1",
+          "name": "claude-work",
+          "provider": "claude",
+          "mode": "local",
+          "source": null,
+          "captured_at": null,
+          "client_version": null,
+          "plan": null,
+          "windows": {
+            "five_hour": {
+              "used_percent": null,
+              "resets_at": null,
+              "window_seconds": 18000,
+              "reason": "capture_not_installed",
+              "pace": null
+            },
+            "weekly": {
+              "used_percent": null,
+              "resets_at": null,
+              "window_seconds": 604800,
+              "reason": "capture_not_installed",
+              "pace": null
+            },
+            "extra": null
+          },
+          "reset_credits": {
+            "state": "unsupported",
+            "count": null,
+            "expires_state": "unsupported",
+            "expires_at": null
+          },
+          "diagnostics": [
+            {
+              "code": "capture_not_installed",
+              "message": "Claude usage capture needs a qualified Larp launch."
+            }
+          ]
+        },
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "local",
+          "source": "codex_session_log",
+          "captured_at": "2026-11-21T12:00:00Z",
+          "client_version": "0.169.0",
+          "plan": {
+            "label": "Pro",
+            "source": "user"
+          },
+          "windows": {
+            "five_hour": {
+              "used_percent": 30.0,
+              "resets_at": "2026-11-21T14:00:00Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 60.0,
+                "reserve_percent": 30.0,
+                "runs_out_at": "2026-11-21T14:00:00Z",
+                "lasts_until_reset": true
+              }
+            },
+            "weekly": {
+              "used_percent": 75.0,
+              "resets_at": "2026-11-24T23:59:59Z",
+              "window_seconds": 604800,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 50.0,
+                "reserve_percent": -25.0,
+                "runs_out_at": "2026-11-22T16:00:00Z",
+                "lasts_until_reset": false
+              }
+            },
+            "extra": []
+          },
+          "reset_credits": {
+            "state": "not_recorded",
+            "count": null,
+            "expires_state": "not_recorded",
+            "expires_at": null
+          },
+          "diagnostics": []
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "usage",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "requested_mode": "live",
+      "generated_at": "2026-11-21T12:00:05Z",
+      "profiles": [
+        {
+          "profile_id": "1",
+          "name": "claude-work",
+          "provider": "claude",
+          "mode": "live",
+          "source": null,
+          "captured_at": null,
+          "client_version": null,
+          "plan": {
+            "label": "Max 5x",
+            "source": "user"
+          },
+          "windows": {
+            "five_hour": {
+              "used_percent": null,
+              "resets_at": null,
+              "window_seconds": 18000,
+              "reason": "sign_in_again",
+              "pace": null
+            },
+            "weekly": {
+              "used_percent": null,
+              "resets_at": null,
+              "window_seconds": 604800,
+              "reason": "sign_in_again",
+              "pace": null
+            },
+            "extra": null
+          },
+          "reset_credits": {
+            "state": "unsupported",
+            "count": null,
+            "expires_state": "unsupported",
+            "expires_at": null
+          },
+          "diagnostics": [
+            {
+              "code": "sign_in_again",
+              "message": "Sign in again in the official client."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "mode": "local",
+      "live": {
+        "enabled": false,
+        "acknowledged_warning": null,
+        "current_warning": 1,
+        "verified": false
+      },
+      "refresh_interval_seconds": null,
+      "claude_statusline_capture": true,
+      "profiles": [
+        {
+          "profile_id": "1",
+          "name": "claude-work",
+          "provider": "claude",
+          "mode": "inherit",
+          "plan": {
+            "label": "Max 5x",
+            "source": "user"
+          }
+        },
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "inherit",
+          "plan": {
+            "label": "Pro",
+            "source": "user"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.live",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": [
+        {
+          "code": "live_unverified",
+          "message": "LIVE usage is unverified against real accounts."
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.mode",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": "2",
+      "name": "codex-45",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.interval",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.claude-statusline",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.plan-label",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": "2",
+      "name": "codex-45",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "usage",
+    "ok": false,
+    "error": {
+      "code": "live_disabled",
+      "message": "LIVE usage is off; enable it in settings first."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.live",
+    "ok": false,
+    "error": {
+      "code": "confirmation_required",
+      "message": "Enabling LIVE usage requires --acknowledge-risk."
+    }
   }
 ]

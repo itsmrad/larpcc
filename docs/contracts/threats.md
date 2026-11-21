@@ -30,3 +30,33 @@ implementation and per-file coverage before merge; no review pass claimed here.
 Stale GUI intent: require `--expected-revision` on GUI mutation/open requests,
 checked under the resolution lock before effects. Name reuse after rename must
 fail with conflict; internal post-resolution revalidation alone is insufficient.
+
+## Usage (stage 11, D14)
+
+Scope: [stage 11](../stages/11-usage.md). The user accepted LIVE's ban risk
+explicitly and informed (2026-11-17); LOCAL stays the default. Controls below
+are requirements with synthetic acceptance, not implementation certification.
+
+| Threat | Required control and discriminating acceptance |
+|---|---|
+| Token in memory, swap, core dumps | zeroizing buffers and token type without Debug/Display, dropped right after the one request; core dumps disabled for the process before a LIVE read on Unix (`RLIMIT_CORE` 0, Linux `PR_SET_DUMPABLE` 0). No `mlock` promise: swap and hibernation images remain a residual risk |
+| Token in logs, panics, error strings | no logging in LIVE paths; fixed codes only; parser/TLS/IO errors never formatted into output; JSON-mode panic hook emits only a fixed envelope. `stage11_secrets` injects failures at every step and finds zero fake-token bytes in stdout/stderr/files/panic output |
+| Token in child argv/env | LIVE starts no child or PTY and never refreshes; tokens never enter argv/env. Asserted by the fake transport and process-spawn seam |
+| Endpoint confusion, MITM, exfiltration | two fixed host/path pairs, TLS verification, proxy env ignored, redirects never followed, no cookies, 64 KiB response cap, 5/10 s timeouts, one attempt. Test-only base-URL/trust-root override is compiled out of release |
+| Hostile or changed response | allowlisted deserializer; unknown shape, out-of-range values or 401/403 fail closed to `live_unavailable`/`sign_in_again`; nothing echoed; account IDs, user IDs, plan, credits and dollar fields discarded unread into output |
+| Session-log privacy (LOCAL Codex) | confined no-follow reader in the profile's own CODEX_HOME, grammar-checked paths, caps on dirs/files/bytes/lines/time; streaming skip of all non-allowlisted values; `session_meta` yields only `cli_version`. Conversation sentinels in fixtures never appear in output or files |
+| Wrong-bucket or stale data | filter by `limit_id`, map by `window_minutes` not position, per-file version gate, `reset_since_capture` after reset; resumed sessions written by another Codex version than `session_meta` names are a known limitation (shape check still applies) |
+| Hook injection: hostile statusLine input | fixed argv and `CLAUDE_CONFIG_DIR` match, 256 KiB/2 s stdin cap, allowlist parse, range checks, no stderr, no echo, exit 0; deep nesting, huge strings, NaN and wrong types tested |
+| Hook tamper: file/settings drift | hook is a root-pinned Larp copy validated by receipt and hash; the `--settings` render is an owned, hash-checked file outside native homes and refuses on drift; no native `settings.json` writes. Managed policy, `disableAllHooks` or untrusted workspaces silently stop capture (shows stale/`not_captured`, never guessed) |
+| Capture file forgery by same-user programs | capture is untrusted input to `usage`: no-follow, owner-only, size/field/range checks; a same-user process can still forge plausible numbers. Display is "as reported", never used for automation |
+| macOS Keychain access | reading the Claude Code item prompts the user; "Always Allow" adds Larp to its ACL, widening what a compromised Larp binary could read later (stage 11 open decision 5) |
+| ToS / ban risk | LIVE is off by default, needs `--acknowledge-risk` on every enable, labelled unverified; still a request from a non-official client with the user's token, which the provider may detect and restrict. No imitation of official clients' User-Agent |
+
+What LarpCC still never does: refresh, store or copy tokens; drive a client in a
+PTY; scrape or capture native client output for usage; read native config,
+plan or account identity; poll in the background or at login; switch, rotate or
+pool profiles based on usage; send usage data anywhere; read real credentials
+or call real endpoints in tests (fakes only). Residual risks stay: same-user
+processes can read the same credentials and forge captures, memory can be
+swapped, and a provider can restrict an account for LIVE use regardless of
+these controls.

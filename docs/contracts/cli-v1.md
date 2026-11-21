@@ -3,7 +3,10 @@
 Normative schema: [cli-v1.schema.json](cli-v1.schema.json), JSON Schema 2020-12.
 This is a planning contract, not shipped behavior. Import is **OUT OF SCOPE**;
 fresh profiles only. No account/auth output is captured, parsed or inferred. Only explicit bounded
-version text may be parsed by doctor --detect-versions (stage 08).
+version text may be parsed by doctor --detect-versions (stage 08). The only exception is
+the stage 11 usage exception (D14): usage windows, reset times and reset-credit counts
+from the allowlisted sources in [stage 11](../stages/11-usage.md). Account identity and
+auth inference stay forbidden; a plan appears only as a user-entered label.
 SwiftUI later executes the installed CLI; no library extraction.
 
 ## Framing and compatibility
@@ -70,7 +73,8 @@ List order: profiles by ASCII name, aliases by ASCII name, MCP/skills by ASCII
 name, switches by numeric ID, detections by provider (`claude`,`codex`) then
 surface (`cli`,`desktop`), diagnostics by code then message. Matrix columns
 match profile name ordering; every row has exactly one boolean per column.
-Rows include disabled entries. No timestamps, PIDs or nondeterministic keys.
+Rows include disabled entries. No timestamps, PIDs or nondeterministic keys, except
+the stage 11 `usage` envelope's `generated_at`/`captured_at`/`resets_at`/`runs_out_at`.
 Secret references sort by kind then name. Schema constraints are structural;
 unique names/IDs, valid cross references, u64 range and matrix dimensions are
 semantic validation requirements. Serialized envelope maximum is 1 MiB;
@@ -129,6 +133,21 @@ values. Matrix row `enabled` is the effective explicit switch vector.
 See [examples](cli-v1.examples.json) for SwiftUI decoding fixtures including
 profile/provider/surfaces/desktop, alias, MCP, skills, matrices, status/doctor,
 mutation, parser failure and closed desktop dispatch.
+
+## Usage limits (stage 11, additive)
+
+Additive amendment, schema stays 1. Read envelopes `usage` and `settings.usage`;
+mutation receipts `settings.usage.live|mode|interval|claude-statusline` and
+`profile.plan-label`; new error code `live_disabled` (exit 1). Grammar, sources,
+reason codes, ordering, normalization and the pace formula are normative in
+[stage 11](../stages/11-usage.md); pace test vectors are in
+[usage-pace-vectors.json](usage-pace-vectors.json). `usage --live --json` is Larp's
+own bounded network request, not native IO, so it is not `json_native_io`;
+per-profile LIVE failures are row reasons in an `ok:true` envelope. Usage rows carry
+no tokens, account IDs, emails, provider plan names, spend, cost or token counts.
+`settings.usage.mode` carries the profile ID and name for a per-profile override and
+null/null installation-wide; the other `settings.usage.*` receipts carry null/null;
+`profile.plan-label` carries the profile ID and name.
 
 ## Validation without installations
 
