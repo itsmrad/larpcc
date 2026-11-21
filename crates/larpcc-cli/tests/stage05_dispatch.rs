@@ -1,17 +1,25 @@
 mod common;
 use common::*;
+#[cfg(unix)]
 use serde_json::{Value, json};
-use std::{ffi::OsString, fs, path::Path};
+#[cfg(unix)]
+use std::ffi::OsString;
+use std::fs;
+#[cfg(any(unix, feature = "synthetic-launch"))]
+use std::path::Path;
 
 const PENDING: &str = "error: provider operation is disabled for this combination\nhint: review the documented qualification matrix\n";
+#[cfg(unix)]
 const INVALID: &str = "error: alias launcher, receipt or mapping cannot be verified\n";
 
+#[cfg(unix)]
 fn example(command: &str) -> Value {
     let all: Vec<Value> =
         serde_json::from_str(include_str!("../../../docs/contracts/cli-v1.examples.json")).unwrap();
     all.into_iter().find(|e| e["command"] == command).unwrap()
 }
 // Same keys and JSON kinds at every object level; values are fixture specific.
+#[cfg(unix)]
 fn same_shape(a: &Value, b: &Value) {
     match (a, b) {
         (Value::Object(a), Value::Object(b)) => {
@@ -32,10 +40,12 @@ fn same_shape(a: &Value, b: &Value) {
         ),
     }
 }
+#[cfg(unix)]
 fn alias(f: &Fixture, name: &str, id: &str, surface: &str, state: &str) -> Value {
     json!({"name":name,"profile_id":id,"surface":surface,
         "path":f.launcher(name).to_str().unwrap(),"state":state})
 }
+#[cfg(any(unix, feature = "synthetic-launch"))]
 fn setup() -> Fixture {
     let f = Fixture::new();
     f.larp_json(
@@ -65,6 +75,7 @@ fn setup() -> Fixture {
     f
 }
 // The launcher never consults ambient LARPCC_HOME: point it at an unrelated root.
+#[cfg(unix)]
 fn launch(f: &Fixture, name: &str, args: &[OsString], code: i32) -> std::process::Output {
     let mut command = f.command_for(&f.launcher(name), &[]);
     command
@@ -76,6 +87,7 @@ fn launch(f: &Fixture, name: &str, args: &[OsString], code: i32) -> std::process
     output
 }
 
+#[cfg(unix)]
 #[test]
 fn stage05_dispatch_arbitrary_names_providers_and_contract_shapes() {
     let f = setup();
@@ -156,6 +168,7 @@ fn stage05_dispatch_arbitrary_names_providers_and_contract_shapes() {
     assert_eq!(stdout(&human), "No aliases.\n");
 }
 
+#[cfg(unix)]
 #[test]
 fn stage05_dispatch_root_pinned_argv_forwarding_rename_and_exit() {
     let f = setup();
@@ -226,8 +239,9 @@ fn stage05_dispatch_root_pinned_argv_forwarding_rename_and_exit() {
     }
 }
 
+#[cfg(unix)]
 #[test]
-fn stage05_dispatch_copies_and_moves_refuse_but_larp_copy_is_standard() {
+fn stage05_dispatch_copies_and_moves_refuse() {
     let f = setup();
     f.larp_json(
         &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
@@ -247,21 +261,6 @@ fn stage05_dispatch_copies_and_moves_refuse_but_larp_copy_is_standard() {
     );
     let output = exec(f.command_for(&copy, &[]), 1);
     assert!(output.stdout.is_empty() && stderr(&output).starts_with(INVALID));
-    // A launcher copied to `larp` is simply standard Larp: ambient root, cc grammar,
-    // and the same admission gate (no bypass).
-    let standard = f
-        .temp
-        .path()
-        .join(format!("larp{}", std::env::consts::EXE_SUFFIX));
-    copy_executable(&f.launcher("codex-45"), &standard);
-    let list = envelope(&exec(
-        f.command_for(&standard, &["cc", "alias", "list", "--json"]),
-        0,
-    ));
-    assert_eq!(list["data"]["aliases"][0]["name"], "codex-45");
-    let run = exec(f.command_for(&standard, &["cc", "run", "claude-work"]), 1);
-    assert_eq!(stderr(&run), PENDING);
-    fs::remove_file(&standard).unwrap();
     // Moved root: the receipt pins the absolute root, so the launcher refuses there.
     let moved = f.temp.path().join("moved");
     fs::rename(&f.root, &moved).unwrap();
@@ -275,6 +274,7 @@ fn stage05_dispatch_copies_and_moves_refuse_but_larp_copy_is_standard() {
     assert!(Path::new(&f.launcher("codex-45")).exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn stage05_dispatch_desktop_alias_forwards_to_app_open() {
     let f = setup();
@@ -294,4 +294,83 @@ fn stage05_dispatch_desktop_alias_forwards_to_app_open() {
     assert!(stderr(&output).starts_with("error: unsupported launch argument: argument syntax\n"));
     // Claude desktop (and every non-macOS desktop) stays closed: alias is no unlock.
     assert_eq!(stderr(&launch(&f, "codex-app", &[], 1)), PENDING);
+}
+
+#[cfg(feature = "synthetic-launch")]
+#[path = "support/alias_args.rs"]
+mod alias_args;
+
+#[cfg(feature = "synthetic-launch")]
+#[test]
+fn stage05_dispatch_alias_reaches_fake_with_exact_args_home_and_exit() {
+    use sha2::{Digest, Sha256};
+    use std::ffi::OsStr;
+
+    fn encode(value: &OsStr) -> String {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            value
+                .as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            value
+                .encode_wide()
+                .map(|unit| format!("{unit:04x}"))
+                .collect()
+        }
+    }
+
+    let f = setup();
+    let fake = f
+        .temp
+        .path()
+        .join(format!("fake provider{}", std::env::consts::EXE_SUFFIX));
+    copy_executable(Path::new(env!("CARGO_BIN_EXE_larpcc-fake-provider")), &fake);
+    f.run(
+        &["cc", "provider", "bind", "codex", fake.to_str().unwrap()],
+        0,
+    );
+    let digest: String = Sha256::digest(fs::read(&fake).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let driver = Path::new(env!("CARGO_BIN_EXE_larpcc-synthetic"));
+    let source = f.temp.path().join(driver.file_name().unwrap());
+    copy_executable(driver, &source);
+    exec(
+        f.command_for(driver, &["stage05-install", source.to_str().unwrap()]),
+        0,
+    );
+    f.profile(&["rename", "claude-work", "renamed"], 0);
+    let ambient = f.temp.path().join("ambient");
+    let record = f.temp.path().join("alias-record");
+    let status: u32 = if cfg!(windows) { 0x9234_5678 } else { 37 };
+    let mut command = f.command_for(&f.launcher("codex-45"), alias_args::ARGS);
+    command
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env("LARPCC_HOME", &ambient)
+        .env("LARPCC_SYNTHETIC_ALIAS_SHA256", &digest)
+        .env("LARPCC_FAKE_EXIT", status.to_string())
+        .env("LARPCC_FAKE_RECORD", &record);
+    let output = exec(command, status as i32);
+    assert!(output.stdout.is_empty());
+    assert!(stderr(&output).contains("Profiles select native state"));
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
+    let expected: Vec<_> = std::iter::once(fake.as_os_str())
+        .chain(alias_args::ARGS.iter().map(OsStr::new))
+        .map(encode)
+        .collect();
+    assert_eq!(value["args"], serde_json::json!(expected));
+    assert_eq!(
+        value["CODEX_HOME"],
+        encode(f.root.join("profiles/1/cli").as_os_str())
+    );
+    assert!(value["CLAUDE_CONFIG_DIR"].is_null() && !ambient.exists());
 }

@@ -7,6 +7,14 @@
 #include <errno.h>
 #include <unistd.h>
 #include <limits.h>
+#include <stddef.h>
+#include <libproc.h>
+#include <sys/proc_info.h>
+_Static_assert(PROC_PIDREGIONPATHINFO == 8, "mapped image query flavor");
+_Static_assert(offsetof(struct proc_regionwithpathinfo, prp_prinfo.pri_address) == 64, "region address");
+_Static_assert(offsetof(struct proc_regionwithpathinfo, prp_vip.vip_vi.vi_stat.vst_dev) == 80, "mapped vnode device");
+_Static_assert(offsetof(struct proc_regionwithpathinfo, prp_vip.vip_vi.vi_stat.vst_ino) == 88, "mapped vnode inode");
+_Static_assert(sizeof(struct proc_regionwithpathinfo) == 232 + MAXPATHLEN, "mapped region ABI");
 _Static_assert(sizeof(acl_type_t) == sizeof(int), "acl_type_t ABI");
 _Static_assert(sizeof(acl_tag_t) == sizeof(int), "acl_tag_t ABI");
 _Static_assert(sizeof(filesec_property_t) == sizeof(int), "filesec_property_t ABI");

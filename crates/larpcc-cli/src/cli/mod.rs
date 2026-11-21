@@ -3,6 +3,9 @@ mod json;
 mod render;
 #[allow(unused_imports, reason = "the synthetic driver has its own entrypoint")]
 pub use alias::gate;
+#[cfg(feature = "synthetic-launch")]
+#[allow(unused_imports, reason = "used by the nonpackaged synthetic driver")]
+pub(crate) use alias::gate_with_rows;
 use json::{execute_json, json_error, json_or_usage, json_success};
 
 use crate::launch::admission::{self, Operation};

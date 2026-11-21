@@ -2,10 +2,13 @@
 // (`stage05_transaction_interrupted_*`); these drive the shipped binary end to end.
 mod common;
 use common::*;
+#[cfg(unix)]
 use std::fs;
 
+#[cfg(unix)]
 const INVALID: &str = "error: alias launcher, receipt or mapping cannot be verified\n";
 
+#[cfg(unix)]
 fn setup() -> Fixture {
     let f = Fixture::new();
     f.larp_json(
@@ -26,6 +29,7 @@ fn code(value: &serde_json::Value) -> &str {
     value["error"]["code"].as_str().unwrap()
 }
 
+#[cfg(unix)]
 #[test]
 fn stage05_transaction_concurrent_writers_commit_once() {
     let f = setup();
@@ -80,6 +84,7 @@ fn stage05_transaction_concurrent_writers_commit_once() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn stage05_transaction_expected_revision_and_pending_gate() {
     let f = setup();
@@ -160,6 +165,7 @@ fn stage05_transaction_expected_revision_and_pending_gate() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn stage05_transaction_forged_receipt_and_drift_refuse() {
     let f = setup();
@@ -201,4 +207,40 @@ fn stage05_transaction_forged_receipt_and_drift_refuse() {
     assert_eq!(list["data"]["aliases"][0]["state"], "ok");
     f.larp_json(&["cc", "alias", "remove", "codex-45", "--json"], 0);
     assert!(!launcher.exists() && !receipt.exists());
+}
+
+#[test]
+fn stage05_transaction_stale_revision_leaves_missing_root_untouched() {
+    let f = Fixture::new();
+    let value = f.larp_json(
+        &[
+            "cc",
+            "alias",
+            "add",
+            "codex-45",
+            "claude-work",
+            "--expected-revision",
+            "1",
+            "--json",
+        ],
+        1,
+    );
+    assert_eq!(code(&value), "conflict");
+    assert!(!f.root.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn stage05_transaction_non_unicode_root_refuses_before_alias_artifacts() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+    let mut f = Fixture::new();
+    f.root = f.temp.path().join(OsStr::from_bytes(b"managed-\xff"));
+    f.profile(&["add", "claude-work", "--provider", "codex"], 0);
+    let value = f.larp_json(
+        &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
+        1,
+    );
+    assert_eq!(code(&value), "unsafe_path");
+    assert!(!f.root.join("bin").exists());
+    assert!(!f.root.join("share-journal.json").exists());
 }

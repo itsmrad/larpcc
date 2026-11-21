@@ -8,6 +8,8 @@ mod provider;
 mod registry;
 mod share;
 fn main() -> std::process::ExitCode {
+    #[cfg(windows)]
+    platform::pin_startup_image();
     // argv[0] classification precedes every parser and early gate.
     if let Some(code) = cli::gate() {
         return code;

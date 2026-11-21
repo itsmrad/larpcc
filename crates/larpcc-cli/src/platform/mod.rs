@@ -147,7 +147,9 @@ pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdent
 
 #[cfg(windows)]
 pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, PathBuf), Error> {
-    windows::open_current_larp_checked(root)
+    // A module pathname reopened at startup alone cannot prove the loaded image.
+    let _ = root;
+    Err(Error::AliasImageUnverified)
 }
 
 #[cfg(windows)]

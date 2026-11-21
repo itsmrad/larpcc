@@ -17,23 +17,36 @@ including with --shadow. Explicit user PATH precedence, no rc/PATH edits.
 Artifacts only in `<root>/bin` with private ownership and a root-bound launcher
 ABI manifest. Installation prints guidance; tests never touch ~/.local/bin.
 
-A copy of Larp (never vendor binary) dispatches by argv[0] basename (.exe stripped
-on Windows) through a root-pinned receipt, not ambient LARPCC_HOME or PATH.
-Receipt version/ABI/root/profile ID/alias hash validated; moving/copying launcher
-or substituting root refuses. Standard larp invocation alone parses `cc` grammar;
-alias invocation forwards argv to selected CLI run or desktop open, including
-literal `--json` as vendor args for CLI alias (not JSON mode). Preserve stage-3
-argument/admission restrictions; alias is no unlock. Root pinning may use an
-adjacent validated receipt and immutable absolute root, no executable patching.
-Revalidate mapping snapshot before dispatch. Name change retains ID mapping.
+A copy of Larp dispatches by its alias basename (.exe stripped on Windows).
+The adjacent receipt pins the absolute root, root and `bin` directory
+identities, launcher identity and hash, ABI, and immutable profile ID. Alias
+dispatch forwards arguments to the selected CLI admission or desktop open.
+Arguments such as `cc` and `--json` are vendor arguments in CLI alias mode and
+remain subject to the ordinary launch argument policy. Alias invocations never
+parse the `cc` grammar. Final admission rechecks the alias mapping revision,
+profile ID, directory identities, and receipt digest. Profile rename retains
+the ID mapping.
 
-Add is lock+journal+exclusive artifact creation+hash/identity validation+registry
-commit; crash resumes or refuses on drift. Do not leave a usable unregistered
-launcher: pending receipts cannot dispatch. Remove validates fixed install path,
-hash/identity and receipt before unlink; changed/missing ownership refuses drift,
-never delete by marker alone. Cleanup and mapping removal are journaled together.
-Missing artifact may retire mapping only when its absence and remaining receipt
-ownership are safely established. No arbitrary absolute manifest paths.
+A launcher copied or renamed to the executable basename `larp` and invoked as
+`larp` is standard Larp. It uses the ambient `LARPCC_HOME` or OS default and
+the same closed admission with empty qualification rows. It ignores adjacent
+receipts and alias root pins. Renaming is a user action and provides no privilege
+boundary.
+
+Add stages complete files at exclusive private names in `<root>/bin`. The
+journal records their identities and hashes before atomic publication without
+replacement. Pending receipts cannot dispatch. An interrupted add can roll back
+proven artifacts. Unrecorded or changed files leave the journal pending for
+manual recovery. Removal and replay derive ownership from the committed mapping
+and receipt digest and delete via the checked directory or file handle.
+A missing launcher may retire with its owned receipt. Drift leaves any pending
+transaction in place. Revision-pinned commands compare the revision before any
+recovery and refuse pending work without replaying it.
+
+Alias creation requires Unicode root and source paths. Linux checks the running
+image through `/proc/self/exe`. macOS checks the mapped main image's vnode.
+Windows creation refuses with `unsafe_path` because reopening the module path
+alone cannot prove loaded-image ownership.
 
 Implement native synthetic tests and execute
 `cargo test --workspace --locked stage05_` (zero matches fails):

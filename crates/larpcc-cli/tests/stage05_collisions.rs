@@ -46,7 +46,9 @@ fn stage05_collisions_shadow_flag_and_reserved_names_precede_root_io() {
         assert_eq!(refused["command"], "parse");
     }
     assert!(!f.root.exists());
+    #[cfg(unix)]
     let f = setup();
+    #[cfg(unix)]
     for name in ["claude", "codex"] {
         let added = f.larp_json(
             &[
@@ -109,35 +111,62 @@ fn stage05_collisions_never_overwrite_existing_files_or_path_commands() {
         &["cc", "alias", "add", "codex-45", "claude-work", "--shadow"],
     );
     add.env("PATH", &path);
-    let added = exec(add, 0);
-    assert!(stdout(&added).contains("does not edit PATH or shell files"));
-    assert_eq!(fs::read(&command).unwrap(), b"unrelated command sentinel");
-    // Registered names, missing profiles and unknown aliases.
-    assert_eq!(
-        code(&f.larp_json(
-            &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
-            1
-        )),
-        "conflict"
-    );
-    assert_eq!(
-        code(&f.larp_json(&["cc", "alias", "add", "other", "missing", "--json"], 1)),
-        "not_found"
-    );
-    let missing = f.larp_json(&["cc", "alias", "remove", "missing", "--json"], 1);
-    assert_eq!(missing["command"], "alias.remove");
-    assert_eq!(code(&missing), "not_found");
-    // Forget refuses while aliases reference the profile.
-    assert_eq!(
-        code(&f.larp_json(
+    #[cfg(windows)]
+    {
+        let refused = exec(add, 1);
+        assert!(
+            stderr(&refused)
+                .starts_with("error: cannot verify the loaded Larp image for alias creation")
+        );
+        assert!(!f.launcher("codex-45").exists());
+        assert!(!f.root.join("share-journal.json").exists());
+        assert_eq!(fs::read(&command).unwrap(), b"unrelated command sentinel");
+    }
+    #[cfg(unix)]
+    {
+        let added = exec(add, 0);
+        assert!(stdout(&added).contains("does not edit PATH or shell files"));
+        assert_eq!(fs::read(&command).unwrap(), b"unrelated command sentinel");
+        // Registered names, missing profiles and unknown aliases.
+        assert_eq!(
+            code(&f.larp_json(
+                &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
+                1
+            )),
+            "conflict"
+        );
+        assert_eq!(
+            code(&f.larp_json(&["cc", "alias", "add", "other", "missing", "--json"], 1)),
+            "not_found"
+        );
+        let missing = f.larp_json(&["cc", "alias", "remove", "missing", "--json"], 1);
+        assert_eq!(missing["command"], "alias.remove");
+        assert_eq!(code(&missing), "not_found");
+        // Forget refuses while aliases reference the profile.
+        assert_eq!(
+            code(&f.larp_json(
+                &["cc", "profile", "forget", "claude-work", "--yes", "--json"],
+                1
+            )),
+            "conflict"
+        );
+        f.larp_json(&["cc", "alias", "remove", "codex-45", "--json"], 0);
+        f.larp_json(
             &["cc", "profile", "forget", "claude-work", "--yes", "--json"],
-            1
-        )),
-        "conflict"
+            0,
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn stage05_collisions_windows_creation_refuses_before_alias_artifacts() {
+    let f = setup();
+    let value = f.larp_json(
+        &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
+        1,
     );
-    f.larp_json(&["cc", "alias", "remove", "codex-45", "--json"], 0);
-    f.larp_json(
-        &["cc", "profile", "forget", "claude-work", "--yes", "--json"],
-        0,
-    );
+    assert_eq!(code(&value), "unsafe_path");
+    assert!(!f.root.join("bin").exists());
+    assert!(!f.root.join("share-journal.json").exists());
 }

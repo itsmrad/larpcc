@@ -198,3 +198,46 @@ fn stage05_collisions_existing_path_and_receipt_never_overwrite() {
         b"unrelated receipt sentinel"
     );
 }
+
+#[test]
+fn stage05_dispatch_larp_copy_uses_ambient_root_and_ordinary_gate() {
+    const PENDING: &str = "error: provider operation is disabled for this combination\nhint: review the documented qualification matrix\n";
+    let f = Fixture::new();
+    let original = f.install_larp();
+    let registry = Registry::at(f.root.clone()).unwrap();
+    let profile = ProfileName::parse_new("claude-work").unwrap();
+    registry.add(profile.clone(), Provider::Codex).unwrap();
+    let alias = ProfileName::parse_new("codex-45").unwrap();
+    registry
+        .alias_add_with(alias, &profile, Surface::Cli, None, |root| {
+            Ok(aliases::test_source(&original, root))
+        })
+        .unwrap();
+
+    let launcher = f.launcher("codex-45");
+    let ambient = f.temp.path().join("ambient");
+    let mut command = f.command_for(&launcher, &["cc", "profile", "list", "--json"]);
+    command.env("LARPCC_HOME", &ambient);
+    let output = exec(command, 1);
+    assert_eq!(stderr(&output), PENDING);
+    assert!(output.stdout.is_empty());
+
+    let standard = launcher.with_file_name(format!("larp{}", std::env::consts::EXE_SUFFIX));
+    copy_executable(&launcher, &standard);
+    create_file(
+        &standard.with_file_name("larp.larp-alias.json"),
+        &fs::read(f.alias_receipt("codex-45")).unwrap(),
+    );
+    let mut command = f.command_for(&standard, &["cc", "profile", "list", "--json"]);
+    command.env("LARPCC_HOME", &ambient);
+    let value = envelope(&exec(command, 0));
+    assert_eq!(value["data"]["profiles"], serde_json::json!([]));
+    assert!(!ambient.exists());
+    for path in [&standard, &original] {
+        let mut command = f.command_for(path, &["cc", "run", "claude-work"]);
+        command.env("LARPCC_HOME", &ambient);
+        let output = exec(command, 1);
+        assert_eq!(stderr(&output), PENDING);
+        assert!(output.stdout.is_empty() && !ambient.exists());
+    }
+}

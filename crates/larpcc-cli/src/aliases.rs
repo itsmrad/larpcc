@@ -48,7 +48,9 @@ pub(crate) fn invocation(argv0: &OsStr) -> Result<Option<ProfileName>, Error> {
         .and_then(OsStr::to_str)
         .ok_or(Error::AliasInvalid)?;
     #[cfg(windows)]
-    let basename = basename.strip_suffix(".exe").unwrap_or(basename);
+    let normalized = basename.to_ascii_lowercase();
+    #[cfg(windows)]
+    let basename = normalized.strip_suffix(".exe").unwrap_or(&normalized);
     if basename == "larp" {
         return Ok(None);
     }
@@ -92,6 +94,105 @@ pub(crate) fn check_collision(
         }
     }
     Ok(())
+}
+
+fn same_path(a: &Path, b: &Path) -> Result<bool, Error> {
+    #[cfg(windows)]
+    return Ok(platform::contains_path(a, b)? && platform::contains_path(b, a)?);
+    #[cfg(unix)]
+    Ok(a == b)
+}
+
+pub(crate) fn same_launcher(
+    executable: &Path,
+    root: &Path,
+    name: &ProfileName,
+) -> Result<bool, Error> {
+    same_path(executable, &launcher_path(root, name))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DirectoryPin {
+    root: FileIdentity,
+    bin: Option<FileIdentity>,
+}
+
+pub(crate) struct Directories {
+    root: CheckedObject,
+    bin: Option<CheckedObject>,
+    _ancestors: platform::AnchoredPath,
+}
+impl Directories {
+    pub(crate) fn open(root: &Path) -> Result<Self, Error> {
+        let bin = root.join("bin");
+        let ancestors = platform::anchor(&bin.join(".alias-directory"))?;
+        let root_object =
+            platform::inspect(root, ObjectKind::Directory)?.ok_or(Error::AliasInvalid)?;
+        let bin = platform::alias_open_at(&root_object, &bin, ObjectKind::Directory, false)?;
+        Ok(Self {
+            root: root_object,
+            bin,
+            _ancestors: ancestors,
+        })
+    }
+    pub(crate) fn pin(&self) -> DirectoryPin {
+        DirectoryPin {
+            root: self.root.identity.clone(),
+            bin: self.bin.as_ref().map(|bin| bin.identity.clone()),
+        }
+    }
+    pub(crate) fn read(&self, path: &Path) -> Result<Option<CheckedObject>, Error> {
+        let Some(bin) = &self.bin else {
+            return Ok(None);
+        };
+        let object = platform::alias_open_at(bin, path, ObjectKind::File, false)?;
+        if let Some(object) = &object {
+            platform::single_link(&object.file).map_err(|_| Error::AliasInvalid)?;
+        }
+        Ok(object)
+    }
+    pub(crate) fn create(&self, path: &Path) -> Result<CheckedObject, Error> {
+        platform::alias_open_at(self.bin()?, path, ObjectKind::File, true)?
+            .ok_or(Error::AliasInvalid)
+    }
+    pub(crate) fn remove(&self, path: &Path, expected: &FileIdentity) -> Result<(), Error> {
+        platform::alias_unlink_at(self.bin()?, path, expected)
+    }
+    pub(crate) fn publish(&self, from: &Path, to: &Path, expected: &Artifact) -> Result<(), Error> {
+        if expected.present(self, from)? != Some(true) {
+            return Err(Error::AliasInvalid);
+        }
+        platform::alias_publish_at(self.bin()?, from, to)
+    }
+    fn bin(&self) -> Result<&CheckedObject, Error> {
+        self.bin.as_ref().ok_or(Error::AliasInvalid)
+    }
+    pub(crate) fn sync(&self) -> Result<(), Error> {
+        #[cfg(unix)]
+        if let Some(bin) = &self.bin {
+            bin.file.sync_all().map_err(|_| Error::AliasInvalid)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Artifact {
+    pub identity: FileIdentity,
+    pub digest: [u8; 32],
+}
+impl Artifact {
+    pub(crate) fn present(&self, dirs: &Directories, path: &Path) -> Result<Option<bool>, Error> {
+        let Some(mut object) = dirs.read(path)? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            object.identity == self.identity
+                && hash(&mut object.file, LAUNCHER_LIMIT)? == self.digest,
+        ))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,7 +270,7 @@ impl Source {
         Self::hashed(file, identity, path, true)
     }
     // Another Larp image (an installed source seen from a launcher); never self.
-    fn open(path: &Path, root: &Path) -> Result<Self, Error> {
+    pub(crate) fn open(path: &Path, root: &Path) -> Result<Self, Error> {
         let (file, identity) = platform::open_artifact(path, root)?;
         Self::hashed(file, identity, path.into(), false)
     }
@@ -198,12 +299,6 @@ impl Source {
     }
 }
 
-/// Exclusive and empty: the caller journals the identity before writing any byte.
-pub(crate) fn create_launcher(root: &Path, name: &ProfileName) -> Result<CheckedObject, Error> {
-    let path = launcher_path(root, name);
-    let _anchor = platform::anchor(&path)?;
-    platform::create_file(&path)
-}
 /// Copy the checked source handle, make it owner-executable and prove the bytes landed.
 pub(crate) fn fill_launcher(mut launcher: CheckedObject, source: &Source) -> Result<(), Error> {
     let mut input = &source.file;
@@ -227,21 +322,12 @@ pub(crate) fn fill_launcher(mut launcher: CheckedObject, source: &Source) -> Res
     }
     Ok(())
 }
-/// Exclusive receipt creation; the journal records these exact bytes first.
-pub(crate) fn write_receipt(root: &Path, name: &ProfileName, bytes: &[u8]) -> Result<(), Error> {
-    let path = receipt_path(root, name);
-    let _anchor = platform::anchor(&path)?;
-    let mut object = platform::create_file(&path)?;
-    object
-        .file
-        .write_all(bytes)
-        .and_then(|()| object.file.sync_all())
-        .map_err(|_| Error::AliasInvalid)
-}
-
 impl Receipt {
-    /// Construct after exclusive launcher creation, while holding the registry lock.
-    /// The journal/manifest must record the returned receipt hash before activation.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "receipt integration fixtures use the published launcher"
+    )]
     pub(crate) fn prepare(
         root: &Path,
         name: ProfileName,
@@ -249,16 +335,33 @@ impl Receipt {
         surface: Surface,
         source: &Source,
     ) -> Result<Self, Error> {
-        if profile_id.get() == 0 || ProfileName::parse_new(name.as_str()).is_err() {
-            return Err(Error::AliasInvalid);
-        }
-        let _anchor = platform::anchor(root)?;
-        let root_object = required(root, ObjectKind::Directory)?;
-        let bin = required(&root.join("bin"), ObjectKind::Directory)?;
-        let mut launcher = read_required(&launcher_path(root, &name))?;
+        let dirs = Directories::open(root)?;
+        let mut launcher = dirs
+            .read(&launcher_path(root, &name))?
+            .ok_or(Error::AliasInvalid)?;
         if hash(&mut launcher.file, LAUNCHER_LIMIT)? != source.sha256 {
             return Err(Error::AliasInvalid);
         }
+        Self::for_launcher(
+            root,
+            &dirs,
+            name,
+            profile_id,
+            surface,
+            source,
+            &launcher.identity,
+        )
+    }
+
+    pub(crate) fn for_launcher(
+        root: &Path,
+        dirs: &Directories,
+        name: ProfileName,
+        profile_id: ProfileId,
+        surface: Surface,
+        source: &Source,
+        launcher: &FileIdentity,
+    ) -> Result<Self, Error> {
         let fresh_source = source.reopen(root)?;
         if fresh_source.identity != source.identity || fresh_source.sha256 != source.sha256 {
             return Err(Error::AdmissionChanged);
@@ -267,14 +370,14 @@ impl Receipt {
             version: 1,
             abi: ABI,
             root: root.into(),
-            root_identity: (&root_object.identity).into(),
-            bin_identity: (&bin.identity).into(),
+            root_identity: (&dirs.root.identity).into(),
+            bin_identity: (&dirs.bin()?.identity).into(),
             name,
             profile_id,
             surface,
             source: source.path.clone(),
             source_identity: (&source.identity).into(),
-            launcher_identity: (&launcher.identity).into(),
+            launcher_identity: launcher.into(),
             sha256: source.sha256,
         })
     }
@@ -294,17 +397,45 @@ impl Receipt {
     ) -> Result<(Self, [u8; 32]), Error> {
         let bin = executable.parent().ok_or(Error::AliasInvalid)?;
         let root = bin.parent().ok_or(Error::AliasInvalid)?;
-        if executable != launcher_path(root, name) {
+        if !same_path(executable, &launcher_path(root, name))? {
             return Err(Error::AliasInvalid);
         }
-        let _anchor = platform::anchor(executable)?;
-        let mut receipt = read_required(&receipt_path(root, name))?;
+        let dirs = Directories::open(root)?;
+        let mut receipt = dirs
+            .read(&receipt_path(root, name))?
+            .ok_or(Error::AliasInvalid)?;
         let bytes = read_bounded(&mut receipt.file)?;
         let parsed: Self = serde_json::from_slice(&bytes).map_err(|_| Error::AliasInvalid)?;
-        if parsed.root != root || &parsed.name != name {
+        if !same_path(&parsed.root, root)? || &parsed.name != name {
             return Err(Error::AliasInvalid);
         }
         Ok((parsed, Sha256::digest(&bytes).into()))
+    }
+
+    pub(crate) fn staged(
+        root: &Path,
+        dirs: &Directories,
+        path: &Path,
+        name: &ProfileName,
+        launcher: &Artifact,
+        expected: &Artifact,
+    ) -> Result<Self, Error> {
+        let mut object = dirs.read(path)?.ok_or(Error::AliasInvalid)?;
+        let bytes = read_bounded(&mut object.file)?;
+        let receipt: Self = serde_json::from_slice(&bytes).map_err(|_| Error::AliasInvalid)?;
+        if object.identity != expected.identity
+            || self::digest(&bytes) != expected.digest
+            || receipt.name() != name
+            || receipt.version != 1
+            || receipt.abi != ABI
+            || !same_path(receipt.root(), root)?
+            || receipt.directories() != dirs.pin()
+            || FileIdentity::from(&receipt.launcher_identity) != launcher.identity
+            || receipt.sha256 != launcher.digest
+        {
+            return Err(Error::AliasInvalid);
+        }
+        Ok(receipt)
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -320,8 +451,19 @@ impl Receipt {
         self.surface
     }
 
-    /// Call under the registry lock, after checking pending journal, mapping
-    /// and independently owned receipt digest; keep returned handles to dispatch.
+    fn directories(&self) -> DirectoryPin {
+        DirectoryPin {
+            root: (&self.root_identity).into(),
+            bin: Some((&self.bin_identity).into()),
+        }
+    }
+
+    /// Call under the registry lock, with the independently owned receipt digest.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "receipt integration fixtures validate without a mapping"
+    )]
     pub(crate) fn validate(
         &self,
         executable: &Path,
@@ -332,56 +474,86 @@ impl Receipt {
         }
         self.check(executable, true)
     }
+    pub(crate) fn check_mapping(
+        &self,
+        root: &Path,
+        digest: &[u8; 32],
+    ) -> Result<Vec<CheckedObject>, Error> {
+        if !same_path(root, &self.root)? {
+            return Err(Error::AliasInvalid);
+        }
+        let dirs = Directories::open(root)?;
+        if dirs.pin() != self.directories() {
+            return Err(Error::AliasInvalid);
+        }
+        let mut object = dirs
+            .read(&receipt_path(root, &self.name))?
+            .ok_or(Error::AliasInvalid)?;
+        if self::digest(&read_bounded(&mut object.file)?) != *digest {
+            return Err(Error::AliasInvalid);
+        }
+        let mut held = self.check(&launcher_path(root, &self.name), true)?;
+        held.push(object);
+        Ok(held)
+    }
+
     fn check(&self, executable: &Path, with_source: bool) -> Result<Vec<CheckedObject>, Error> {
         if self.version != 1
             || self.abi != ABI
             || self.profile_id.get() == 0
-            || executable != launcher_path(&self.root, &self.name)
             || !self.root.is_absolute()
             || self
                 .root
                 .components()
                 .any(|c| c == std::path::Component::ParentDir)
+            || !same_path(executable, &launcher_path(&self.root, &self.name))?
         {
             return Err(Error::AliasInvalid);
         }
-        let mut held = platform::anchor(executable)?.ancestors;
-        for (path, identity) in [
-            (self.root.clone(), &self.root_identity),
-            (self.root.join("bin"), &self.bin_identity),
-        ] {
-            let object = required(&path, ObjectKind::Directory)?;
-            if Identity::from(&object.identity) != *identity {
+        let dirs = Directories::open(&self.root)?;
+        if dirs.pin() != self.directories() {
+            return Err(Error::AliasInvalid);
+        }
+        let launcher = Artifact {
+            identity: (&self.launcher_identity).into(),
+            digest: self.sha256,
+        };
+        let mut object = dirs.read(executable)?.ok_or(Error::AliasInvalid)?;
+        if object.identity != launcher.identity
+            || hash(&mut object.file, LAUNCHER_LIMIT)? != launcher.digest
+        {
+            return Err(Error::AliasInvalid);
+        }
+        let mut held = vec![dirs.root, dirs.bin.ok_or(Error::AliasInvalid)?, object];
+        held.extend(dirs._ancestors.ancestors);
+        if with_source {
+            let source = self.source_image()?;
+            if Identity::from(&source.identity) != self.source_identity
+                || source.sha256 != self.sha256
+            {
                 return Err(Error::AliasInvalid);
             }
-            held.push(object);
+            held.push(CheckedObject {
+                file: source.file,
+                identity: source.identity,
+            });
         }
-        let mut launcher = read_required(executable)?;
-        if Identity::from(&launcher.identity) != self.launcher_identity
-            || hash(&mut launcher.file, LAUNCHER_LIMIT)? != self.sha256
-        {
-            return Err(Error::AliasInvalid);
-        }
-        held.push(launcher);
-        if !with_source {
-            return Ok(held);
-        }
-        let source = self.source_image()?;
-        if Identity::from(&source.identity) != self.source_identity || source.sha256 != self.sha256
-        {
-            return Err(Error::AliasInvalid);
-        }
-        held.push(CheckedObject {
-            file: source.file,
-            identity: source.identity,
-        });
         Ok(held)
+    }
+
+    pub(crate) fn running(&self, executable: &Path) -> Result<(), Error> {
+        if platform::running_identity(executable)? != FileIdentity::from(&self.launcher_identity) {
+            return Err(Error::AliasInvalid);
+        }
+        Ok(())
     }
     // Listing from the installed Larp sees its own image; a launcher sees another image.
     fn source_image(&self) -> Result<Source, Error> {
-        if std::env::current_exe().ok().as_deref() == Some(self.source.as_path()) {
+        if let Ok(executable) = std::env::current_exe()
+            && same_path(&executable, &self.source)?
+        {
             let current = Source::current(&self.root)?;
-            if current.path != self.source {
+            if !same_path(&current.path, &self.source)? {
                 return Err(Error::AliasInvalid);
             }
             return Ok(current);
@@ -391,59 +563,66 @@ impl Receipt {
 }
 
 /// Every present artifact of a registered alias, proven ours for removal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Owned {
-    pub launcher: Option<(FileIdentity, [u8; 32])>,
-    pub receipt: Option<[u8; 32]>,
+    pub launcher: Option<Artifact>,
+    pub receipt: Option<Artifact>,
 }
-/// Removal ownership: receipt bytes must match the registry-owned digest, and a present
-/// launcher must match the receipt identity and hash. A launcher without a receipt is drift.
+/// Removal and replay both derive ownership from the committed receipt digest.
 pub(crate) fn owned(
     root: &Path,
+    dirs: &Directories,
     name: &ProfileName,
     profile_id: ProfileId,
     surface: Surface,
     receipt_digest: &[u8; 32],
 ) -> Result<Owned, Error> {
-    let executable = launcher_path(root, name);
-    let _anchor = platform::anchor(&executable)?;
-    let receipt = match read_optional(&receipt_path(root, name))? {
-        None => None,
-        Some(mut object) => {
-            let bytes = read_bounded(&mut object.file)?;
-            if Sha256::digest(&bytes)[..] != receipt_digest[..] {
-                return Err(Error::AliasInvalid);
-            }
-            Some(bytes)
+    let receipt = dirs.read(&receipt_path(root, name))?;
+    let launcher = dirs.read(&launcher_path(root, name))?;
+    let Some(mut receipt) = receipt else {
+        if launcher.is_some() {
+            return Err(Error::AliasInvalid);
         }
-    };
-    let launcher = read_optional(&executable)?;
-    match (receipt, launcher) {
-        (None, None) => Ok(Owned {
+        return Ok(Owned {
             launcher: None,
             receipt: None,
-        }),
-        (None, Some(_)) => Err(Error::AliasInvalid),
-        (Some(_), None) => Ok(Owned {
-            launcher: None,
-            receipt: Some(*receipt_digest),
-        }),
-        (Some(bytes), Some(mut object)) => {
-            let r: Receipt = serde_json::from_slice(&bytes).map_err(|_| Error::AliasInvalid)?;
-            if &r.name != name
-                || r.profile_id != profile_id
-                || r.surface != surface
-                || r.root != root
-                || Identity::from(&object.identity) != r.launcher_identity
-                || hash(&mut object.file, LAUNCHER_LIMIT)? != r.sha256
-            {
-                return Err(Error::AliasInvalid);
-            }
-            Ok(Owned {
-                launcher: Some((object.identity, r.sha256)),
-                receipt: Some(*receipt_digest),
-            })
-        }
+        });
+    };
+    let bytes = read_bounded(&mut receipt.file)?;
+    if digest(&bytes) != *receipt_digest {
+        return Err(Error::AliasInvalid);
     }
+    let r: Receipt = serde_json::from_slice(&bytes).map_err(|_| Error::AliasInvalid)?;
+    if &r.name != name
+        || r.profile_id != profile_id
+        || r.surface != surface
+        || r.version != 1
+        || !same_path(&r.root, root)?
+        || dirs.pin() != r.directories()
+    {
+        return Err(Error::AliasInvalid);
+    }
+    let launcher = if let Some(mut object) = launcher {
+        if Identity::from(&object.identity) != r.launcher_identity
+            || hash(&mut object.file, LAUNCHER_LIMIT)? != r.sha256
+        {
+            return Err(Error::AliasInvalid);
+        }
+        Some(Artifact {
+            identity: object.identity,
+            digest: r.sha256,
+        })
+    } else {
+        None
+    };
+    Ok(Owned {
+        launcher,
+        receipt: Some(Artifact {
+            identity: receipt.identity,
+            digest: *receipt_digest,
+        }),
+    })
 }
 
 /// Public listing state; never mutates and never trusts the receipt without the registry digest.
@@ -455,10 +634,12 @@ pub(crate) fn state(
     receipt_digest: &[u8; 32],
 ) -> &'static str {
     let executable = launcher_path(root, name);
-    let (Ok(receipt), Ok(launcher)) = (
-        read_optional(&receipt_path(root, name)),
-        read_optional(&executable),
-    ) else {
+    let Ok(dirs) = Directories::open(root) else {
+        return "drift";
+    };
+    let (Ok(receipt), Ok(launcher)) =
+        (dirs.read(&receipt_path(root, name)), dirs.read(&executable))
+    else {
         return "drift";
     };
     let receipt = match (receipt, launcher) {
@@ -478,7 +659,11 @@ pub(crate) fn state(
     let Ok(r) = serde_json::from_value::<Receipt>(value) else {
         return "drift";
     };
-    if &r.name != name || r.profile_id != profile_id || r.surface != surface || r.root != root {
+    if &r.name != name
+        || r.profile_id != profile_id
+        || r.surface != surface
+        || !same_path(&r.root, root).unwrap_or(false)
+    {
         return "drift";
     }
     if r.check(&executable, false).is_err() {
@@ -496,85 +681,10 @@ pub(crate) fn state(
     }
 }
 
-pub(crate) enum Removal {
-    Absent,
-    Removed,
-    /// Present but not proven ours; left untouched.
-    Foreign,
-}
-/// Unlink one fixed artifact only when `owns` accepts its checked handle.
-pub(crate) fn remove_owned(
-    path: &Path,
-    owns: impl FnOnce(&mut CheckedObject) -> Result<bool, Error>,
-) -> Result<Removal, Error> {
-    let _anchor = platform::anchor(path)?;
-    let Some(mut object) = read_optional(path)? else {
-        return Ok(Removal::Absent);
-    };
-    if !owns(&mut object)? {
-        return Ok(Removal::Foreign);
-    }
-    let identity = object.identity.clone();
-    drop(object);
-    #[cfg(windows)]
-    platform::remove_skill_leaf(path, &identity, ObjectKind::File)?;
-    #[cfg(unix)]
-    {
-        match platform::inspect(path, ObjectKind::File)? {
-            Some(current) if current.identity == identity => (),
-            _ => return Err(Error::AliasInvalid),
-        }
-        std::fs::remove_file(path).map_err(|_| Error::AliasInvalid)?;
-    }
-    Ok(Removal::Removed)
-}
-pub(crate) fn launcher_owner(
-    identity: &FileIdentity,
-    sha256: Option<&[u8; 32]>,
-) -> impl FnOnce(&mut CheckedObject) -> Result<bool, Error> {
-    move |object| {
-        Ok(&object.identity == identity
-            && match sha256 {
-                None => true,
-                Some(expected) => hash(&mut object.file, LAUNCHER_LIMIT)? == *expected,
-            })
-    }
-}
-/// A receipt is ours when its bytes are exactly (or, for an interrupted write, a prefix of)
-/// the journaled receipt bytes.
-pub(crate) fn receipt_owner(
-    expected: &[u8],
-    allow_prefix: bool,
-) -> impl FnOnce(&mut CheckedObject) -> Result<bool, Error> + '_ {
-    move |object| {
-        let bytes = read_bounded(&mut object.file)?;
-        Ok(bytes == expected || (allow_prefix && expected.starts_with(&bytes)))
-    }
-}
-pub(crate) fn receipt_digest_owner(
-    expected: &[u8; 32],
-) -> impl FnOnce(&mut CheckedObject) -> Result<bool, Error> + '_ {
-    move |object| Ok(digest(&read_bounded(&mut object.file)?) == *expected)
-}
 pub(crate) fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-fn required(path: &Path, kind: ObjectKind) -> Result<CheckedObject, Error> {
-    platform::inspect(path, kind)?.ok_or(Error::AliasInvalid)
-}
-// Managed files are reopened with data access (Windows inspection is metadata-only).
-fn read_optional(path: &Path) -> Result<Option<CheckedObject>, Error> {
-    if platform::inspect(path, ObjectKind::File)?.is_none() {
-        return Ok(None);
-    }
-    let object = platform::read_skill_object(path, ObjectKind::File, false)?;
-    platform::single_link(&object.file).map_err(|_| Error::AliasInvalid)?;
-    Ok(Some(object))
-}
-fn read_required(path: &Path) -> Result<CheckedObject, Error> {
-    read_optional(path)?.ok_or(Error::AliasInvalid)
-}
 fn read_bounded(file: &mut File) -> Result<Vec<u8>, Error> {
     file.seek(SeekFrom::Start(0))
         .map_err(|_| Error::AliasInvalid)?;

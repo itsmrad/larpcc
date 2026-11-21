@@ -585,23 +585,108 @@ fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> io::Result<bool> {
     )
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Own {
-    /// Provider bindings: the running Larp image is never a provider.
-    Reject,
-    /// Alias source only: exactly the running Larp image.
-    Require,
+// Capture the module path's file at startup and keep it pinned for provider rejection.
+static STARTUP_IMAGE: std::sync::OnceLock<Result<CheckedObject, Error>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn pin_startup_image() {
+    let _ = STARTUP_IMAGE.get_or_init(|| {
+        let path = std::env::current_exe().map_err(|_| Error::NamespaceUnverified)?;
+        let file = open(
+            &path,
+            FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )?
+        .ok_or(Error::NamespaceUnverified)?;
+        let mut id: FILE_ID_INFO = unsafe { zeroed() };
+        // SAFETY: live file and writable FILE_ID_INFO output.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileIdInfo,
+                (&mut id as *mut FILE_ID_INFO).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(Error::NamespaceUnverified);
+        }
+        Ok(CheckedObject {
+            file,
+            identity: FileIdentity::Windows {
+                volume: id.VolumeSerialNumber,
+                id: id.FileId.Identifier,
+            },
+        })
+    });
+}
+
+pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
+    pin_startup_image();
+    match STARTUP_IMAGE.get() {
+        Some(Ok(object)) => Ok(object.identity.clone()),
+        _ => Err(Error::NamespaceUnverified),
+    }
+}
+
+pub(crate) fn alias_open_at(
+    _parent: &CheckedObject,
+    path: &Path,
+    kind: ObjectKind,
+    create: bool,
+) -> Result<Option<CheckedObject>, Error> {
+    // The retained ancestors deny delete sharing, including the checked parent.
+    if create {
+        return create_file(path).map(Some).map_err(|error| match error {
+            Error::Io { source, .. } if source.kind() == io::ErrorKind::AlreadyExists => {
+                Error::Conflict
+            }
+            error => error,
+        });
+    }
+    if kind == ObjectKind::Directory {
+        return inspect(path, kind);
+    }
+    let Some(file) = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    else {
+        return Ok(None);
+    };
+    verify(file, path, kind, Policy::Managed).map(Some)
+}
+
+pub(crate) fn alias_unlink_at(
+    _bin: &CheckedObject,
+    path: &Path,
+    expected: &FileIdentity,
+) -> Result<(), Error> {
+    remove_skill_leaf(path, expected, ObjectKind::File)
+}
+
+pub(crate) fn alias_publish_at(_bin: &CheckedObject, from: &Path, to: &Path) -> Result<(), Error> {
+    let from = wide(from)?;
+    let to = wide(to)?;
+    // SAFETY: both paths are NUL-terminated and their common parent stays pinned.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+        return Err(
+            if io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists {
+                Error::Conflict
+            } else {
+                Error::AliasInvalid
+            },
+        );
+    }
+    Ok(())
 }
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
-    let (target, checked) = executable_checked(path, root, Own::Reject)?;
+    let (target, checked) = executable_checked(path, root)?;
     Ok((target, checked.identity))
 }
 
-fn executable_checked(
-    path: &Path,
-    root: &Path,
-    policy: Own,
-) -> Result<(PathBuf, CheckedObject), Error> {
+fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObject), Error> {
     use std::io::Read;
     let _parents = anchor(path)?;
     let file = open(
@@ -663,40 +748,8 @@ fn executable_checked(
     if n < 2 || magic[..2] != *b"MZ" {
         return Err(unsafe_path(path, "is not a supported native executable"));
     }
-    let own = std::env::current_exe().map_err(|source| Error::Io {
-        action: "locate current executable",
-        path: path.into(),
-        source,
-    })?;
-    let own = open(
-        &own,
-        READ_CONTROL | FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-    )?
-    .ok_or_else(|| unsafe_path(path, "filesystem identity cannot be verified"))?;
-    // SAFETY: plain output structure and live handle, full 128-bit file identity query.
-    let mut id: FILE_ID_INFO = unsafe { zeroed() };
-    if unsafe {
-        GetFileInformationByHandleEx(
-            own.as_raw_handle(),
-            FileIdInfo,
-            (&mut id as *mut FILE_ID_INFO).cast(),
-            size_of::<FILE_ID_INFO>() as u32,
-        )
-    } == 0
-    {
-        return Err(unsafe_path(path, "filesystem identity cannot be verified"));
-    }
-    let own_image = checked.identity
-        == (FileIdentity::Windows {
-            volume: id.VolumeSerialNumber,
-            id: id.FileId.Identifier,
-        });
-    if policy == Own::Reject && own_image {
+    if checked.identity == running_identity(path)? {
         return Err(unsafe_path(path, "is Larp CC itself"));
-    }
-    if policy == Own::Require && !own_image {
-        return Err(unsafe_path(path, "is not the running Larp CC executable"));
     }
     Ok((target, checked))
 }
@@ -707,23 +760,8 @@ pub(crate) fn open_artifact_checked(
     path: &Path,
     root: &Path,
 ) -> Result<(File, FileIdentity), Error> {
-    open_artifact_policy(path, root, Own::Reject)
-}
-/// Alias source: the same trusted executable pipeline, accepting only the running Larp image.
-pub(crate) fn open_current_larp_checked(
-    root: &Path,
-) -> Result<(File, FileIdentity, PathBuf), Error> {
-    let path = std::env::current_exe().map_err(|source| Error::Io {
-        action: "locate current executable",
-        path: root.into(),
-        source,
-    })?;
-    let (file, identity) = open_artifact_policy(&path, root, Own::Require)?;
-    Ok((file, identity, path))
-}
-fn open_artifact_policy(path: &Path, root: &Path, own: Own) -> Result<(File, FileIdentity), Error> {
     use std::io::{Seek, SeekFrom};
-    let (_, mut checked) = executable_checked(path, root, own)?;
+    let (_, mut checked) = executable_checked(path, root)?;
     single_link_info(&checked.file, path)?;
     checked
         .file

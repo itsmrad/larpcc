@@ -5,7 +5,7 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs::File,
     io::{self, BufRead, IsTerminal, Read, Write},
     path::{Path, PathBuf},
@@ -35,7 +35,7 @@ impl Operation {
     }
 }
 // Every value is reviewed row data, never inferred from an installed provider.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ArtifactRow {
     pub provider: Provider,
     pub release: &'static str,
@@ -72,6 +72,7 @@ pub(crate) struct CheckedArtifact {
 }
 pub(crate) struct Admitted<'a> {
     pub root: PathBuf,
+    alias_pin: Option<crate::registry::AliasPin>,
     pub snapshot: AdmissionSnapshot,
     pub row: &'a ArtifactRow,
     pub artifact: CheckedArtifact,
@@ -97,14 +98,13 @@ pub(crate) fn invoke(
     if !rows.iter().any(|r| candidate(r, op)) {
         return Err(Error::QualificationPending);
     }
-    invoke_with(Registry::locate()?, None, op, name, args, yes, rows)
+    invoke_with(Registry::locate()?, op, name, args, yes, rows)
 }
 /// Alias dispatch: the root comes from the validated receipt (never LARPCC_HOME) and
 /// admission must observe the same registry revision as the validated alias mapping.
 /// An alias is no unlock: the same qualification gate and argument policy apply.
 pub(crate) fn invoke_pinned(
     registry: Registry,
-    revision: u64,
     name: &ProfileName,
     args: Vec<OsString>,
     rows: &[ArtifactRow],
@@ -112,25 +112,21 @@ pub(crate) fn invoke_pinned(
     if !rows.iter().any(|r| candidate(r, Operation::Run)) {
         return Err(Error::QualificationPending);
     }
-    invoke_with(
-        registry,
-        Some(revision),
-        Operation::Run,
-        name,
-        args,
-        false,
-        rows,
-    )
+    invoke_with(registry, Operation::Run, name, args, false, rows)
 }
 fn invoke_with(
     registry: Registry,
-    revision: Option<u64>,
     op: Operation,
     name: &ProfileName,
     args: Vec<OsString>,
     yes: bool,
     rows: &[ArtifactRow],
 ) -> Result<u32, Error> {
+    let lock = registry
+        .alias_pin
+        .as_ref()
+        .map(|_| registry.admission_lock())
+        .transpose()?;
     let admitted = admit(
         &registry,
         op,
@@ -139,9 +135,7 @@ fn invoke_with(
         rows,
         &std::env::vars_os().map(|(k, _)| k).collect::<Vec<_>>(),
     )?;
-    if revision.is_some_and(|r| r != admitted.snapshot.revision) {
-        return Err(Error::AdmissionChanged);
-    }
+    drop(lock);
     let guard = if op == Operation::Run {
         None
     } else {
@@ -228,7 +222,16 @@ pub(crate) fn admit<'a>(
     if !conflicts.is_empty() {
         return Err(Error::EnvConflict { names: conflicts });
     }
-    if !args.is_empty() {
+    // A pinned alias can present the exact argv authorized by the run row.
+    // Unqualified arguments never enter the launch plan.
+    if !args.is_empty()
+        && !(registry.alias_pin.is_some()
+            && op == Operation::Run
+            && args
+                .iter()
+                .map(OsString::as_os_str)
+                .eq(row.argv.iter().map(OsStr::new)))
+    {
         return Err(Error::ArgConflict {
             label: "argument syntax",
         });
@@ -245,6 +248,7 @@ pub(crate) fn admit<'a>(
     snapshot.held.extend(native_held);
     Ok(Admitted {
         root: registry.root().into(),
+        alias_pin: registry.alias_pin.clone(),
         snapshot,
         row,
         artifact,
@@ -359,7 +363,10 @@ pub(crate) fn revalidate(a: &Admitted<'_>) -> Result<(), Error> {
     if a.plan.identity != a.artifact.identity {
         return Err(Error::AdmissionChanged);
     }
-    let registry = Registry::at(a.root.clone())?;
+    let mut registry = Registry::at(a.root.clone())?;
+    if let Some(pin) = &a.alias_pin {
+        registry = registry.pin_alias(pin.clone());
+    }
     let _lock = registry
         .admission_lock()
         .map_err(|_| Error::AdmissionChanged)?;

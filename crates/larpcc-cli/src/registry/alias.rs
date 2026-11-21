@@ -5,38 +5,46 @@ use super::{
     Error, ProfileId, ProfileName, ProfileState, Registry, Surface, model::Alias, paths, store,
 };
 use crate::{
-    aliases::{self, Receipt, Removal, Source},
-    platform::{self, CheckedObject, FileIdentity, ObjectKind},
+    aliases::{self, Artifact, Directories, DirectoryPin, Owned, Receipt, Source},
+    platform::{self, CheckedObject, ObjectKind},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{ffi::OsStr, fs, io::Read, path::Path, time::Duration};
+use std::{
+    ffi::OsStr,
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 const JOURNAL: &str = "share-journal.json";
 const KIND: &str = "alias";
 // Two JSON-escaped registry snapshots plus small receipts.
 const JOURNAL_LIMIT: usize = 6 * store::LIMIT;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Removed {
     alias: Alias,
-    launcher: Option<(FileIdentity, [u8; 32])>,
-    receipt: Option<[u8; 32]>,
+    owned: Owned,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Staged {
+    launcher: Artifact,
+    receipt: Artifact,
+}
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Step {
-    /// Rolled back unless the registry already committed `after_registry`.
     Add {
         name: ProfileName,
-        profile_id: ProfileId,
-        surface: Surface,
-        launcher: Option<FileIdentity>,
-        receipt: Option<String>,
+        staged: Option<Box<Staged>>,
     },
-    /// Rolled forward: every artifact was proven ours before the journal was written.
-    Remove { aliases: Vec<Removed> },
+    Remove {
+        aliases: Vec<Removed>,
+    },
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,7 +53,17 @@ struct Journal {
     kind: String,
     before_registry: String,
     after_registry: Option<String>,
+    directories: DirectoryPin,
     step: Step,
+}
+
+fn staged_paths(root: &Path, name: &ProfileName) -> [PathBuf; 2] {
+    [
+        root.join("bin")
+            .join(format!(".{}.launcher.pending", name.as_str())),
+        root.join("bin")
+            .join(format!(".{}.receipt.pending", name.as_str())),
+    ]
 }
 
 fn hex(digest: &[u8; 32]) -> String {
@@ -53,7 +71,7 @@ fn hex(digest: &[u8; 32]) -> String {
 }
 fn unhex(value: &str) -> Result<[u8; 32], Error> {
     let mut out = [0; 32];
-    if value.len() != 64 {
+    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(Error::AliasInvalid);
     }
     for (i, byte) in out.iter_mut().enumerate() {
@@ -108,7 +126,14 @@ fn read_journal(root: &Path) -> Result<Option<Journal>, Error> {
         return Err(Error::RecoveryRequired);
     }
     let j: Journal = serde_json::from_value(value).map_err(|_| Error::RecoveryRequired)?;
-    if j.version != 1 {
+    if j.version != 2
+        || match &j.step {
+            Step::Add { name, .. } => ProfileName::parse_new(name.as_str()).is_err(),
+            Step::Remove { aliases } => aliases
+                .iter()
+                .any(|r| ProfileName::parse_new(r.alias.name.as_str()).is_err()),
+        }
+    {
         return Err(Error::RecoveryRequired);
     }
     Ok(Some(j))
@@ -118,101 +143,193 @@ fn finish(root: &Path) -> Result<(), Error> {
         .map_err(|e| paths::io("finish alias transaction", root, e))?;
     paths::sync(root)
 }
-fn sync_bin(root: &Path) -> Result<(), Error> {
-    if platform::inspect(&root.join("bin"), ObjectKind::Directory)?.is_some() {
-        paths::sync(&root.join("bin"))?;
+fn verify_directories(root: &Path, pin: &DirectoryPin) -> Result<Directories, Error> {
+    let dirs = Directories::open(root)?;
+    if &dirs.pin() != pin {
+        return Err(Error::AliasInvalid);
     }
-    Ok(())
+    Ok(dirs)
 }
 
 /// Call under the registry write lock with the unchecked current registry.
-/// Refusal leaves the journal pending, so every registry consumer keeps refusing.
 fn recover(root: &Path, current: &store::Data) -> Result<(), Error> {
     let Some(j) = read_journal(root)? else {
         return Ok(());
     };
+    let dirs = verify_directories(root, &j.directories)?;
     let current_bytes = store::serialize(current)?;
-    if j.after_registry
+    let committed = j
+        .after_registry
         .as_deref()
-        .is_some_and(|after| after.as_bytes() == current_bytes)
-    {
-        return finish(root);
-    }
-    if current_bytes != j.before_registry.as_bytes() {
+        .is_some_and(|after| after.as_bytes() == current_bytes);
+    if !committed && current_bytes != j.before_registry.as_bytes() {
         return Err(Error::Conflict);
     }
     match &j.step {
-        Step::Add {
-            name,
-            launcher,
-            receipt,
-            ..
-        } => {
-            // A registered name was never this transaction's to create.
-            if current.aliases.iter().any(|a| &a.name == name) {
+        Step::Add { name, staged } => {
+            let registered = current.aliases.iter().find(|a| &a.name == name);
+            if committed != registered.is_some() {
                 return Err(Error::RecoveryRequired);
             }
-            if let Some(bytes) = receipt {
-                aliases::remove_owned(
-                    &aliases::receipt_path(root, name),
-                    aliases::receipt_owner(bytes.as_bytes(), true),
-                )?;
+            let [stage_launcher, stage_receipt] = staged_paths(root, name);
+            let launcher = aliases::launcher_path(root, name);
+            let receipt = aliases::receipt_path(root, name);
+            let files = [
+                (&launcher, staged.as_ref().map(|s| &s.launcher)),
+                (&stage_launcher, staged.as_ref().map(|s| &s.launcher)),
+                (&receipt, staged.as_ref().map(|s| &s.receipt)),
+                (&stage_receipt, staged.as_ref().map(|s| &s.receipt)),
+            ];
+            let mut present = [false; 4];
+            for ((path, expected), present) in files.iter().zip(&mut present) {
+                *present = match expected {
+                    Some(expected) => match expected.present(&dirs, path)? {
+                        Some(true) => true,
+                        Some(false) => return Err(Error::AliasInvalid),
+                        None => false,
+                    },
+                    None if dirs.read(path)?.is_some() => return Err(Error::AliasInvalid),
+                    None => false,
+                };
             }
-            if let Some(identity) = launcher {
-                aliases::remove_owned(
-                    &aliases::launcher_path(root, name),
-                    aliases::launcher_owner(identity, None),
-                )?;
+            let [
+                launcher_present,
+                stage_launcher_present,
+                receipt_present,
+                stage_receipt_present,
+            ] = present;
+            if launcher_present && stage_launcher_present
+                || receipt_present && stage_receipt_present
+            {
+                return Err(Error::AliasInvalid);
             }
-            sync_bin(root)?;
+            if let Some(alias) = registered {
+                if present != [true, false, true, false] {
+                    return Err(Error::AliasInvalid);
+                }
+                ownership(root, &dirs, alias)?;
+                return finish(root);
+            }
+            if receipt_present || stage_receipt_present {
+                let path = if receipt_present {
+                    &receipt
+                } else {
+                    &stage_receipt
+                };
+                let staged = staged.as_ref().ok_or(Error::RecoveryRequired)?;
+                let receipt =
+                    Receipt::staged(root, &dirs, path, name, &staged.launcher, &staged.receipt)?;
+                let mut expected = copy(current)?;
+                expected.aliases.push(Alias {
+                    name: name.clone(),
+                    profile_id: receipt.profile_id(),
+                    surface: receipt.surface(),
+                    receipt: hex(&staged.receipt.digest),
+                });
+                expected.aliases.sort_by(|a, b| a.name.cmp(&b.name));
+                expected.revision = expected.revision.checked_add(1).ok_or(Error::Exhausted)?;
+                let after = j.after_registry.as_deref().ok_or(Error::RecoveryRequired)?;
+                if store::serialize(&expected)? != after.as_bytes() {
+                    return Err(Error::RecoveryRequired);
+                }
+            } else if launcher_present || stage_launcher_present {
+                return Err(Error::AliasInvalid);
+            }
+            for ((path, artifact), present) in files.into_iter().zip(present) {
+                if present {
+                    verify_directories(root, &j.directories)?;
+                    let artifact = artifact.ok_or(Error::RecoveryRequired)?;
+                    if artifact.present(&dirs, path)? != Some(true) {
+                        return Err(Error::AliasInvalid);
+                    }
+                    dirs.remove(path, &artifact.identity)?;
+                }
+            }
+            dirs.sync()?;
         }
         Step::Remove { aliases: removed } => {
             let after = j.after_registry.as_deref().ok_or(Error::RecoveryRequired)?;
+            if committed {
+                if removed.is_empty() {
+                    return Err(Error::RecoveryRequired);
+                }
+                for r in removed {
+                    let name = &r.alias.name;
+                    if current.aliases.iter().any(|a| &a.name == name)
+                        || dirs.read(&aliases::launcher_path(root, name))?.is_some()
+                        || dirs.read(&aliases::receipt_path(root, name))?.is_some()
+                    {
+                        return Err(Error::AliasInvalid);
+                    }
+                }
+                return finish(root);
+            }
             let mut expected = copy(current)?;
             expected
                 .aliases
                 .retain(|a| !removed.iter().any(|r| &r.alias == a));
             expected.revision = expected.revision.checked_add(1).ok_or(Error::Exhausted)?;
             if removed.is_empty()
+                || expected.aliases.len() + removed.len() != current.aliases.len()
                 || removed.iter().any(|r| !current.aliases.contains(&r.alias))
                 || store::serialize(&expected)? != after.as_bytes()
             {
                 return Err(Error::RecoveryRequired);
             }
-            remove_artifacts(root, removed, &mut false)?;
+            remove_artifacts(root, &j.directories, removed)?;
             store::persist(root, after.as_bytes(), &mut false, &mut false)?;
         }
     }
     finish(root)
 }
-fn remove_artifacts(root: &Path, removed: &[Removed], touched: &mut bool) -> Result<(), Error> {
+
+fn ownership(root: &Path, dirs: &Directories, alias: &Alias) -> Result<Owned, Error> {
+    aliases::owned(
+        root,
+        dirs,
+        &alias.name,
+        alias.profile_id,
+        alias.surface,
+        &unhex(&alias.receipt)?,
+    )
+}
+
+fn remove_artifacts(root: &Path, pin: &DirectoryPin, removed: &[Removed]) -> Result<(), Error> {
+    let dirs = verify_directories(root, pin)?;
+    let mut proven = Vec::with_capacity(removed.len());
+    // Check the whole set before touching any entry. A missing artifact may have
+    // been removed before interruption, but any present artifact must agree.
     for r in removed {
-        let name = &r.alias.name;
-        let launcher = match &r.launcher {
-            Some((identity, sha)) => aliases::remove_owned(
-                &aliases::launcher_path(root, name),
-                aliases::launcher_owner(identity, Some(sha)),
-            )?,
-            None => aliases::remove_owned(&aliases::launcher_path(root, name), |_| Ok(false))?,
-        };
-        *touched |= matches!(launcher, Removal::Removed);
-        if matches!(launcher, Removal::Foreign) {
+        let owned = ownership(root, &dirs, &r.alias)?;
+        if owned
+            .launcher
+            .as_ref()
+            .is_some_and(|a| Some(a) != r.owned.launcher.as_ref())
+            || owned
+                .receipt
+                .as_ref()
+                .is_some_and(|a| Some(a) != r.owned.receipt.as_ref())
+        {
             return Err(Error::AliasInvalid);
         }
-        let receipt = match &r.receipt {
-            Some(sha) => aliases::remove_owned(
-                &aliases::receipt_path(root, name),
-                aliases::receipt_digest_owner(sha),
-            )?,
-            None => aliases::remove_owned(&aliases::receipt_path(root, name), |_| Ok(false))?,
-        };
-        *touched |= matches!(receipt, Removal::Removed);
-        if matches!(receipt, Removal::Foreign) {
-            return Err(Error::AliasInvalid);
+        proven.push((&r.alias.name, owned));
+    }
+    for (name, owned) in proven {
+        for (path, artifact) in [
+            (aliases::launcher_path(root, name), owned.launcher),
+            (aliases::receipt_path(root, name), owned.receipt),
+        ] {
+            if let Some(artifact) = artifact {
+                verify_directories(root, pin)?;
+                if artifact.present(&dirs, &path)? != Some(true) {
+                    return Err(Error::AliasInvalid);
+                }
+                dirs.remove(&path, &artifact.identity)?;
+            }
         }
         fault("artifact")?;
     }
-    sync_bin(root)
+    dirs.sync()
 }
 
 /// Journal-remove the selected aliases' launchers, receipts and mappings in one registry
@@ -222,53 +339,39 @@ fn remove_aliases(
     data: store::Data,
     select: impl Fn(&Alias) -> bool,
 ) -> Result<store::Data, Error> {
-    let mut removed = vec![];
-    for a in data.aliases.iter().filter(|a| select(a)) {
-        let digest = unhex(&a.receipt)?;
-        let owned = aliases::owned(root, &a.name, a.profile_id, a.surface, &digest)?;
-        removed.push(Removed {
-            alias: a.clone(),
-            launcher: owned.launcher,
-            receipt: owned.receipt,
-        });
-    }
-    if removed.is_empty() {
+    let selected: Vec<_> = data.aliases.iter().filter(|a| select(a)).collect();
+    if selected.is_empty() {
         return Ok(data);
     }
+    let dirs = Directories::open(root)?;
+    let mut removed = Vec::with_capacity(selected.len());
+    for a in selected {
+        removed.push(Removed {
+            alias: a.clone(),
+            owned: ownership(root, &dirs, a)?,
+        });
+    }
+    let pin = dirs.pin();
     let mut after = copy(&data)?;
     after.aliases.retain(|a| !select(a));
     after.revision = after.revision.checked_add(1).ok_or(Error::Exhausted)?;
     let after_bytes = store::serialize(&after)?;
-    write_journal(
-        root,
-        &Journal {
-            version: 1,
-            kind: KIND.into(),
-            before_registry: utf8(store::serialize(&data)?)?,
-            after_registry: Some(utf8(after_bytes.clone())?),
-            step: Step::Remove {
-                aliases: removed.clone(),
-            },
-        },
-    )?;
-    let mut touched = false;
-    let result = (|| {
-        fault("journal")?;
-        remove_artifacts(root, &removed, &mut touched)?;
-        store::persist(root, &after_bytes, &mut false, &mut false)?;
-        fault("registry")
-    })();
-    if let Err(error) = result {
-        if !crashed() {
-            // Nothing removed yet: abandon the intent. Otherwise finish what began.
-            let _ = if touched {
-                store::load_unchecked(root).and_then(|current| recover(root, &current))
-            } else {
-                finish(root)
-            };
-        }
-        return Err(error);
-    }
+    let j = Journal {
+        version: 2,
+        kind: KIND.into(),
+        before_registry: utf8(store::serialize(&data)?)?,
+        after_registry: Some(utf8(after_bytes.clone())?),
+        directories: pin,
+        step: Step::Remove { aliases: removed },
+    };
+    write_journal(root, &j)?;
+    fault("journal")?;
+    let Step::Remove { aliases } = &j.step else {
+        unreachable!()
+    };
+    remove_artifacts(root, &j.directories, aliases)?;
+    store::persist(root, &after_bytes, &mut false, &mut false)?;
+    fault("registry")?;
     finish(root)?;
     Ok(after)
 }
@@ -336,17 +439,35 @@ fn crashed() -> bool {
 
 impl Registry {
     /// Under the write lock: check the precondition first, then resume an interrupted
-    /// alias transaction (and re-check, since recovery may commit).
+    /// alias transaction only for callers without a pinned revision.
+    fn alias_mutation_lock(&self) -> Result<store::RegistryLock, Error> {
+        let root = self.root();
+        if self.expected.is_some() {
+            if platform::inspect(&root.join("registry.lock"), ObjectKind::File)?.is_none() {
+                let data = store::load_unchecked(root)?;
+                store::precondition(&data, self.expected)?;
+                if data.revision != 0 || crate::share::pending(root) {
+                    return Err(Error::RecoveryRequired);
+                }
+                // No valid target or lock exists. A pinned alias operation creates neither.
+                return Err(Error::AliasNotFound);
+            }
+            return store::admission_lock(root);
+        }
+        store::lock(root, Duration::from_secs(10))
+    }
+
     fn alias_resumed(&self) -> Result<store::Data, Error> {
         let data = store::load_unchecked(self.root())?;
         store::precondition(&data, self.expected)?;
         if !crate::share::pending(self.root()) {
             return Ok(data);
         }
+        if self.expected.is_some() {
+            return Err(Error::RecoveryRequired);
+        }
         recover(self.root(), &data)?;
-        let data = store::load(self.root())?;
-        store::precondition(&data, self.expected)?;
-        Ok(data)
+        store::load(self.root())
     }
 
     pub fn alias_list(&self) -> Result<Value, Error> {
@@ -354,7 +475,7 @@ impl Registry {
         let _ancestors = platform::anchor(root)?.ancestors;
         let _fixed = store::fixed(root)?;
         if crate::share::pending(root) {
-            let _lock = store::lock(root, Duration::from_secs(10))?;
+            let _lock = self.alias_mutation_lock()?;
             self.alias_resumed()?;
         }
         let (data, _lock) = store::snapshot(root, self.expected)?;
@@ -384,11 +505,21 @@ impl Registry {
         source: impl FnOnce(&Path) -> Result<Source, Error>,
     ) -> Result<Value, Error> {
         let root = self.root();
+        let encoding = || {
+            root.to_str().ok_or_else(|| Error::InvalidRoot {
+                path: root.into(),
+                reason: "alias receipts require a Unicode root path".into(),
+            })
+        };
+        if self.expected.is_none() {
+            encoding()?;
+        }
         let _ancestors = platform::anchor(root)?.ancestors;
-        let _lock = store::lock(root, Duration::from_secs(10))?;
+        let _lock = self.alias_mutation_lock()?;
         let _fixed = store::fixed(root)?;
         let data = self.alias_resumed()?;
         active(&data)?;
+        encoding()?;
         let profile_id = data
             .profiles
             .iter()
@@ -397,59 +528,124 @@ impl Registry {
                 name: profile.clone(),
             })?
             .id;
-        if name.as_str() == "larp" || data.aliases.iter().any(|a| a.name == name) {
+        if ProfileName::parse_new(name.as_str()).is_err()
+            || data.aliases.iter().any(|a| a.name == name)
+        {
             return Err(Error::Conflict);
         }
         aliases::check_collision(root, &name, search_path)?;
         let source = source(root)?;
+        if source.path.to_str().is_none() {
+            return Err(Error::NamespaceUnverified);
+        }
         let bin = root.join("bin");
         if paths::mkdir(&bin)? {
             paths::sync(root)?;
         }
+        let dirs = Directories::open(root)?;
         let mut j = Journal {
-            version: 1,
+            version: 2,
             kind: KIND.into(),
             before_registry: utf8(store::serialize(&data)?)?,
             after_registry: None,
+            directories: dirs.pin(),
             step: Step::Add {
                 name: name.clone(),
-                profile_id,
-                surface,
-                launcher: None,
-                receipt: None,
+                staged: None,
             },
         };
         write_journal(root, &j)?;
         let result = (|| {
             fault("journal")?;
-            let launcher = aliases::create_launcher(root, &name)?;
-            if let Step::Add { launcher: slot, .. } = &mut j.step {
-                *slot = Some(launcher.identity.clone());
-            }
-            write_journal(root, &j)?;
+            let [stage_launcher, stage_receipt] = staged_paths(root, &name);
+            let launcher = dirs.create(&stage_launcher)?;
+            let launcher_identity = launcher.identity.clone();
             fault("launcher")?;
             aliases::fill_launcher(launcher, &source)?;
-            let receipt =
-                Receipt::prepare(root, name.clone(), profile_id, surface, &source)?.encode()?;
+            let receipt = Receipt::for_launcher(
+                root,
+                &dirs,
+                name.clone(),
+                profile_id,
+                surface,
+                &source,
+                &launcher_identity,
+            )?
+            .encode()?;
+            let mut receipt_file = dirs.create(&stage_receipt)?;
+            receipt_file
+                .file
+                .write_all(&receipt)
+                .and_then(|()| receipt_file.file.sync_all())
+                .map_err(|_| Error::AliasInvalid)?;
+            let receipt_identity = receipt_file.identity;
+            drop(receipt_file.file);
+            dirs.sync()?;
             let mut after = copy(&data)?;
+            let digest = aliases::digest(&receipt);
             after.aliases.push(Alias {
                 name: name.clone(),
                 profile_id,
                 surface,
-                receipt: hex(&aliases::digest(&receipt)),
+                receipt: hex(&digest),
             });
             after.aliases.sort_by(|a, b| a.name.cmp(&b.name));
             after.revision = after.revision.checked_add(1).ok_or(Error::Exhausted)?;
             let after_bytes = store::serialize(&after)?;
+            let staged = Box::new(Staged {
+                launcher: Artifact {
+                    identity: launcher_identity,
+                    digest: source.sha256,
+                },
+                receipt: Artifact {
+                    identity: receipt_identity,
+                    digest,
+                },
+            });
             j.after_registry = Some(utf8(after_bytes.clone())?);
-            if let Step::Add { receipt: slot, .. } = &mut j.step {
-                *slot = Some(utf8(receipt.clone())?);
-            }
+            j.step = Step::Add {
+                name: name.clone(),
+                staged: Some(staged),
+            };
+            verify_directories(root, &j.directories)?;
             write_journal(root, &j)?;
             fault("prepared")?;
-            aliases::write_receipt(root, &name, &receipt)?;
-            paths::sync(&bin)?;
+            let Step::Add {
+                staged: Some(staged),
+                ..
+            } = &j.step
+            else {
+                unreachable!()
+            };
+            dirs.publish(
+                &stage_launcher,
+                &aliases::launcher_path(root, &name),
+                &staged.launcher,
+            )?;
+            fault("published_launcher")?;
+            verify_directories(root, &j.directories)?;
+            dirs.publish(
+                &stage_receipt,
+                &aliases::receipt_path(root, &name),
+                &staged.receipt,
+            )?;
+            dirs.sync()?;
             fault("receipt")?;
+            verify_directories(root, &j.directories)?;
+            if ownership(
+                root,
+                &dirs,
+                after
+                    .aliases
+                    .iter()
+                    .find(|a| a.name == name)
+                    .ok_or(Error::AliasInvalid)?,
+            )? != (Owned {
+                launcher: Some(staged.launcher.clone()),
+                receipt: Some(staged.receipt.clone()),
+            }) {
+                return Err(Error::AliasInvalid);
+            }
             store::persist(root, &after_bytes, &mut false, &mut false)?;
             fault("registry")?;
             Ok(after.revision)
@@ -471,7 +667,7 @@ impl Registry {
     pub fn alias_remove(&self, name: &ProfileName) -> Result<Value, Error> {
         let root = self.root();
         let _ancestors = platform::anchor(root)?.ancestors;
-        let _lock = store::lock(root, Duration::from_secs(10))?;
+        let _lock = self.alias_mutation_lock()?;
         let _fixed = store::fixed(root)?;
         let data = self.alias_resumed()?;
         active(&data)?;
@@ -488,40 +684,66 @@ impl Registry {
         )
     }
 
-    /// Alias dispatch: the pinned root's registered mapping must match the adjacent
-    /// receipt and its independently owned digest, with no pending journal. Returns the
-    /// current profile name, the snapshot revision to pin admission to, and held handles.
+    /// Start with the adjacent receipt, then bind it to the committed mapping.
     pub(crate) fn alias_target(
         &self,
-        receipt: &Receipt,
-        digest: &[u8; 32],
+        receipt: Receipt,
+        digest: [u8; 32],
         executable: &Path,
         argv0: &OsStr,
-    ) -> Result<(ProfileName, u64, Vec<CheckedObject>), Error> {
-        let root = self.root();
-        let _ancestors = platform::anchor(root)?.ancestors;
-        let _fixed = store::fixed(root)?;
-        let _lock = store::admission_lock(root)?;
-        let data = store::load(root)?;
-        store::require_v3(&data)?;
-        let alias = data
-            .aliases
-            .iter()
-            .find(|a| &a.name == receipt.name())
-            .ok_or(Error::AliasInvalid)?;
-        if alias.profile_id != receipt.profile_id()
-            || alias.surface != receipt.surface()
-            || unhex(&alias.receipt)? != *digest
-        {
+    ) -> Result<(ProfileName, AliasPin, Vec<CheckedObject>), Error> {
+        let _lock = store::admission_lock(self.root())?;
+        let data = store::load(self.root())?;
+        let pin = AliasPin {
+            receipt,
+            digest,
+            revision: data.revision,
+        };
+        let held = pin.check(self.root(), &data)?;
+        if aliases::invocation(argv0)?.as_ref() != Some(pin.receipt.name()) {
             return Err(Error::AliasInvalid);
         }
-        let held = receipt.validate(executable, argv0)?;
         let profile = data
             .profiles
             .iter()
-            .find(|p| p.id == alias.profile_id)
+            .find(|p| p.id == pin.profile_id())
             .ok_or(Error::AliasInvalid)?;
-        Ok((profile.name.clone(), data.revision, held))
+        if !aliases::same_launcher(executable, self.root(), pin.receipt.name())? {
+            return Err(Error::AliasInvalid);
+        }
+        Ok((profile.name.clone(), pin, held))
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct AliasPin {
+    receipt: Receipt,
+    digest: [u8; 32],
+    pub(crate) revision: u64,
+}
+impl AliasPin {
+    pub(crate) fn profile_id(&self) -> ProfileId {
+        self.receipt.profile_id()
+    }
+    pub(super) fn check(
+        &self,
+        root: &Path,
+        data: &store::Data,
+    ) -> Result<Vec<CheckedObject>, Error> {
+        store::require_v3(data)?;
+        let alias = data
+            .aliases
+            .iter()
+            .find(|a| &a.name == self.receipt.name())
+            .ok_or(Error::AliasInvalid)?;
+        if self.revision != data.revision
+            || alias.profile_id != self.profile_id()
+            || alias.surface != self.receipt.surface()
+            || unhex(&alias.receipt)? != self.digest
+        {
+            return Err(Error::AliasInvalid);
+        }
+        self.receipt.check_mapping(root, &self.digest)
     }
 }
 
@@ -623,7 +845,7 @@ mod tests {
             let launcher = self.launcher(alias);
             let (receipt, digest) = Receipt::adjacent(&launcher, &name(alias))?;
             self.r
-                .alias_target(&receipt, &digest, &launcher, OsStr::new(alias))
+                .alias_target(receipt, digest, &launcher, OsStr::new(alias))
                 .map(|(profile, _, _)| profile)
         }
     }
@@ -680,7 +902,13 @@ mod tests {
 
     #[test]
     fn stage05_transaction_interrupted_add_rolls_back_or_finishes() {
-        for phase in ["journal", "launcher", "prepared", "receipt", "registry"] {
+        for phase in [
+            "journal",
+            "prepared",
+            "published_launcher",
+            "receipt",
+            "registry",
+        ] {
             let f = fixture();
             set_fault(Some(phase));
             assert!(f.add("codex-45", "claude-work").is_err(), "{phase}");
@@ -690,10 +918,6 @@ mod tests {
             assert!(matches!(f.r.list(), Err(Error::RecoveryRequired)));
             if f.receipt("codex-45").exists() {
                 assert!(f.target("codex-45").is_err(), "{phase}");
-            }
-            if phase == "receipt" {
-                let bytes = fs::read(f.receipt("codex-45")).unwrap();
-                rewrite(&f.receipt("codex-45"), &bytes[..bytes.len() / 2]);
             }
             let states = f.states();
             assert!(!f.pending(), "{phase}");
@@ -813,24 +1037,18 @@ mod tests {
         fs::remove_file(&journal).unwrap();
         // A forged add journal naming a registered alias never deletes its launcher.
         f.add("codex-45", "claude-work").unwrap();
-        let identity = platform::inspect(&launcher, ObjectKind::File)
-            .unwrap()
-            .unwrap()
-            .identity;
         let current = store::load(f.r.root()).unwrap();
         write_journal(
             f.r.root(),
             &Journal {
-                version: 1,
+                version: 2,
                 kind: KIND.into(),
                 before_registry: utf8(store::serialize(&current).unwrap()).unwrap(),
                 after_registry: None,
+                directories: Directories::open(f.r.root()).unwrap().pin(),
                 step: Step::Add {
                     name: name("codex-45"),
-                    profile_id: ProfileId::new(1),
-                    surface: Surface::Cli,
-                    launcher: Some(identity),
-                    receipt: None,
+                    staged: None,
                 },
             },
         )
@@ -839,6 +1057,104 @@ mod tests {
         assert!(launcher.exists() && f.pending());
         finish(f.r.root()).unwrap();
         assert_eq!(f.states(), ["codex-45:ok"]);
+    }
+
+    #[test]
+    fn stage05_transaction_unjournaled_stage_and_changed_receipt_stay_pending() {
+        let f = fixture();
+        set_fault(Some("launcher"));
+        assert!(f.add("codex-45", "claude-work").is_err());
+        set_fault(None);
+        let [stage, _] = staged_paths(f.r.root(), &name("codex-45"));
+        assert!(matches!(f.r.alias_list(), Err(Error::AliasInvalid)));
+        assert!(stage.exists() && f.pending());
+        assert!(!f.launcher("codex-45").exists());
+        fs::remove_file(stage).unwrap();
+        assert!(f.states().is_empty());
+
+        set_fault(Some("receipt"));
+        assert!(f.add("codex-45", "claude-work").is_err());
+        set_fault(None);
+        let receipt = f.receipt("codex-45");
+        rewrite(&receipt, b"");
+        assert!(matches!(f.r.alias_list(), Err(Error::AliasInvalid)));
+        assert!(receipt.exists() && f.launcher("codex-45").exists() && f.pending());
+    }
+
+    #[test]
+    fn stage05_transaction_pinned_revision_does_not_replay_remove() {
+        let f = fixture();
+        f.add("codex-45", "claude-work").unwrap();
+        set_fault(Some("journal"));
+        assert!(f.r.alias_remove(&name("codex-45")).is_err());
+        set_fault(None);
+        for (revision, stale) in [(2, true), (3, false)] {
+            let pinned = Registry::at(f.r.root().into())
+                .unwrap()
+                .expecting(Some(revision));
+            let error = pinned.alias_remove(&name("codex-45")).unwrap_err();
+            assert!(if stale {
+                matches!(error, Error::Conflict)
+            } else {
+                matches!(error, Error::RecoveryRequired)
+            });
+            assert!(
+                f.pending() && f.launcher("codex-45").exists() && f.receipt("codex-45").exists()
+            );
+        }
+        assert!(f.states().is_empty());
+    }
+
+    #[test]
+    fn stage05_transaction_replaced_bin_refuses_even_with_original_artifacts() {
+        let f = fixture();
+        f.add("codex-45", "claude-work").unwrap();
+        let bin = f.r.root().join("bin");
+        let original = f.r.root().join("previous-bin");
+        fs::rename(&bin, &original).unwrap();
+        platform::create_directory(&bin).unwrap();
+        for path in [f.launcher("codex-45"), f.receipt("codex-45")] {
+            fs::rename(original.join(path.file_name().unwrap()), &path).unwrap();
+        }
+        assert!(matches!(
+            f.r.alias_remove(&name("codex-45")),
+            Err(Error::AliasInvalid)
+        ));
+        assert!(f.launcher("codex-45").exists() && f.receipt("codex-45").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage05_transaction_managed_bin_requires_a_real_directory() {
+        use std::os::unix::fs::symlink;
+        let f = fixture();
+        let separate = f._temp.path().join("separate");
+        platform::create_directory(&separate).unwrap();
+        symlink(&separate, f.r.root().join("bin")).unwrap();
+        assert!(Directories::open(f.r.root()).is_err());
+        assert!(fs::read_dir(&separate).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn stage05_dispatch_rechecks_pin_even_at_same_revision() {
+        let f = fixture();
+        f.add("codex-45", "claude-work").unwrap();
+        let launcher = f.launcher("codex-45");
+        let (receipt, digest) = Receipt::adjacent(&launcher, &name("codex-45")).unwrap();
+        let (_, pin, held) =
+            f.r.alias_target(receipt, digest, &launcher, OsStr::new("codex-45"))
+                .unwrap();
+        drop(held);
+        let data = store::load(f.r.root()).unwrap();
+        pin.check(f.r.root(), &data).unwrap();
+        let mut changed = copy(&data).unwrap();
+        changed.aliases[0].profile_id = ProfileId::new(2);
+        assert!(pin.check(f.r.root(), &changed).is_err());
+        changed.aliases[0].profile_id = ProfileId::new(1);
+        changed.aliases[0].receipt = "0".repeat(64);
+        assert!(pin.check(f.r.root(), &changed).is_err());
+        rewrite(&f.receipt("codex-45"), b"{}");
+        assert!(pin.check(f.r.root(), &data).is_err());
     }
 
     #[test]

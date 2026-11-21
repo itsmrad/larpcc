@@ -1,3 +1,4 @@
+#![cfg(unix)]
 mod common;
 use common::*;
 use std::{fs, path::Path};

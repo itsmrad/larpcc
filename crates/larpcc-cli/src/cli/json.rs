@@ -68,6 +68,11 @@ fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
             "Alias launcher, receipt or mapping cannot be verified.",
             1,
         ),
+        Error::AliasImageUnverified => (
+            "unsafe_path",
+            "Cannot verify the loaded Larp image for alias creation.",
+            1,
+        ),
         Error::Conflict | Error::NameTaken { .. } => {
             ("conflict", "Registry revision or references conflict.", 1)
         }

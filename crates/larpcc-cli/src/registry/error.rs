@@ -12,6 +12,7 @@ pub enum Error {
     AliasNotFound,
     /// Alias launcher, receipt or mapping ownership cannot be established.
     AliasInvalid,
+    AliasImageUnverified,
     ForbiddenSource,
     InvalidVersionLabel,
     RecoveryRequired,
@@ -110,6 +111,9 @@ impl fmt::Display for Error {
             Self::AliasNotFound => f.write_str("alias was not found"),
             Self::AliasInvalid => {
                 f.write_str("alias launcher, receipt or mapping cannot be verified")
+            }
+            Self::AliasImageUnverified => {
+                f.write_str("cannot verify the loaded Larp image for alias creation")
             }
             Self::Conflict => f.write_str("registry revision or references conflict"),
             Self::RecoveryRequired => {
