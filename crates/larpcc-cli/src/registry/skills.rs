@@ -171,7 +171,7 @@ impl SkillsAction {
         }
     }
 }
-// Refuse known homes before opening the selected source or any package file.
+// Compare excluded directory identities before opening any package file.
 fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
     for component in source.components() {
         if let std::path::Component::Normal(name) = component {
@@ -181,27 +181,57 @@ fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
             }
         }
     }
-    for forbidden in std::iter::once(root.to_path_buf()).chain(
-        ["CLAUDE_CONFIG_DIR", "CODEX_HOME"]
-            .into_iter()
-            .filter_map(std::env::var_os)
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute()),
-    ) {
-        if platform::contains_path(source, &forbidden)? {
-            return Err(Error::ForbiddenSource);
-        }
+    if platform::contains_path(source, root)? {
+        return Err(Error::ForbiddenSource);
     }
     let (object, held) = skills::source_directory(source)?;
-    // Retained directory identities catch native alternate spellings of the root.
-    if let Some(root_object) = platform::inspect(root, ObjectKind::Directory)?
-        && (object.identity == root_object.identity
+    let mut homes = vec![root.to_path_buf()];
+    for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
+        if let Some(value) = std::env::var_os(key) {
+            if value.is_empty() {
+                return Err(Error::ForbiddenSource);
+            }
+            homes.push(value.into());
+        }
+    }
+    #[cfg(unix)]
+    let home = std::env::var_os("HOME");
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    if let Some(home) = home {
+        let entries = match fs::read_dir(PathBuf::from(home)) {
+            Ok(entries) => Some(entries),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(Error::ForbiddenSource),
+        };
+        for entry in entries.into_iter().flatten() {
+            let entry = entry.map_err(|_| Error::ForbiddenSource)?;
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.starts_with(".claude") || name.starts_with(".codex") || name == ".agents" {
+                // Regular config files are not directory namespaces; never open them.
+                let kind = entry.file_type().map_err(|_| Error::ForbiddenSource)?;
+                if kind.is_dir() || kind.is_symlink() {
+                    homes.push(entry.path());
+                }
+            }
+        }
+    }
+    let mut exclusions = Vec::new();
+    for home in homes {
+        let Some((directory, ancestors)) =
+            platform::skill_home(&home).map_err(|_| Error::ForbiddenSource)?
+        else {
+            continue;
+        };
+        if object.identity == directory.identity
             || held
                 .ancestors
                 .iter()
-                .any(|p| p.identity == root_object.identity))
-    {
-        return Err(Error::ForbiddenSource);
+                .any(|p| p.identity == directory.identity)
+        {
+            return Err(Error::ForbiddenSource);
+        }
+        exclusions.push((directory, ancestors));
     }
     Package::source(source).map_err(Into::into)
 }

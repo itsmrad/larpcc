@@ -532,3 +532,156 @@ fn stage06_human_output_and_version_labels_are_bounded() {
         assert!(!f.root.exists());
     }
 }
+
+fn home_alias(target: &std::path::Path, alias: &std::path::Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, alias).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, alias)
+        .expect("native directory alias fixture required; no skipped acceptance");
+}
+fn assert_home_alias_forbidden(variable: Option<&str>, nested: bool, namespace: Option<&str>) {
+    let f = common::Fixture::new();
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "claude-work",
+            "--provider",
+            "claude",
+            "--json",
+        ],
+        0,
+    );
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "codex-45",
+            "--provider",
+            "codex",
+            "--json",
+        ],
+        0,
+    );
+    let home = f.temp.path().join("source-home");
+    common::create_directory(&home);
+    let package = if nested {
+        let child = home.join("package");
+        common::create_directory(&child);
+        child
+    } else {
+        home.clone()
+    };
+    common::create_file(&package.join("SKILL.md"), b"synthetic package");
+    common::create_file(&package.join("auth.json"), b"synthetic-secret");
+    let alias = namespace
+        .map(|n| f.temp.path().join("home").join(n))
+        .unwrap_or_else(|| f.temp.path().join("configured-home"));
+    home_alias(&home, &alias);
+    let before = std::fs::read(f.root.join("registry.json")).unwrap();
+    let mut cmd = f.command(&[
+        "cc",
+        "skills",
+        "add",
+        package.to_str().unwrap(),
+        "--name",
+        "leak",
+        "--json",
+    ]);
+    if let Some(variable) = variable {
+        cmd.env(variable, &alias);
+    }
+    let out = common::capture(cmd).unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", common::stdout(&out));
+    assert!(out.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "forbidden_source");
+    assert!(!common::stdout(&out).contains("synthetic-secret"));
+    assert!(!f.root.join("shared/skills/leak").exists());
+    assert_eq!(std::fs::read(f.root.join("registry.json")).unwrap(), before);
+    assert!(!f.root.join("share-journal.json").exists());
+}
+#[test]
+fn stage06_source_configured_symlinked_home_identity_and_source_ancestor() {
+    for variable in ["CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+        assert_home_alias_forbidden(Some(variable), false, None);
+        assert_home_alias_forbidden(Some(variable), true, None);
+    }
+}
+#[test]
+fn stage06_source_default_vendor_home_alias_namespaces() {
+    for namespace in [".codex7", ".claude-work", ".agents"] {
+        assert_home_alias_forbidden(None, false, Some(namespace));
+        assert_home_alias_forbidden(None, true, Some(namespace));
+    }
+}
+#[test]
+fn stage06_source_unresolvable_home_fails_closed_missing_home_allows_source() {
+    let f = common::Fixture::new();
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "claude-work",
+            "--provider",
+            "claude",
+            "--json",
+        ],
+        0,
+    );
+    let source = f.temp.path().join("package");
+    common::create_directory(&source);
+    common::create_file(&source.join("SKILL.md"), b"synthetic");
+    let missing = f.temp.path().join("absent-home");
+    let dangling = f.temp.path().join("dangling-home");
+    home_alias(&missing, &dangling);
+    let not_a_directory = f.temp.path().join("file-home");
+    common::create_file(&not_a_directory, b"not a directory");
+    for variable in ["CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+        for path in [&dangling, &not_a_directory] {
+            let mut cmd = f.command(&[
+                "cc",
+                "skills",
+                "add",
+                source.to_str().unwrap(),
+                "--name",
+                "leak",
+                "--json",
+            ]);
+            cmd.env(variable, path);
+            let out = common::capture(cmd).unwrap();
+            assert_eq!(out.status.code(), Some(1));
+            assert!(out.stderr.is_empty());
+            let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(value["error"]["code"], "forbidden_source");
+        }
+    }
+    // The default Claude config file is not a directory namespace or package source.
+    common::create_file(
+        &f.temp.path().join("home/.claude.json"),
+        b"synthetic-secret",
+    );
+    let mut cmd = f.command(&[
+        "cc",
+        "skills",
+        "add",
+        source.to_str().unwrap(),
+        "--name",
+        "example",
+        "--json",
+    ]);
+    cmd.env("CODEX_HOME", &missing)
+        .env("CLAUDE_CONFIG_DIR", &missing);
+    let out = common::capture(cmd).unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", common::stdout(&out));
+    assert!(out.stderr.is_empty());
+    assert!(!missing.exists());
+    assert!(!f.root.join("shared/skills/leak").exists());
+}

@@ -38,6 +38,41 @@ mod macos;
 #[path = "../../tests/fixtures/windows/private.rs"]
 pub(crate) mod fixture_private;
 
+/// Directory metadata only: resolve an excluded vendor-home alias, then retain
+/// its checked target/ancestors without enumerating or reading home contents.
+pub(crate) fn skill_home(path: &Path) -> Result<Option<(CheckedObject, AnchoredPath)>, Error> {
+    let path = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|source| Error::Io {
+                action: "resolve skill home",
+                path: path.into(),
+                source,
+            })?
+            .join(path)
+    };
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(Error::Io {
+                action: "inspect skill home",
+                path,
+                source,
+            });
+        }
+        Ok(_) => (),
+    }
+    let resolved = std::fs::canonicalize(&path).map_err(|source| Error::Io {
+        action: "resolve skill home",
+        path: path.clone(),
+        source,
+    })?;
+    let ancestors = anchor(&resolved)?;
+    let object = read_skill_object(&resolved, ObjectKind::Directory, true)?;
+    Ok(Some((object, ancestors)))
+}
+
 // Internal only: a namespace change is distinct from every validation or I/O failure.
 #[derive(Debug)]
 pub(crate) enum AcquisitionError {
