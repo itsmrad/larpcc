@@ -1,4 +1,11 @@
 #![allow(dead_code)]
+#![cfg_attr(
+    windows,
+    allow(
+        clippy::duplicate_mod,
+        reason = "Platform tests and common fixtures each own their private Windows ACL fixture"
+    )
+)]
 #[path = "../src/aliases.rs"]
 mod aliases;
 mod common;

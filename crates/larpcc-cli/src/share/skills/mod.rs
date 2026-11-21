@@ -104,6 +104,15 @@ fn component(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate only directory metadata before the registry authorizes package reads.
+pub(crate) fn source_directory(path: &Path) -> Result<(CheckedObject, platform::AnchoredPath)> {
+    let held = ancestry(path)?;
+    let path: PathBuf = path.components().collect();
+    let object = platform::read_skill_object(&path, ObjectKind::Directory, true)
+        .map_err(|_| Error::Unsafe)?;
+    Ok((object, held))
+}
+
 impl Package {
     pub fn read(source: &Path) -> Result<Self> {
         Self::read_with(source, false)

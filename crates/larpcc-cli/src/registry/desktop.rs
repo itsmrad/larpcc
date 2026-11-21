@@ -18,6 +18,21 @@ fn directory(path: PathBuf) -> Result<CheckedDirectory, Error> {
         ancestry,
     })
 }
+fn binding_changed(
+    old: Option<&DesktopBinding>,
+    new: &DesktopBinding,
+    replace: bool,
+) -> Result<bool, Error> {
+    match old {
+        Some(old) if old == new => Ok(false),
+        Some(old) if !replace => Err(Error::AlreadyBound {
+            provider: new.provider,
+            old: old.path.clone(),
+        }),
+        _ => Ok(true),
+    }
+}
+
 impl Registry {
     pub(crate) fn desktop_target(
         &self,
@@ -107,6 +122,12 @@ impl Registry {
         let mut data = store::load(self.root())?;
         store::precondition(&data, self.expected)?;
         store::require_v3(&data)?;
+        if recorded_version
+            .as_deref()
+            .is_some_and(|v| super::parse_recorded_version(v).is_err())
+        {
+            return Err(Error::InvalidVersionLabel);
+        }
         let checked = desktop::validate_binding(provider, &path)?;
         let binding = DesktopBinding {
             provider,
@@ -117,14 +138,11 @@ impl Registry {
             .desktop_bindings
             .iter()
             .position(|b| b.provider == provider);
+        if !binding_changed(old.map(|i| &data.desktop_bindings[i]), &binding, replace)? {
+            self.observed.set(Some(data.revision));
+            return Ok(false);
+        }
         if let Some(i) = old {
-            if data.desktop_bindings[i] == binding {
-                self.observed.set(Some(data.revision));
-                return Ok(false);
-            }
-            if !replace {
-                return Err(Error::Conflict);
-            }
             data.desktop_bindings[i] = binding;
         } else {
             data.desktop_bindings.push(binding);
@@ -155,5 +173,27 @@ impl Registry {
                 }
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn stage09_desktop_rebind_requires_replace_without_native_validation() {
+        let old = DesktopBinding {
+            provider: Provider::Codex,
+            path: PathBuf::from("old.app"),
+            recorded_version: Some("1.0".into()),
+        };
+        let new = DesktopBinding {
+            path: PathBuf::from("new.app"),
+            ..old.clone()
+        };
+        assert!(
+            matches!(binding_changed(Some(&old),&new,false),Err(Error::AlreadyBound{provider:Provider::Codex,old:path}) if path==old.path)
+        );
+        assert!(!binding_changed(Some(&old), &old, false).unwrap());
+        assert!(binding_changed(Some(&old), &new, true).unwrap());
     }
 }

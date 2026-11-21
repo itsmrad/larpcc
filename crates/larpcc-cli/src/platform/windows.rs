@@ -600,7 +600,7 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
 fn executable_checked(
     path: &Path,
     root: &Path,
-    own: Own,
+    policy: Own,
 ) -> Result<(PathBuf, CheckedObject), Error> {
     use std::io::Read;
     let _parents = anchor(path)?;
@@ -692,10 +692,10 @@ fn executable_checked(
             volume: id.VolumeSerialNumber,
             id: id.FileId.Identifier,
         });
-    if own == Own::Reject && own_image {
+    if policy == Own::Reject && own_image {
         return Err(unsafe_path(path, "is Larp CC itself"));
     }
-    if own == Own::Require && !own_image {
+    if policy == Own::Require && !own_image {
         return Err(unsafe_path(path, "is not the running Larp CC executable"));
     }
     Ok((target, checked))

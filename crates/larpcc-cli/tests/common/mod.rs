@@ -166,7 +166,21 @@ pub fn capture(mut command: Command) -> std::io::Result<Output> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    wait_output(command.spawn()?)
+    wait_output(spawn(&mut command)?)
+}
+/// Linux ETXTBSY: a sibling test thread's fork may briefly inherit the write handle of an
+/// executable this test just copied; retry instead of racing the child's exec.
+pub fn spawn(command: &mut Command) -> std::io::Result<std::process::Child> {
+    let mut attempts = 0;
+    loop {
+        match command.spawn() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 100 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
 }
 pub fn wait_output(mut child: std::process::Child) -> std::io::Result<Output> {
     use std::{

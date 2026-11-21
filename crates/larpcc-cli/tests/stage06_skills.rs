@@ -433,3 +433,105 @@ fn stage06_cli_schema1_expected_revision_and_complete_lifecycle() {
     );
     assert_eq!(f.outside_snapshot(), before);
 }
+
+#[test]
+fn stage06_source_confinement_refuses_managed_and_vendor_packages() {
+    let f = common::Fixture::new();
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "claude-work",
+            "--provider",
+            "claude",
+            "--json",
+        ],
+        0,
+    );
+    let cli = f.root.join("profiles/1/cli");
+    common::create_file(&cli.join("SKILL.md"), b"synthetic");
+    common::create_file(&cli.join(".credentials.json"), b"synthetic-secret");
+    let registry = std::fs::read(f.root.join("registry.json")).unwrap();
+    let mut sources = vec![cli, f.root.clone()];
+    for home in [".claude-work", ".codex7", ".agents"] {
+        let path = f.temp.path().join(home);
+        common::create_directory(&path);
+        common::create_file(&path.join("SKILL.md"), b"synthetic");
+        common::create_file(&path.join("auth.json"), b"synthetic-secret");
+        sources.push(path);
+    }
+    for source in sources {
+        let result = request(
+            &f,
+            &[
+                "cc",
+                "skills",
+                "add",
+                source.to_str().unwrap(),
+                "--name",
+                "leak",
+                "--json",
+            ],
+            1,
+        );
+        assert_eq!(result["error"]["code"], "forbidden_source");
+        let text = result.to_string();
+        assert!(!text.contains("synthetic-secret"));
+        assert!(!text.contains(source.to_str().unwrap()));
+        assert!(!f.root.join("shared/skills/leak").exists());
+        assert_eq!(
+            std::fs::read(f.root.join("registry.json")).unwrap(),
+            registry
+        );
+    }
+    let configured = f.temp.path().join("explicit-home");
+    common::create_directory(&configured);
+    common::create_file(&configured.join("SKILL.md"), b"synthetic");
+    for variable in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
+        let mut cmd = f.command(&[
+            "cc",
+            "skills",
+            "add",
+            configured.to_str().unwrap(),
+            "--name",
+            "leak",
+            "--json",
+        ]);
+        cmd.env(variable, &configured);
+        let out = common::capture(cmd).unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        assert!(out.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(value["error"]["code"], "forbidden_source");
+    }
+    assert!(!f.root.join("share-journal.json").exists());
+}
+#[test]
+fn stage06_human_output_and_version_labels_are_bounded() {
+    let f = common::Fixture::new();
+    assert_eq!(
+        common::stdout(&f.run(&["cc", "skills", "list"], 0)),
+        "No shared skills.\n"
+    );
+    assert!(!f.root.exists());
+    for label in ["", "1\n2", "1/2", &"a".repeat(129)] {
+        let result = request(
+            &f,
+            &[
+                "cc",
+                "app",
+                "bind",
+                "codex",
+                "/invalid",
+                "--version",
+                label,
+                "--json",
+            ],
+            2,
+        );
+        assert_eq!(result["error"]["code"], "usage");
+        assert!(!f.root.exists());
+    }
+}

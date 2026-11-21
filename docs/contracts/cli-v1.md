@@ -140,3 +140,7 @@ validator exists, validate the schema and examples with it too; install nothing.
 Implementers add Rust serialization/CLI e2e fixtures against these exact examples,
 including stderr/stdout/exit assertions. Planning validation does not prove CLI
 implementation or native launch behavior.
+
+Skills source confinement uses `forbidden_source` with a fixed message and no
+source path. Recorded desktop version labels contain 1–128 ASCII letters, digits,
+`.`, `_`, `+` or `-`; labels remain unverified metadata.

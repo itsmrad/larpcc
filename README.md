@@ -44,6 +44,8 @@ A package requires `SKILL.md` and portable ASCII relative filenames. Trusted
 0755/0644 sources are accepted; symlinks, reparse points, hardlinks, special files,
 unsafe ancestry and case-insensitive collisions refuse. Limits are 1,000 files,
 16 MiB and 16 path levels, with at most 1,000 directories. Nothing executes.
+Sources inside the managed root, `.claude*`, `.codex*`, `.agents` or configured
+vendor homes are refused before any package contents are read.
 The package is copied once into `shared/skills/<name>` and verified by a canonical
 SHA-256 digest. Existing store entries and occupied profile destinations are never
 replaced. Unix uses internal-store symlinks; Windows uses owned digest copies
@@ -56,8 +58,11 @@ project and provider skill scopes remain independently visible.
 artifact identities and digests. Both use the registry lock. A bounded write-ahead
 `share-journal.json` keeps package bytes and the concrete mutation plan until the
 index, manifest and registry commit completes. Pending work blocks ordinary
-registry consumers; `skills sync` explicitly resumes it. Drift refuses without
-replacing changed content. Cleanup unlinks verified leaves without traversing a
+registry consumers; `skills sync` explicitly resumes it. Missing owned profile
+artifacts are recreated by sync or dropped by disable; changed/occupied entries
+still refuse drift. Sharing writes take ordered per-profile lifecycle guards
+before the registry lock; contention refuses. Forget retains the directory and
+refuses sharing references. Cleanup unlinks verified leaves without traversing a
 link target or using recursive directory removal. Local filesystems and the
 existing same-user/privileged race limitations still apply.
 

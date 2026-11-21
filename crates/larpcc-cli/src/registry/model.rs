@@ -193,3 +193,16 @@ pub struct LaunchTarget {
     pub resolved_executable: PathBuf,
     pub identity: crate::platform::FileIdentity,
 }
+
+/// Recorded labels are bounded metadata, never executable qualification.
+pub(crate) fn parse_recorded_version(value: &str) -> Result<String, &'static str> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+    {
+        return Err("expected 1-128 ASCII letters, digits, '.', '_', '+', or '-'");
+    }
+    Ok(value.to_owned())
+}

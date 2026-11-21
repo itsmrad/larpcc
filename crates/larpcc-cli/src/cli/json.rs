@@ -45,8 +45,16 @@ pub(super) fn json_or_usage(is_json: bool, command: &str, code: &str, message: &
         ExitCode::from(2)
     }
 }
-fn failure(command: &str, error: Error) -> ExitCode {
-    let (code, message, exit) = match error {
+fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
+    match error {
+        Error::InvalidVersionLabel => {
+            ("usage", "Recorded version label is invalid or too long.", 2)
+        }
+        Error::ForbiddenSource => (
+            "forbidden_source",
+            "Skill sources inside managed or vendor homes are forbidden.",
+            1,
+        ),
         Error::Drift => (
             "drift",
             "Owned content or filesystem identity has changed.",
@@ -89,7 +97,10 @@ fn failure(command: &str, error: Error) -> ExitCode {
             "The requested local operation could not be completed safely.",
             1,
         ),
-    };
+    }
+}
+fn failure(command: &str, error: Error) -> ExitCode {
+    let (code, message, exit) = failure_details(error);
     json_error(command, code, message, exit)
 }
 fn receipt(entry: &crate::registry::ProfileEntry) -> Value {
@@ -174,5 +185,21 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
     match result {
         Ok(data) => json_success(command, r.revision(), data),
         Err(e) => failure(command, e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn stage09_app_bind_conflict_exit_and_redacted_messages() {
+        let (code, message, exit) = failure_details(Error::AlreadyBound {
+            provider: Provider::Codex,
+            old: "private-path".into(),
+        });
+        assert_eq!((code, exit), ("conflict", 2));
+        assert!(!message.contains("private-path"));
+        assert_eq!(failure_details(Error::Conflict).2, 1);
+        assert_eq!(failure_details(Error::InvalidVersionLabel).2, 2);
     }
 }

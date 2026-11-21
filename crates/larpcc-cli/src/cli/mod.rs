@@ -199,7 +199,7 @@ enum AppCommand {
         #[arg(value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
         provider: Provider,
         path: std::path::PathBuf,
-        #[arg(long = "version")]
+        #[arg(long = "version", value_parser=crate::registry::parse_recorded_version)]
         recorded_version: Option<String>,
         #[arg(long)]
         replace: bool,
@@ -413,7 +413,7 @@ pub fn run() -> ExitCode {
                 .and_then(|r| r.expecting(expected).skills(command.into_action()))
             {
                 Ok(data) => write_output(
-                    format!("{}\n", data).as_bytes(),
+                    render::skills(&data).as_bytes(),
                     &mut io::stdout().lock(),
                     &mut io::stderr().lock(),
                 ),
@@ -557,7 +557,10 @@ pub(super) fn operational_error(error: Error) -> ExitCode {
     if let Some(hint) = error.hint() {
         let _ = writeln!(stderr, "hint: {}", crate::registry::display::text(&hint));
     }
-    if matches!(error, Error::AlreadyBound { .. }) {
+    if matches!(
+        error,
+        Error::AlreadyBound { .. } | Error::InvalidVersionLabel
+    ) {
         ExitCode::from(2)
     } else {
         ExitCode::FAILURE

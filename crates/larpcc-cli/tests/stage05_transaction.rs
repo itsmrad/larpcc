@@ -42,7 +42,7 @@ fn stage05_transaction_concurrent_writers_commit_once() {
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
-            command.spawn().unwrap()
+            spawn(&mut command).unwrap()
         })
         .collect();
     let mut revisions = vec![];

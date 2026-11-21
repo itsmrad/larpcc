@@ -156,6 +156,45 @@ pub fn alias(root: &std::path::Path, add: bool, data: &serde_json::Value) -> Str
     )
 }
 
+pub(super) fn skills(data: &serde_json::Value) -> String {
+    if let Some(rows) = data.get("skills").and_then(serde_json::Value::as_array) {
+        if rows.is_empty() {
+            return "No shared skills.\n".into();
+        }
+        let mut output = "NAME\tSTATE\tSHA256\n".to_owned();
+        for row in rows {
+            let _ = writeln!(
+                output,
+                "{}\t{}\t{}",
+                row["name"].as_str().unwrap_or(""),
+                row["state"].as_str().unwrap_or(""),
+                row["sha256"].as_str().unwrap_or("")
+            );
+        }
+        return output;
+    }
+    if let Some(rows) = data.get("rows").and_then(serde_json::Value::as_array) {
+        let mut output = "SKILL".to_owned();
+        for p in data["profiles"].as_array().into_iter().flatten() {
+            let _ = write!(output, "\t{}", p["name"].as_str().unwrap_or(""));
+        }
+        output.push('\n');
+        for row in rows {
+            output.push_str(row["name"].as_str().unwrap_or(""));
+            for on in row["enabled"].as_array().into_iter().flatten() {
+                output.push_str(if on == true { "\ton" } else { "\toff" });
+            }
+            output.push('\n');
+        }
+        return output;
+    }
+    if data["changed"] == true {
+        "Skills updated.\n".into()
+    } else {
+        "Skills unchanged.\n".into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
