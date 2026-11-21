@@ -663,11 +663,10 @@ fn stage06_source_unresolvable_home_fails_closed_missing_home_allows_source() {
             assert_eq!(value["error"]["code"], "forbidden_source");
         }
     }
-    // The default Claude config file is not a directory namespace or package source.
-    common::create_file(
-        &f.temp.path().join("home/.claude.json"),
-        b"synthetic-secret",
-    );
+    // Fixture::new already creates this synthetic config sentinel on every OS.
+    // Reuse it: Windows create_file deliberately refuses an existing file.
+    let config = f.temp.path().join("home/.claude.json");
+    let config_before = std::fs::read(&config).unwrap();
     let mut cmd = f.command(&[
         "cc",
         "skills",
@@ -684,4 +683,5 @@ fn stage06_source_unresolvable_home_fails_closed_missing_home_allows_source() {
     assert!(out.stderr.is_empty());
     assert!(!missing.exists());
     assert!(!f.root.join("shared/skills/leak").exists());
+    assert_eq!(std::fs::read(&config).unwrap(), config_before);
 }
