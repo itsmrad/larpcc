@@ -3,16 +3,17 @@ import Foundation
 // Display logic for the menu bar and the profile usage section. Pure values only:
 // nothing here reads files, runs processes or touches the network.
 
-/// What the menu bar item shows next to its glyph.
+/// What the menu bar item shows.
 public enum MenuBarMode: String, Sendable, CaseIterable {
-    case tightest, profile, icon
-    public var title: String {
-        switch self {
-        case .tightest: return "Tightest limit"
-        case .profile: return "A chosen profile"
-        case .icon: return "Icon only"
-        }
-    }
+    case tightest, icon
+    public var title: String { self == .icon ? "Icon only" : "Session usage" }
+}
+
+public enum MenuBarTab: String, Sendable, CaseIterable {
+    case overview, codex, claude
+
+    public var provider: Provider? { Provider(rawValue: rawValue) }
+    public var title: String { provider?.title ?? "Overview" }
 }
 
 /// The two rolling usage windows and their lengths.
@@ -95,7 +96,7 @@ public enum ResetCountdown {
 
 /// Elapsed-time pace: how much would be left if usage were spread evenly over the window.
 public enum UsagePace {
-    /// Percentage points of slack before a window counts as ahead of pace.
+    /// Percentage points of slack on either side of even pace.
     public static let margin = 5.0
 
     /// Percent left on an even pace, or nil when the reset time is unknown.
@@ -104,38 +105,58 @@ public enum UsagePace {
         return min(100, max(0, resetsAt.timeIntervalSince(now) / length * 100))
     }
 
-    /// True when the window has less left than an even pace would leave, beyond the margin.
-    public static func isAhead(_ window: UsageWindow, kind: UsageWindowKind, now: Date) -> Bool {
-        guard let expected = expectedLeftPercent(resetsAt: window.resetsAt, length: kind.length, now: now) else { return false }
-        return window.leftPercent < expected - margin
+    /// Compares quota left with time left and projects exhaustion at the current average rate.
+    public static func text(_ window: UsageWindow, kind: UsageWindowKind, now: Date, spoken: Bool = false) -> String? {
+        guard let remaining = window.resetsAt?.timeIntervalSince(now),
+              remaining > 0, remaining < kind.length else { return nil }
+        let elapsed = kind.length - remaining
+        let left = window.leftPercent
+        let delta = left - remaining / kind.length * 100
+        let used = 100 - left
+
+        let status: String
+        if abs(delta) <= margin {
+            status = "On pace"
+        } else {
+            let amount = Int(abs(delta).rounded())
+            let unit = spoken ? " percent" : "%"
+            status = "\(amount)\(unit) in \(delta > 0 ? "reserve" : "deficit")"
+        }
+        let timeToEmpty = used > 0 ? left / (used / elapsed) : .infinity
+        let projection: String
+        if timeToEmpty < remaining {
+            let span = timeToEmpty == 0 ? (spoken ? "0 minutes" : "0m")
+                : (spoken ? UsageSpan.spoken(timeToEmpty) : UsageSpan.compact(timeToEmpty))
+            projection = "Runs out in \(span)"
+        } else {
+            projection = "Lasts until reset"
+        }
+        return status + (spoken ? ", " : " · ") + projection
     }
 }
 
 public enum MenuBarSummary {
     public static func isEnabled(_ profile: Profile) -> Bool { profile.cliEnabled || profile.desktopEnabled }
 
-    /// Lowest percent left across enabled profiles and both windows.
-    public static func tightestLeftPercent(profiles: [Profile], usage: [String: UsageReport]) -> Double? {
-        profiles.filter(isEnabled).compactMap { usage[$0.id]?.lowestLeftPercent }.min()
-    }
-
-    /// The percent the menu bar shows for a mode, or nil for the glyph alone.
-    public static func leftPercent(mode: MenuBarMode, chosenProfileID: String?, profiles: [Profile],
-                                   usage: [String: UsageReport]) -> Double? {
-        switch mode {
-        case .icon: return nil
-        case .tightest: return tightestLeftPercent(profiles: profiles, usage: usage)
-        case .profile:
-            guard let id = chosenProfileID, profiles.contains(where: { $0.id == id }) else { return nil }
-            return usage[id]?.lowestLeftPercent
+    public static func tabs(profiles: [Profile]) -> [MenuBarTab] {
+        MenuBarTab.allCases.filter { tab in
+            guard let provider = tab.provider else { return true }
+            return profiles.contains { $0.provider == provider && isEnabled($0) }
         }
     }
 
-    /// Menu bar text such as "62%", or nil for the glyph alone.
-    public static func labelText(mode: MenuBarMode, chosenProfileID: String?, profiles: [Profile],
-                                 usage: [String: UsageReport]) -> String? {
-        leftPercent(mode: mode, chosenProfileID: chosenProfileID, profiles: profiles, usage: usage)
-            .map { "\(Int($0.rounded()))%" }
+    /// Session text from the chosen enabled profile, or the most constrained one with a session window.
+    public static func statusText(provider: Provider, chosenProfileID: String, profiles: [Profile],
+                                  usage: [String: UsageReport]) -> String? {
+        let candidates = orderedProfiles(profiles, usage: usage, provider: provider)
+        let profile = candidates.first { $0.id == chosenProfileID }
+            ?? candidates.first { usage[$0.id]?.fiveHour != nil }
+        guard let profile, let window = usage[profile.id]?.fiveHour else { return nil }
+        return "5h \(Int(window.leftPercent.rounded()))%"
+    }
+
+    public static func tightestLeftPercent(profiles: [Profile], usage: [String: UsageReport]) -> Double? {
+        profiles.filter(isEnabled).compactMap { usage[$0.id]?.lowestLeftPercent }.min()
     }
 
     /// Template SF Symbol for the menu bar; the needle drops as limits get tight.
@@ -149,13 +170,14 @@ public enum MenuBarSummary {
     }
 
     /// Enabled profiles, tightest limit first; profiles without usage last, then by name.
-    public static func orderedProfiles(_ profiles: [Profile], usage: [String: UsageReport]) -> [Profile] {
-        profiles.filter(isEnabled).sorted { a, b in
+    public static func orderedProfiles(_ profiles: [Profile], usage: [String: UsageReport],
+                                       provider: Provider? = nil) -> [Profile] {
+        profiles.filter { isEnabled($0) && (provider == nil || $0.provider == provider) }.sorted { a, b in
             switch (usage[a.id]?.lowestLeftPercent, usage[b.id]?.lowestLeftPercent) {
             case let (x?, y?) where x != y: return x < y
             case (.some, nil): return true
             case (nil, .some): return false
-            default: return a.name < b.name
+            default: return a.name == b.name ? a.id < b.id : a.name < b.name
             }
         }
     }
@@ -166,7 +188,7 @@ public enum MenuBarSummary {
         var parts = ["\(kind.title) window", "\(Int(window.leftPercent.rounded())) percent left",
                      ResetCountdown.spoken(resetsAt: window.resetsAt, now: now)]
         if let word = UsageLevel(leftPercent: window.leftPercent).word { parts.append(word.lowercased()) }
-        if UsagePace.isAhead(window, kind: kind, now: now) { parts.append("faster than even pace") }
+        if let pace = UsagePace.text(window, kind: kind, now: now, spoken: true) { parts.append(pace) }
         return parts.joined(separator: ", ")
     }
 }

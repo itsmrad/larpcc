@@ -44,9 +44,9 @@ extension FixtureLarpClient {
         }
         let profiles = try await snapshot().profiles.map(\.id)
         let sample: [String: UsageReport] = [
-            "1": report(38, 134, 62, 74, credits: 2),
-            "2": report(91, 41, 70, 30, credits: nil),
-            "3": report(12, 260, 40, 140, credits: 0)
+            "1": report(38, 134, 62, 90, credits: 2),
+            "2": report(91, 41, 70, 50, credits: nil),
+            "3": report(12, 260, 40, 101, credits: 0)
         ]
         return sample.filter { profiles.contains($0.key) }
     }

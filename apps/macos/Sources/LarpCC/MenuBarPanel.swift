@@ -2,28 +2,60 @@ import SwiftUI
 import AppKit
 import LarpModel
 
-// MARK: - Status item label
+// MARK: - Status item
 
-/// Template glyph plus "62%"; glyph only in Icon mode or when there is no data.
 struct MenuBarLabel: View {
     @ObservedObject var store: AppStore
     @AppStorage(MenuBarPreferences.modeKey) private var mode = MenuBarMode.tightest.rawValue
-    @AppStorage(MenuBarPreferences.profileKey) private var profileID = ""
+    @AppStorage(MenuBarPreferences.codexProfileKey) private var codexProfileID = ""
+    @AppStorage(MenuBarPreferences.claudeProfileKey) private var claudeProfileID = ""
 
     var body: some View {
-        let selected = MenuBarMode(rawValue: mode) ?? .tightest
         let profiles = store.snapshot?.profiles ?? []
-        let text = MenuBarSummary.labelText(mode: selected, chosenProfileID: profileID, profiles: profiles, usage: store.usage)
-        // Icon mode still lets the needle drop when any enabled profile runs low.
-        let symbolLeft = MenuBarSummary.leftPercent(mode: selected == .icon ? .tightest : selected,
-                                                    chosenProfileID: profileID, profiles: profiles, usage: store.usage)
-        HStack(spacing: 3) {
-            Image(systemName: MenuBarSummary.symbolName(leftPercent: symbolLeft))
-            if let text { Text(text).monospacedDigit() }
+        let lines: [(provider: Provider, text: String)] = [Provider.codex, .claude].compactMap { provider in
+            let choice = provider == .codex ? codexProfileID : claudeProfileID
+            return MenuBarSummary.statusText(provider: provider, chosenProfileID: choice,
+                                             profiles: profiles, usage: store.usage).map { (provider, $0) }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(text.map { "LarpCC, \($0) left" } ?? "LarpCC")
+        Group {
+            if mode != MenuBarMode.icon.rawValue, !lines.isEmpty, let image = templateImage(lines) {
+                Image(nsImage: image)
+            } else {
+                Image(systemName: MenuBarSummary.symbolName(leftPercent:
+                    MenuBarSummary.tightestLeftPercent(profiles: profiles, usage: store.usage)))
+            }
+        }
+        .accessibilityLabel(mode == MenuBarMode.icon.rawValue || lines.isEmpty ? "LarpCC" :
+            (["LarpCC"] + lines.map {
+                "\($0.provider.title) session, \($0.text.dropFirst(3).dropLast()) percent left"
+            }).joined(separator: ", "))
         .onAppear { MenuBarDockPolicy.install() }
+    }
+
+    @MainActor private func templateImage(_ lines: [(provider: Provider, text: String)]) -> NSImage? {
+        let stacked = lines.count > 1
+        let content = VStack(alignment: .leading, spacing: 0) {
+            ForEach(lines.indices, id: \.self) { index in
+                HStack(spacing: 3) {
+                    ProviderMark(provider: lines[index].provider)
+                        .fill(.black)
+                        .frame(width: stacked ? 8 : 12, height: stacked ? 8 : 12)
+                    Text(lines[index].text)
+                        .font(.system(size: stacked ? 9 : 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.black)
+                }
+                .frame(height: stacked ? 10 : 16)
+            }
+        }
+        .padding(.horizontal, 1)
+        .fixedSize()
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+        guard let bitmap = renderer.cgImage else { return nil }
+        let image = NSImage(cgImage: bitmap, size: NSSize(width: CGFloat(bitmap.width) / 2,
+                                                         height: CGFloat(bitmap.height) / 2))
+        image.isTemplate = true
+        return image
     }
 }
 
@@ -31,333 +63,496 @@ struct MenuBarLabel: View {
 
 struct MenuBarPanel: View {
     @ObservedObject var store: AppStore
-    /// Rendered off-screen for `--menubar-panel-snapshot`: no scrolling, focus or side effects.
-    var isSnapshot = false
+    var snapshotTab: MenuBarTab? = nil
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(MenuBarPreferences.tabKey) private var storedTab = MenuBarTab.overview.rawValue
     @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
     @AppStorage(UsagePreferences.consentKey) private var consented = false
-    @FocusState private var focusedProfile: String?
-    @State private var cardsHeight: CGFloat = 0
-    /// Set while a launch started here is in flight; see `openDesktop`.
+    @FocusState private var hasKeyboardFocus: Bool
+    @State private var keyboardItem: Item?
+    @State private var hoveredItem: Item?
+    @State private var desktopProfileID: String?
+    @State private var sectionsFrame: CGRect = .zero
     @State private var recoverAfterAction = false
 
+    private enum Item: Hashable {
+        case profile(String), desktop, refresh, settings, quit
+    }
+
     private var source: UsageSource { storedSource == UsageSource.live.rawValue && consented ? .live : .local }
-    private var profiles: [Profile] { MenuBarSummary.orderedProfiles(store.snapshot?.profiles ?? [], usage: store.usage) }
+    private var allProfiles: [Profile] { store.snapshot?.profiles ?? [] }
+    private var tabs: [MenuBarTab] { MenuBarSummary.tabs(profiles: allProfiles) }
+    private var tab: MenuBarTab {
+        if let snapshotTab { return snapshotTab }
+        guard let saved = MenuBarTab(rawValue: storedTab), tabs.contains(saved) else { return .overview }
+        return saved
+    }
+    private var profiles: [Profile] {
+        MenuBarSummary.orderedProfiles(allProfiles, usage: store.usage, provider: tab.provider)
+    }
+    private var desktopProfile: Profile? {
+        profiles.first { $0.id == desktopProfileID } ?? profiles.first
+    }
+    private var canOpenDesktop: Bool {
+        desktopProfile?.desktopEnabled == true && !store.isFixture && !store.busy
+    }
+    private var canRefresh: Bool { !store.usageLoading && !store.busy }
+    private var items: [Item] {
+        var items = profiles.map { Item.profile($0.id) }
+        if canOpenDesktop { items.append(.desktop) }
+        if canRefresh { items.append(.refresh) }
+        return items + [.settings, .quit]
+    }
+    private var highlighted: Item? {
+        let candidate = hoveredItem ?? keyboardItem
+        if let candidate, items.contains(candidate) { return candidate }
+        return profiles.first.map { .profile($0.id) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            tabStrip
             notices
-            cardsArea
+            Divider()
+            sectionsArea
             Divider()
             footer
         }
-        .frame(width: 352)
+        .frame(width: 332)
         .background {
-            if isSnapshot { Color(nsColor: .windowBackgroundColor) }
-        }
-        .background {
-            // Esc closes the panel and Return opens Settings, wherever focus is
-            // (Space still presses a focused button).
-            ZStack {
-                Button(action: closePanel) { EmptyView() }
-                    .keyboardShortcut(.cancelAction)
-                Button(action: openSettings) { EmptyView() }
-                    .keyboardShortcut(.defaultAction)
+            if snapshotTab != nil {
+                Color(nsColor: .windowBackgroundColor)
+            } else {
+                MenuBarMaterial().accessibilityHidden(true)
             }
-            .frame(width: 0, height: 0)
-            .opacity(0)
-            .accessibilityHidden(true)
         }
-        .onAppear { if !isSnapshot { store.menuBarPanelOpened() } }
+        .focusable(snapshotTab == nil)
+        .focused($hasKeyboardFocus)
+        .focusEffectDisabled()
+        .defaultFocus($hasKeyboardFocus, true)
+        .onKeyPress(.downArrow) { moveHighlight(by: 1) }
+        .onKeyPress(.upArrow) { moveHighlight(by: -1) }
+        .onKeyPress(.leftArrow) { moveTab(by: -1) }
+        .onKeyPress(.rightArrow) { moveTab(by: 1) }
+        .onKeyPress(.tab, phases: .down) { press in
+            moveTab(by: press.modifiers.contains(.shift) ? -1 : 1)
+        }
+        .onKeyPress(.return, phases: .down) { _ in
+            activate(highlighted ?? .settings)
+            return .handled
+        }
+        .onExitCommand(perform: closePanel)
+        .onAppear {
+            guard snapshotTab == nil else { return }
+            hasKeyboardFocus = true
+            store.menuBarPanelOpened()
+        }
         .onChange(of: store.busy) { _, busy in
             guard !busy, recoverAfterAction else { return }
             recoverAfterAction = false
-            // A failed action clears the snapshot; read it back once so the cards return
-            // next to the error notice. One-shot, so it can't loop when larp is unavailable.
+            // Recover the sections once after a failed launch clears the snapshot.
             if store.snapshot == nil { store.startRefresh() }
         }
     }
 
-    private func openDesktop(_ profileID: String) {
-        recoverAfterAction = true
-        store.perform(.open(profileID: profileID, surface: .desktop))
-    }
-
-    // MARK: Header
-
-    private var header: some View {
-        HStack(spacing: 6) {
-            Text("LarpCC").font(.headline)
-            MenuBarBadge(text: source.title)
-            if store.isFixture { MenuBarBadge(text: "Sample") }
-            Spacer(minLength: 8)
-            if store.usageLoading || store.busy {
-                ProgressView().controlSize(.small)
-                    .accessibilityLabel("Updating usage")
-            } else {
-                Button { store.menuBarRefresh() } label: {
-                    Image(systemName: "arrow.clockwise")
+    private var tabStrip: some View {
+        HStack(spacing: 5) {
+            ForEach(tabs, id: \.self) { item in
+                let selected = tab == item
+                let highlighted = selected && item == .overview
+                Button { selectTab(item) } label: {
+                    VStack(spacing: 3) {
+                        if let provider = item.provider {
+                            ProviderGlyph(provider: provider, size: 16)
+                        } else {
+                            Image(systemName: "square.grid.2x2")
+                                .frame(width: 20, height: 20)
+                        }
+                        Text(item.title)
+                            .font(.caption.weight(selected ? .semibold : .medium))
+                        if let provider = item.provider {
+                            Capsule().fill(MenuBarColors.provider(provider, scheme: colorScheme))
+                                .frame(width: 35, height: selected ? 3 : 2)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 47)
+                    .foregroundStyle(highlighted ? MenuBarColors.selectedText : Color.primary)
+                    .background {
+                        if highlighted {
+                            RoundedRectangle(cornerRadius: 6).fill(MenuBarColors.selection)
+                        } else if selected {
+                            RoundedRectangle(cornerRadius: 6).fill(.quaternary)
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
-                .buttonStyle(MenuBarIconButtonStyle())
-                .help(source == .live ? "Refresh live usage" : "Re-read saved usage")
-                .accessibilityLabel(source == .live ? "Refresh live usage" : "Re-read saved usage")
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
     }
 
     @ViewBuilder
     private var notices: some View {
-        if let error = store.usageError {
-            MenuBarNotice(symbol: "exclamationmark.triangle.fill", text: error)
+        if store.isFixture {
+            notice("Sample data", symbol: "testtube.2")
         }
-        if let message = store.message, !isSnapshot {
-            MenuBarNotice(symbol: "info.circle", text: message) { store.message = nil }
+        if let error = store.usageError {
+            notice(error, symbol: "exclamationmark.triangle.fill")
+        }
+        if let message = store.message, snapshotTab == nil {
+            notice(message, symbol: "info.circle", dismiss: { store.message = nil })
         }
     }
 
-    // MARK: Cards
+    private func notice(_ text: String, symbol: String, dismiss: (() -> Void)? = nil) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol).foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(text)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(text)
+            if let dismiss {
+                Button(action: dismiss) { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Dismiss message")
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 7)
+    }
 
     @ViewBuilder
-    private var cardsArea: some View {
-        if isSnapshot {
-            cards
+    private var sectionsArea: some View {
+        if snapshotTab != nil {
+            sections
         } else {
-            ScrollView {
-                cards.background(GeometryReader { proxy in
-                    Color.clear.preference(key: MenuBarCardsHeight.self, value: proxy.size.height)
-                })
+            let height = min(max(sectionsFrame.height, 60), maxSectionsHeight)
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        sections.background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(key: MenuBarSectionsFrame.self,
+                                                       value: geometry.frame(in: .named("menuBarSections")))
+                            }
+                        }
+                    }
+                    .id(tab)
+                    .coordinateSpace(name: "menuBarSections")
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(height: height)
+                    .onPreferenceChange(MenuBarSectionsFrame.self) { sectionsFrame = $0 }
+                    .onChange(of: keyboardItem) { _, item in
+                        if let item, case .profile = item { proxy.scrollTo(item) }
+                    }
+                }
+                if sectionsFrame.height > height {
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(height: 14)
+                        .opacity(sectionsFrame.maxY > height + 1 ? 1 : 0)
+                        .accessibilityHidden(true)
+                }
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(max(cardsHeight, 60), maxCardsHeight))
-            .onPreferenceChange(MenuBarCardsHeight.self) { cardsHeight = $0 }
         }
     }
 
-    /// Leaves room for the header, footer and menu bar on small screens.
-    private var maxCardsHeight: CGFloat { max(240, (NSScreen.main?.visibleFrame.height ?? 800) - 200) }
+    private var maxSectionsHeight: CGFloat {
+        let pointerScreen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
+        let screen = NSApp.keyWindow?.screen ?? pointerScreen ?? NSScreen.main
+        // Leave room for the tab strip, notices and the four footer rows.
+        return max(120, (screen?.visibleFrame.height ?? 800) - 230)
+    }
 
-    private var cards: some View {
-        VStack(spacing: 8) {
+    private var sections: some View {
+        VStack(spacing: 0) {
             if profiles.isEmpty {
-                emptyState
+                Text(emptyMessage)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(18)
+                    .frame(maxWidth: .infinity)
             }
             ForEach(profiles) { profile in
-                MenuBarProfileCard(store: store, profile: profile, report: store.usage[profile.id],
-                                   source: source, focused: focusedProfile == profile.id,
-                                   openDesktop: { openDesktop(profile.id) })
-                    .focusable(!isSnapshot)
-                    .focused($focusedProfile, equals: profile.id)
-                    .focusEffectDisabled()
+                let item = Item.profile(profile.id)
+                if profile.id != profiles.first?.id {
+                    Divider().padding(.horizontal, 9).padding(.vertical, 3)
+                }
+                Button { activate(item) } label: {
+                    MenuBarProfileSection(profile: profile, report: store.usage[profile.id],
+                                          source: source, selected: highlighted == item)
+                }
+                .buttonStyle(.plain)
+                .onHover { hover(item, entered: $0) }
+                .id(item)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 10)
-        .onKeyPress(.downArrow) { moveFocus(by: 1) }
-        .onKeyPress(.upArrow) { moveFocus(by: -1) }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 4)
     }
 
-    private var emptyState: some View {
-        let text: String
-        if store.busy || store.snapshot == nil && store.isFixture {
-            text = "Loading profiles…"
-        } else if store.snapshot == nil {
-            text = "Profiles are unavailable. Open Settings to choose larp or use sample data."
-        } else {
-            text = "No profiles are switched on. Turn one on in Settings."
-        }
-        return Text(text)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
+    private var emptyMessage: String {
+        if store.busy || store.snapshot == nil && store.isFixture { return "Loading profiles…" }
+        if store.snapshot == nil { return "Profiles are unavailable. Open Settings to choose larp or use sample data." }
+        return "No profiles are switched on. Turn one on in Settings."
     }
 
-    private func moveFocus(by step: Int) -> KeyPress.Result {
-        let ids = profiles.map(\.id)
-        guard !ids.isEmpty else { return .ignored }
-        guard let current = focusedProfile, let index = ids.firstIndex(of: current) else {
-            focusedProfile = step > 0 ? ids.first : ids.last
-            return .handled
+    private func hover(_ item: Item, entered: Bool) {
+        guard snapshotTab == nil else { return }
+        if entered {
+            guard items.contains(item) else { return }
+            hoveredItem = item
+            if case let .profile(id) = item { desktopProfileID = id }
+        } else if hoveredItem == item {
+            hoveredItem = nil
         }
-        focusedProfile = ids[min(max(index + step, 0), ids.count - 1)]
+    }
+
+    private func moveHighlight(by step: Int) -> KeyPress.Result {
+        let items = items
+        let index = highlighted.flatMap { items.firstIndex(of: $0) } ?? (step > 0 ? -1 : items.count)
+        let item = items[min(max(index + step, 0), items.count - 1)]
+        hoveredItem = nil
+        keyboardItem = item
+        if case let .profile(id) = item { desktopProfileID = id }
         return .handled
     }
 
-    // MARK: Footer
+    private func moveTab(by step: Int) -> KeyPress.Result {
+        let tabs = tabs
+        let index = tabs.firstIndex(of: tab) ?? 0
+        selectTab(tabs[(index + step + tabs.count) % tabs.count])
+        return .handled
+    }
+
+    private func selectTab(_ tab: MenuBarTab) {
+        if tab != self.tab {
+            storedTab = tab.rawValue
+            hoveredItem = nil
+            keyboardItem = nil
+            desktopProfileID = nil
+        }
+        hasKeyboardFocus = true
+    }
 
     private var footer: some View {
         VStack(spacing: 0) {
-            MenuBarMenuRow(title: source == .live ? "Refresh" : "Re-read Usage", shortcut: "⌘R") { store.menuBarRefresh() }
+            menuRow(.desktop, title: desktopProfile.map { "Open in \($0.provider.desktopApp)" } ?? "Open Desktop App",
+                    enabled: canOpenDesktop)
+                .accessibilityHint(desktopProfile?.name ?? "")
+            menuRow(.refresh, title: refreshTitle, shortcut: "⌘R", enabled: canRefresh)
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(store.usageLoading || store.busy)
-            MenuBarMenuRow(title: "Open LarpCC Settings…", shortcut: "⌘,", action: openSettings)
+            menuRow(.settings, title: "Open LarpCC Settings…", shortcut: "⌘,")
                 .keyboardShortcut(",", modifiers: .command)
-            MenuBarMenuRow(title: "Quit LarpCC", shortcut: "⌘Q") { NSApp.terminate(nil) }
+            menuRow(.quit, title: "Quit LarpCC", shortcut: "⌘Q")
                 .keyboardShortcut("q", modifiers: .command)
         }
         .padding(5)
     }
 
+    private var refreshTitle: String {
+        if store.usageLoading { return "Updating Usage…" }
+        return source == .live ? "Refresh" : "Re-read Usage"
+    }
+
+    private func menuRow(_ item: Item, title: String, shortcut: String = "", enabled: Bool = true) -> some View {
+        let selected = highlighted == item
+        return Button { activate(item) } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(shortcut)
+                    .foregroundStyle(selected ? MenuBarColors.selectedText : Color.secondary)
+                    .accessibilityHidden(true)
+            }
+            .font(.callout)
+            .foregroundStyle(selected ? MenuBarColors.selectedText : Color.primary)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .opacity(enabled ? 1 : 0.48)
+            .background {
+                if selected { RoundedRectangle(cornerRadius: 5).fill(MenuBarColors.selection) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .onHover { hover(item, entered: $0) }
+    }
+
+    private func activate(_ item: Item) {
+        switch item {
+        case .profile, .settings: openSettings()
+        case .desktop:
+            guard canOpenDesktop, let desktopProfile else { return }
+            hasKeyboardFocus = true
+            recoverAfterAction = true
+            store.perform(.open(profileID: desktopProfile.id, surface: .desktop))
+        case .refresh:
+            if canRefresh {
+                hasKeyboardFocus = true
+                store.menuBarRefresh()
+            }
+        case .quit: NSApp.terminate(nil)
+        }
+    }
+
     private func openSettings() {
+        closePanel()
         MenuBarDockPolicy.showDockIcon()
         openWindow(id: "settings")
         NSApp.activate()
     }
 
     private func closePanel() {
-        NSApp.keyWindow?.close()
+        if let window = NSApp.keyWindow, !MenuBarDockPolicy.isSettingsWindow(window) {
+            window.close()
+        }
     }
 }
 
-private struct MenuBarCardsHeight: SwiftUI.PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+private struct MenuBarSectionsFrame: SwiftUI.PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
 
-// MARK: - Profile card
+private struct MenuBarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .menu
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
 
-struct MenuBarProfileCard: View {
-    @ObservedObject var store: AppStore
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+// MARK: - Profile section
+
+private struct MenuBarProfileSection: View {
     let profile: Profile
     let report: UsageReport?
     let source: UsageSource
-    let focused: Bool
-    let openDesktop: () -> Void
+    let selected: Bool
 
-    private var level: UsageLevel { report?.lowestLeftPercent.map(UsageLevel.init(leftPercent:)) ?? .normal }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
-            if let report {
-                let kinds = UsageWindowKind.allCases.filter { $0.window(in: report) != nil }
-                if kinds.isEmpty {
-                    Text("No limits reported").font(.callout).foregroundStyle(.secondary)
-                }
-                ForEach(kinds, id: \.self) { kind in
-                    if let window = kind.window(in: report) {
-                        MenuBarWindowRow(kind: kind, window: window)
-                    }
-                }
-            } else {
-                Text(source == .local ? "No usage saved yet" : "Not refreshed yet")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Divider()
-            HStack(alignment: .firstTextBaseline) {
-                Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
-                    .accessibilityLabel(ResetAvailability.text(credits: report?.resetCredits))
-                Spacer(minLength: 8)
-                if let report {
-                    MenuBarUpdatedText(report: report)
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quinary))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(borderStyle, lineWidth: focused ? 2 : 1)
-        )
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(profile.name), \(profile.provider.title)")
+    private var secondary: Color { selected ? MenuBarColors.selectedText : .secondary }
+    private var kinds: [UsageWindowKind] { UsageWindowKind.allCases.filter { $0.window(in: report) != nil } }
+    private var resetCredits: String { ResetAvailability.text(credits: report?.resetCredits) }
+    private var noUsage: String {
+        if report != nil { return "No limits reported" }
+        return source == .local ? "No usage saved yet" : "Not refreshed yet"
     }
-
-    private var borderStyle: AnyShapeStyle {
-        if focused { return AnyShapeStyle(Color.accentColor) }
-        if level != .normal { return AnyShapeStyle(level.color.opacity(0.45)) }
-        return AnyShapeStyle(Color(nsColor: .separatorColor).opacity(0.6))
-    }
-
-    private var desktopAvailable: Bool {
-        profile.desktopEnabled && !store.isFixture && !store.busy && store.snapshot != nil
-    }
-
-    private var desktopHelp: String {
-        let open = "Open \(profile.provider.desktopApp)"
-        if !profile.desktopEnabled { return "\(open): desktop app is off" }
-        if store.isFixture { return "\(open): not available with sample data" }
-        return open
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            ProviderTile(provider: profile.provider, size: 28)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(profile.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                Text(profile.provider.title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 6)
-            // Opening in Terminal has no larp command yet, and sample mode never launches,
-            // so those stay disabled rather than failing (a failed action clears the snapshot).
-            Button {} label: { Image(systemName: "terminal") }
-                .buttonStyle(MenuBarIconButtonStyle())
-                .disabled(true)
-                .help(profile.cliEnabled ? "Open in Terminal: not available yet" : "Open in Terminal: command line is off")
-                .accessibilityLabel("Open \(profile.name) in Terminal, not available")
-            Button(action: openDesktop) {
-                Image(systemName: "macwindow")
-            }
-            .buttonStyle(MenuBarIconButtonStyle())
-            .disabled(!desktopAvailable)
-            .help(desktopHelp)
-            .accessibilityLabel("Open \(profile.name) in \(profile.provider.desktopApp)" + (desktopAvailable ? "" : ", not available"))
-        }
-    }
-}
-
-/// One window: label, % left, a capsule bar of % left with a pace tick, and the reset countdown.
-struct MenuBarWindowRow: View {
-    let kind: UsageWindowKind
-    let window: UsageWindow
 
     var body: some View {
         TimelineView(.everyMinute) { context in
-            let now = context.date
-            let level = UsageLevel(leftPercent: window.leftPercent)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(kind.title).font(.callout.weight(.medium))
-                    Spacer()
-                    Text("\(Int(window.leftPercent.rounded()))% left" + (level.word.map { " · \($0)" } ?? ""))
-                        .font(.callout)
-                        .monospacedDigit()
-                        .foregroundStyle(level == .normal ? AnyShapeStyle(.secondary) : AnyShapeStyle(level.color))
-                }
-                MenuBarUsageBar(leftPercent: window.leftPercent,
-                                pacePercent: UsagePace.expectedLeftPercent(resetsAt: window.resetsAt, length: kind.length, now: now),
-                                tint: window.levelColor)
-                HStack(alignment: .firstTextBaseline) {
-                    Text(ResetCountdown.text(resetsAt: window.resetsAt, now: now))
-                        .monospacedDigit()
-                    Spacer()
-                    if UsagePace.isAhead(window, kind: kind, now: now) {
-                        Text("Faster than even pace")
+            let updated = updatedText(now: context.date)
+            VStack(alignment: .leading, spacing: 9) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(profile.name).font(.headline).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(profile.provider.title).foregroundStyle(secondary)
                     }
+                    Text(updated).foregroundStyle(secondary).monospacedDigit()
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                if kinds.isEmpty {
+                    Text(noUsage).font(.callout).foregroundStyle(secondary)
+                }
+                ForEach(kinds, id: \.self) { kind in
+                    if let window = kind.window(in: report) {
+                        MenuBarWindowRow(kind: kind, window: window, provider: profile.provider,
+                                         now: context.date, selected: selected)
+                    }
+                }
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Limit reset credits").fontWeight(.semibold)
+                    Spacer(minLength: 8)
+                    Text(resetCredits).foregroundStyle(secondary)
+                }
+                .font(.caption)
             }
+            .foregroundStyle(selected ? MenuBarColors.selectedText : Color.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if selected { RoundedRectangle(cornerRadius: 6).fill(MenuBarColors.selection) }
+            }
+            .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(MenuBarSummary.spokenRow(kind: kind, window: window, now: now))
+            .accessibilityLabel(spokenSummary(updated: updatedText(now: context.date, spoken: true), now: context.date))
+        }
+    }
+
+    private func updatedText(now: Date, spoken: Bool = false) -> String {
+        let sourceTitle = (report?.source ?? source).title
+        guard let captured = report?.capturedAt else { return sourceTitle }
+        let age = now.timeIntervalSince(captured)
+        if age < 60 { return "Updated just now" + (spoken ? ", " : " · ") + sourceTitle }
+        let span = spoken ? UsageSpan.spoken(age) : UsageSpan.compact(age, roundingUp: false)
+        return "Updated \(span) ago" + (spoken ? ", " : " · ") + sourceTitle
+    }
+
+    private func spokenSummary(updated: String, now: Date) -> String {
+        var parts = [profile.name, profile.provider.title, updated]
+        if kinds.isEmpty { parts.append(noUsage) }
+        for kind in kinds {
+            if let window = kind.window(in: report) {
+                parts.append(MenuBarSummary.spokenRow(kind: kind, window: window, now: now))
+            }
+        }
+        parts.append("Limit reset credits, \(resetCredits)")
+        return parts.joined(separator: ", ")
+    }
+}
+
+private struct MenuBarWindowRow: View {
+    let kind: UsageWindowKind
+    let window: UsageWindow
+    let provider: Provider
+    let now: Date
+    let selected: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let secondary = selected ? MenuBarColors.selectedText : Color.secondary
+        let name = kind == .fiveHour ? "Session" : kind.title
+        let tint = selected ? MenuBarColors.selectedText :
+            MenuBarColors.provider(provider, scheme: colorScheme, critical: window.leftPercent < 10)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("\(name) \(Int(window.leftPercent.rounded()))% left")
+                    .font(.callout.weight(.semibold))
+                Spacer(minLength: 8)
+                Text(ResetCountdown.text(resetsAt: window.resetsAt, now: now))
+                    .font(.caption)
+                    .foregroundStyle(secondary)
+            }
+            .monospacedDigit()
+            MenuBarUsageBar(leftPercent: window.leftPercent,
+                            pacePercent: UsagePace.expectedLeftPercent(resetsAt: window.resetsAt,
+                                                                      length: kind.length, now: now),
+                            tint: tint)
+            if let pace = UsagePace.text(window, kind: kind, now: now) {
+                Text(pace).font(.caption).foregroundStyle(secondary).monospacedDigit()
+            }
         }
     }
 }
 
-/// Capsule of percent left. The tick marks what would be left on an even pace.
-struct MenuBarUsageBar: View {
+private struct MenuBarUsageBar: View {
     let leftPercent: Double
     let pacePercent: Double?
     let tint: Color
@@ -366,147 +561,36 @@ struct MenuBarUsageBar: View {
         GeometryReader { proxy in
             let width = proxy.size.width
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
-                Capsule().fill(tint)
-                    .frame(width: leftPercent > 0 ? max(6, width * leftPercent / 100) : 0)
+                Capsule().fill(tint.opacity(0.19))
+                Capsule().fill(tint).frame(width: width * leftPercent / 100)
                 if let pacePercent {
-                    RoundedRectangle(cornerRadius: 0.75)
-                        .fill(Color.primary.opacity(0.6))
-                        .frame(width: 1.5, height: 10)
-                        .offset(x: min(max(width * pacePercent / 100 - 0.75, 0), width - 1.5))
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(tint)
+                        .overlay { RoundedRectangle(cornerRadius: 1).strokeBorder(Color.black, lineWidth: 0.75) }
+                        .frame(width: 3, height: 10)
+                        .offset(x: min(max(width * pacePercent / 100 - 1.5, 0), max(0, width - 3)))
                 }
             }
         }
-        .frame(height: 6)
-        .padding(.vertical, 2)
-        .accessibilityHidden(true)
+        .frame(height: 5)
+        .padding(.vertical, 3)
     }
 }
 
-/// "Updated 4m ago · Local", updating itself every minute.
-struct MenuBarUpdatedText: View {
-    let report: UsageReport
-    var body: some View {
-        if let captured = report.capturedAt {
-            TimelineView(.everyMinute) { context in
-                let age = context.date.timeIntervalSince(captured)
-                Text("Updated \(age < 60 ? "just now" : UsageSpan.compact(age, roundingUp: false) + " ago") · \(report.source.title)")
-                    .monospacedDigit()
-            }
-        } else {
-            Text(report.source.title)
+private enum MenuBarColors {
+    static let selection = Color(nsColor: .selectedContentBackgroundColor)
+    static let selectedText = Color(nsColor: .alternateSelectedControlTextColor)
+
+    static func provider(_ provider: Provider, scheme: ColorScheme, critical: Bool = false) -> Color {
+        let dark = scheme == .dark
+        if critical {
+            return dark ? Color(red: 1, green: 0.42, blue: 0.44) : Color(red: 0.72, green: 0.13, blue: 0.20)
         }
-    }
-}
-
-// MARK: - Small pieces
-
-extension UsageLevel {
-    var color: Color {
-        switch self {
-        case .normal: return .primary
-        case .low: return .orange
-        case .critical: return .red
-        }
-    }
-}
-
-struct MenuBarBadge: View {
-    let text: String
-    var body: some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(.quaternary))
-    }
-}
-
-/// One-line notice with fixed safe text (never raw CLI output).
-struct MenuBarNotice: View {
-    let symbol: String
-    let text: String
-    var onDismiss: (() -> Void)? = nil
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol).foregroundStyle(.secondary)
-            Text(text)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(text)
-            if let onDismiss {
-                Button(action: onDismiss) { Image(systemName: "xmark") }
-                    .buttonStyle(MenuBarIconButtonStyle())
-                    .accessibilityLabel("Dismiss message")
-            }
-        }
-        .font(.caption)
-        .padding(.horizontal, 14)
-        .padding(.bottom, 8)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// Compact SwiftUI-drawn icon button (also renders in the snapshot).
-struct MenuBarIconButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { IconBody(configuration: configuration) }
-
-    private struct IconBody: View {
-        let configuration: ButtonStyleConfiguration
-        @Environment(\.isEnabled) private var isEnabled
-        @State private var hovering = false
-        var body: some View {
-            configuration.label
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isEnabled ? AnyShapeStyle(.secondary) : AnyShapeStyle(.quaternary))
-                .frame(width: 24, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.primary.opacity(configuration.isPressed ? 0.16 : hovering && isEnabled ? 0.08 : 0))
-                )
-                .contentShape(Rectangle())
-                .onHover { hovering = $0 }
-        }
-    }
-}
-
-/// Full-width, menu-style row with its shortcut on the right.
-struct MenuBarMenuRow: View {
-    let title: String
-    let shortcut: String
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text(shortcut).foregroundStyle(.secondary).accessibilityHidden(true)
-            }
-        }
-        .buttonStyle(MenuBarRowStyle())
-    }
-
-    private struct MenuBarRowStyle: ButtonStyle {
-        func makeBody(configuration: Configuration) -> some View { RowBody(configuration: configuration) }
-        private struct RowBody: View {
-            let configuration: ButtonStyleConfiguration
-            @Environment(\.isEnabled) private var isEnabled
-            @State private var hovering = false
-            var body: some View {
-                configuration.label
-                    .font(.system(size: 13))
-                    .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-                    .padding(.horizontal, 9)
-                    .frame(height: 24)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(Color.primary.opacity(configuration.isPressed ? 0.14 : hovering && isEnabled ? 0.08 : 0))
-                    )
-                    .contentShape(Rectangle())
-                    .onHover { hovering = $0 }
-            }
+        switch provider {
+        case .codex:
+            return dark ? Color(red: 0.26, green: 0.79, blue: 0.75) : Color(red: 0.05, green: 0.43, blue: 0.41)
+        case .claude:
+            return dark ? Color(red: 0.98, green: 0.62, blue: 0.48) : Color(red: 0.63, green: 0.28, blue: 0.18)
         }
     }
 }

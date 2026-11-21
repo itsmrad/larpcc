@@ -25,20 +25,23 @@ final class MenuBarSummaryTests: XCTestCase {
         XCTAssertNil(MenuBarSummary.tightestLeftPercent(profiles: disabled, usage: usage))
     }
 
-    func testLabelTextPerMode() async throws {
+    func testStatusTextPerProvider() async throws {
         let (profiles, usage) = try await sample()
-        func label(_ mode: MenuBarMode, _ id: String? = nil) -> String? {
-            MenuBarSummary.labelText(mode: mode, chosenProfileID: id, profiles: profiles, usage: usage)
+        func label(_ provider: Provider, _ id: String = "") -> String? {
+            MenuBarSummary.statusText(provider: provider, chosenProfileID: id, profiles: profiles, usage: usage)
         }
-        XCTAssertEqual(label(.tightest), "9%")
-        XCTAssertEqual(label(.profile, "3"), "60%")
-        XCTAssertEqual(label(.profile, "1"), "38%")
-        XCTAssertNil(label(.profile, "4"), "no usage saved")
-        XCTAssertNil(label(.profile, "missing"))
-        XCTAssertNil(label(.profile, nil))
-        XCTAssertNil(label(.icon))
-        XCTAssertNil(MenuBarSummary.labelText(mode: .tightest, chosenProfileID: nil, profiles: profiles, usage: [:]))
-        XCTAssertEqual(MenuBarMode(rawValue: "tightest"), .tightest)
+        XCTAssertEqual(label(.codex), "5h 88%")
+        XCTAssertEqual(label(.claude), "5h 9%")
+        XCTAssertEqual(label(.claude, "1"), "5h 62%")
+        XCTAssertEqual(label(.claude, "3"), "5h 9%", "a selection from another provider is ignored")
+        XCTAssertEqual(label(.codex, "missing"), "5h 88%")
+        XCTAssertNil(label(.codex, "4"), "the chosen profile has no session data")
+        XCTAssertNil(MenuBarSummary.statusText(provider: .codex, chosenProfileID: "", profiles: profiles, usage: [:]))
+
+        let (fewer, usage2) = try await sample(disabling: "2")
+        XCTAssertEqual(MenuBarSummary.statusText(provider: .claude, chosenProfileID: "2",
+                                                 profiles: fewer, usage: usage2), "5h 62%")
+        XCTAssertEqual(MenuBarMode(rawValue: "icon"), .icon)
     }
 
     func testSymbolFollowsLevel() {
@@ -58,6 +61,15 @@ final class MenuBarSummaryTests: XCTestCase {
         let (profiles, usage) = try await sample()
         XCTAssertEqual(MenuBarSummary.orderedProfiles(profiles, usage: usage).map(\.id), ["2", "1", "3", "4"])
         XCTAssertEqual(MenuBarSummary.orderedProfiles(profiles, usage: [:]).map(\.name), ["personal", "research", "studio", "work"])
+    }
+
+    func testTabsOnlyIncludeEnabledProvidersAndFilterInConstraintOrder() async throws {
+        let (profiles, usage) = try await sample()
+        XCTAssertEqual(MenuBarSummary.tabs(profiles: profiles), [.overview, .codex, .claude])
+        XCTAssertEqual(MenuBarSummary.tabs(profiles: profiles.filter { $0.provider == .codex }), [.overview, .codex])
+        XCTAssertEqual(MenuBarSummary.tabs(profiles: profiles.filter { !MenuBarSummary.isEnabled($0) }), [.overview])
+        XCTAssertEqual(MenuBarSummary.orderedProfiles(profiles, usage: usage, provider: .claude).map(\.id), ["2", "1"])
+        XCTAssertEqual(MenuBarSummary.orderedProfiles(profiles, usage: usage, provider: .codex).map(\.id), ["3", "4"])
     }
 
     func testResetAvailabilityWording() async throws {
@@ -83,14 +95,38 @@ final class MenuBarSummaryTests: XCTestCase {
         XCTAssertNil(UsagePace.expectedLeftPercent(resetsAt: nil, length: five.length, now: now))
         XCTAssertEqual(UsagePace.expectedLeftPercent(resetsAt: now.addingTimeInterval(-60), length: five.length, now: now), 0)
         XCTAssertEqual(UsagePace.expectedLeftPercent(resetsAt: now.addingTimeInterval(9 * 3600), length: five.length, now: now), 100)
+    }
 
-        XCTAssertTrue(UsagePace.isAhead(UsageWindow(usedPercent: 60, resetsAt: half), kind: five, now: now))
-        XCTAssertFalse(UsagePace.isAhead(UsageWindow(usedPercent: 54, resetsAt: half), kind: five, now: now), "within margin")
-        XCTAssertFalse(UsagePace.isAhead(UsageWindow(usedPercent: 30, resetsAt: half), kind: five, now: now))
-        XCTAssertFalse(UsagePace.isAhead(UsageWindow(usedPercent: 99, resetsAt: nil), kind: five, now: now), "unknown reset")
-        // Weekly: 3.5 of 7 days elapsed, 62% used.
-        let midWeek = now.addingTimeInterval(3.5 * 86_400)
-        XCTAssertTrue(UsagePace.isAhead(UsageWindow(usedPercent: 62, resetsAt: midWeek), kind: .weekly, now: now))
+    func testPaceWordingAndThresholds() {
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let half = now.addingTimeInterval(2.5 * 3600)
+        func pace(_ used: Double, resetsAt: Date?) -> String? {
+            UsagePace.text(UsageWindow(usedPercent: used, resetsAt: resetsAt), kind: .fiveHour, now: now)
+        }
+        XCTAssertEqual(pace(30, resetsAt: half), "20% in reserve · Lasts until reset")
+        XCTAssertEqual(pace(60, resetsAt: half), "10% in deficit · Runs out in 1h 40m")
+        XCTAssertEqual(pace(45, resetsAt: half), "On pace · Lasts until reset")
+        XCTAssertEqual(pace(55, resetsAt: half), "On pace · Runs out in 2h 3m")
+        XCTAssertEqual(pace(50, resetsAt: half), "On pace · Lasts until reset")
+        XCTAssertEqual(pace(0, resetsAt: half), "50% in reserve · Lasts until reset")
+        XCTAssertEqual(pace(100, resetsAt: half), "50% in deficit · Runs out in 0m")
+        XCTAssertNil(pace(99, resetsAt: nil))
+        XCTAssertNil(pace(99, resetsAt: now))
+        XCTAssertNil(pace(1, resetsAt: now.addingTimeInterval(18_000)))
+        XCTAssertNil(pace(1, resetsAt: now.addingTimeInterval(19_000)))
+    }
+
+    func testFixtureShowsEachPaceState() async throws {
+        let (_, usage) = try await sample()
+        let now = Date()
+        let rows = usage.values.flatMap { report in
+            UsageWindowKind.allCases.compactMap { kind in
+                kind.window(in: report).flatMap { UsagePace.text($0, kind: kind, now: now) }
+            }
+        }
+        XCTAssertTrue(rows.contains { $0.contains("in reserve · Lasts until reset") })
+        XCTAssertTrue(rows.contains { $0.contains("in deficit · Runs out in") })
+        XCTAssertTrue(rows.contains { $0.hasPrefix("On pace ·") })
     }
 
     func testResetCountdownAndSpans() {
@@ -113,10 +149,10 @@ final class MenuBarSummaryTests: XCTestCase {
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
         let low = UsageWindow(usedPercent: 91, resetsAt: now.addingTimeInterval(41 * 60))
         XCTAssertEqual(MenuBarSummary.spokenRow(kind: .fiveHour, window: low, now: now),
-                       "5-hour window, 9 percent left, resets in 41 minutes, almost out")
+                       "5-hour window, 9 percent left, resets in 41 minutes, almost out, On pace, Runs out in 26 minutes")
         let ahead = UsageWindow(usedPercent: 62, resetsAt: now.addingTimeInterval(3.5 * 86_400))
         XCTAssertEqual(MenuBarSummary.spokenRow(kind: .weekly, window: ahead, now: now),
-                       "Weekly window, 38 percent left, resets in 3 days 12 hours, faster than even pace")
+                       "Weekly window, 38 percent left, resets in 3 days 12 hours, 12 percent in deficit, Runs out in 2 days 3 hours")
         let unknown = UsageWindow(usedPercent: 38, resetsAt: nil)
         XCTAssertEqual(MenuBarSummary.spokenRow(kind: .fiveHour, window: unknown, now: now),
                        "5-hour window, 62 percent left, reset time unknown")

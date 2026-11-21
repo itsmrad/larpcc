@@ -8,7 +8,9 @@ import LarpModel
 enum MenuBarPreferences {
     static let shownKey = "menuBarShown"
     static let modeKey = "menuBarMode"
-    static let profileKey = "menuBarProfileID"
+    static let codexProfileKey = "menuBarCodexProfileID"
+    static let claudeProfileKey = "menuBarClaudeProfileID"
+    static let tabKey = "menuBarTab"
     static let hideDockKey = "menuBarHideDock"
 
     static var shown: Bool { UserDefaults.standard.object(forKey: shownKey) as? Bool ?? true }
@@ -48,15 +50,16 @@ extension AppStore {
         guard observers.isEmpty else { return }
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
-            guard isSettingsWindow(note.object) else { return }
-            Task { @MainActor in
+            MainActor.assumeIsolated {
+                guard isSettingsWindow(note.object) else { return }
                 if MenuBarPreferences.hidesDock { NSApp.setActivationPolicy(.accessory) }
             }
         })
         // However the window comes back (panel, relaunch), it brings the Dock icon with it.
         observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
-            guard isSettingsWindow(note.object) else { return }
-            Task { @MainActor in showDockIcon() }
+            MainActor.assumeIsolated {
+                if isSettingsWindow(note.object) { showDockIcon() }
+            }
         })
     }
 
@@ -73,13 +76,14 @@ extension AppStore {
         if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
     }
 
-    nonisolated private static func isSettingsWindow(_ object: Any?) -> Bool {
+    static func isSettingsWindow(_ object: Any?) -> Bool {
         (object as? NSWindow)?.identifier?.rawValue.hasPrefix("settings") ?? false
     }
 }
 
 /// SwiftUI quits an app whose only window closes. While the menu bar item is shown,
 /// closing the window keeps LarpCC running so the panel (and "Hide Dock icon") still work.
+@MainActor
 final class MenuBarAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         !MenuBarPreferences.shown
@@ -92,7 +96,8 @@ struct MenuBarSettingsSection: View {
     @ObservedObject var store: AppStore
     @AppStorage(MenuBarPreferences.shownKey) private var shown = true
     @AppStorage(MenuBarPreferences.modeKey) private var mode = MenuBarMode.tightest.rawValue
-    @AppStorage(MenuBarPreferences.profileKey) private var profileID = ""
+    @AppStorage(MenuBarPreferences.codexProfileKey) private var codexProfileID = ""
+    @AppStorage(MenuBarPreferences.claudeProfileKey) private var claudeProfileID = ""
     @AppStorage(MenuBarPreferences.hideDockKey) private var hideDock = false
 
     var body: some View {
@@ -102,20 +107,16 @@ struct MenuBarSettingsSection: View {
                 Text("Show in menu bar")
                 Text("Usage limits, resets and quick actions, one click away.")
             }
-            Picker("Menu bar shows", selection: $mode) {
-                ForEach(MenuBarMode.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+            Picker("Menu bar shows", selection: Binding(
+                get: { MenuBarMode(rawValue: mode) ?? .tightest },
+                set: { mode = $0.rawValue }
+            )) {
+                ForEach(MenuBarMode.allCases, id: \.self) { Text($0.title).tag($0) }
             }
             .disabled(!shown)
-            if mode == MenuBarMode.profile.rawValue {
-                Picker("Profile", selection: $profileID) {
-                    if !profiles.contains(where: { $0.id == profileID }) {
-                        Text("Choose a profile").tag(profileID)
-                    }
-                    ForEach(profiles) { profile in
-                        Text(profile.name).tag(profile.id)
-                    }
-                }
-                .disabled(!shown)
+            if mode != MenuBarMode.icon.rawValue {
+                profilePicker(.codex, choice: $codexProfileID, profiles: profiles)
+                profilePicker(.claude, choice: $claudeProfileID, profiles: profiles)
             }
             Toggle(isOn: $hideDock) {
                 Text("Hide Dock icon when the window is closed")
@@ -124,6 +125,21 @@ struct MenuBarSettingsSection: View {
             .disabled(!shown)
         }
         .onAppear { MenuBarDockPolicy.install() }
+    }
+
+    private func profilePicker(_ provider: Provider, choice: Binding<String>, profiles: [Profile]) -> some View {
+        let options = MenuBarSummary.orderedProfiles(profiles, usage: [:], provider: provider)
+        let selection = Binding(
+            get: { options.contains { $0.id == choice.wrappedValue } ? choice.wrappedValue : "" },
+            set: { choice.wrappedValue = $0 }
+        )
+        return Picker(provider.title, selection: selection) {
+            Text("Most constrained").tag("")
+            ForEach(options) { profile in
+                Text(profile.name).tag(profile.id)
+            }
+        }
+        .disabled(!shown || options.isEmpty)
     }
 }
 
@@ -134,15 +150,23 @@ struct MenuBarSettingsSection: View {
 /// Debug builds only; sample data only. It never runs larp or reads usage from anywhere else.
 enum MenuBarSnapshot {
     private static let prefix = "--menubar-panel-snapshot="
+    private static let tabPrefix = "--menubar-panel-tab="
 
     static func runIfRequested() {
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) }) else { return }
         let path = String(arg.dropFirst(prefix.count))
         guard path.hasPrefix("/"), path.lowercased().hasSuffix(".png") else { exit(2) }
-        Task { @MainActor in exit(await render(to: path) ? 0 : 1) }
+        let tab: MenuBarTab
+        if let arg = CommandLine.arguments.first(where: { $0.hasPrefix(tabPrefix) }) {
+            guard let value = MenuBarTab(rawValue: String(arg.dropFirst(tabPrefix.count))) else { exit(2) }
+            tab = value
+        } else {
+            tab = .overview
+        }
+        Task { @MainActor in exit(await render(to: path, tab: tab) ? 0 : 1) }
     }
 
-    @MainActor private static func render(to path: String) async -> Bool {
+    @MainActor private static func render(to path: String, tab: MenuBarTab) async -> Bool {
         let store = AppStore(client: FixtureLarpClient())
         guard store.isFixture else { return false }
         // Local usage follows the metadata refresh; Live (sample) usage is read once here.
@@ -157,7 +181,7 @@ enum MenuBarSnapshot {
         case .light?: dark = false
         default: dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         }
-        let renderer = ImageRenderer(content: MenuBarPanel(store: store, isSnapshot: true)
+        let renderer = ImageRenderer(content: MenuBarPanel(store: store, snapshotTab: tab)
             .environment(\.colorScheme, dark ? .dark : .light))
         renderer.scale = 2
         var png: Data?
