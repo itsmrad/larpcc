@@ -235,12 +235,16 @@ fn stage05_transaction_non_unicode_root_refuses_before_alias_artifacts() {
     use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
     let mut f = Fixture::new();
     f.root = f.temp.path().join(OsStr::from_bytes(b"managed-\xff"));
+    // APFS rejects invalid UTF-8 filenames, so only Linux seeds this registry.
+    #[cfg(target_os = "linux")]
     f.profile(&["add", "claude-work", "--provider", "codex"], 0);
     let value = f.larp_json(
         &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
         1,
     );
     assert_eq!(code(&value), "unsafe_path");
+    #[cfg(target_os = "macos")]
+    assert!(!f.root.exists());
     assert!(!f.root.join("bin").exists());
     assert!(!f.root.join("share-journal.json").exists());
 }
