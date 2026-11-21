@@ -118,27 +118,24 @@ fn spelling(path: &Path) -> Result<(), Error> {
 pub(super) fn validate(path: &Path) -> Result<CheckedApp, Error> {
     spelling(path)?;
     let exe = path.join("Contents/MacOS/ChatGPT");
-    let ancestry = platform::anchor(&exe)?;
-    let (_, identity) =
-        platform::executable(&exe, Path::new("/Applications/ChatGPT.app/never-managed"))?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(&exe)
-        .map_err(|_| Error::ArtifactInvalid)?;
-    let metadata = file.metadata().map_err(|_| Error::ArtifactInvalid)?;
-    if identity
-        != (platform::FileIdentity::Unix {
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-        })
-    {
-        return Err(Error::AdmissionChanged);
+    let ancestry = app_anchor(&exe)?;
+    let executable = app_file(&exe)?;
+    let info = app_file(&path.join("Contents/Info.plist"))?;
+    let executable_stamp = AppFileStamp::of(&executable)?;
+    let info_stamp = AppFileStamp::of(&info)?;
+    // Exactly one full static validation for this bind/open admission.
+    verify_signature(path)?;
+    if !bundle_value_matches(path, b"CFBundleIdentifier", b"com.openai.codex") {
+        return Err(Error::ArtifactInvalid);
     }
     let app = CheckedApp {
         path: path.into(),
         ancestry,
-        executable: CheckedObject { file, identity },
+        executable,
+        info,
+        executable_stamp,
+        info_stamp,
+        bundle_id: "com.openai.codex",
     };
     app.recheck()?;
     Ok(app)
@@ -155,6 +152,9 @@ unsafe extern "C" {
     fn CFStringGetCString(value: Ref, buffer: *mut i8, size: isize, encoding: u32) -> u8;
 }
 fn tested_version(path: &Path) -> bool {
+    bundle_value_matches(path, b"CFBundleShortVersionString", b"26.1111.21308")
+}
+fn bundle_value_matches(path: &Path, key: &[u8], expected: &[u8]) -> bool {
     let bytes = path.as_os_str().as_bytes();
     // SAFETY: exact valid slice lengths, Create outputs uniquely owned; borrowed
     // Info.plist value stays within bundle lifetime. No native user state is read.
@@ -170,7 +170,6 @@ fn tested_version(path: &Path) -> bool {
         let Ok(bundle) = Owned::new(CFBundleCreate(std::ptr::null(), url.0)) else {
             return false;
         };
-        let key = b"CFBundleShortVersionString";
         let Ok(key) = Owned::new(CFStringCreateWithBytes(
             std::ptr::null(),
             key.as_ptr(),
@@ -194,6 +193,6 @@ fn tested_version(path: &Path) -> bool {
         {
             return false;
         }
-        std::ffi::CStr::from_ptr(buffer.as_ptr()).to_bytes() == b"26.1111.21308"
+        std::ffi::CStr::from_ptr(buffer.as_ptr()).to_bytes() == expected
     }
 }
