@@ -58,32 +58,66 @@ decoding; the workflow checks its bytes against the merged source contract.
 
 ## Menu bar
 
-LarpCC also adds a menu bar item (General › Menu Bar › Show in menu bar, on by
-default). Its template glyph shows the tightest "% left" across enabled profiles
-and both windows, one chosen profile's tightest window, or the glyph alone; with no
-usage data it is always the glyph alone. The needle drops below 25% and 10% left.
+The item is on by default under General › Menu Bar. It shows the session
+percentage left for Codex and Claude as up to two stacked template lines. Each
+provider defaults to the most constrained enabled profile with session data.
+Pick a profile per provider in Settings, or choose “Icon only”. The item uses a
+gauge when neither provider has a session percentage to show.
 
-The panel lists one card per enabled profile, tightest first: 5-hour and weekly
-bars of percent left with an even-pace tick ("Faster than even pace" when usage runs
-faster), "Resets in 2h 13m" countdowns, limit-reset availability (always shown,
-also on each profile page as "Limit resets"), when it was updated, and an Open
-desktop app button (enabled surfaces, never with sample data). Open in Terminal
-stays disabled until larp has a command for it. Orange (below 25%) and red
-(below 10%) always come with "Low" / "Almost out" text. ↑/↓ move between cards,
-Return opens Settings, Esc closes; ⌘R refreshes, ⌘, opens Settings, ⌘Q quits.
+The native menu panel opens to the last selected tab. Overview lists enabled
+profiles by the tightest limit. Codex and Claude filter that list and appear
+when they have enabled profiles. Each section shows session and weekly usage
+when available, with the percentage left, reset countdown, an even-pace tick
+and a projection based on average usage so far. Limit reset credits always
+appear and use the same wording as the profile page. The desktop action in the
+footer follows the highlighted profile and requires an enabled desktop surface
+and a real CLI configuration.
 
-Refresh rules follow the usage source. **Local**: opening the panel re-reads the
-data already saved on this Mac (no timer). **Live**: nothing is read on open;
-only the panel's Refresh or the opt-in interval reads live usage. "Hide Dock icon
-when the window is closed" switches to a menu-bar-only app after the window closes
-and restores the Dock icon when the window opens again; it needs the menu bar item.
+Use ↑/↓ to move between sections and footer actions. Use ←/→ or Tab to switch
+tabs. Return opens Settings for a profile section or activates a footer row.
+Esc closes the panel. ⌘R refreshes, ⌘, opens Settings, and ⌘Q quits.
 
-Screenshots: in debug builds only (`swift run LarpCC --menubar-panel-snapshot=/abs/path.png
---appearance=dark`), the snapshot option renders the panel with sample data at 2x,
-honouring `--appearance=light|dark`, and exits. Release builds have no such hook;
-capture the live panel there with `screencapture -x -l <windowID>`.
-`--page=general` shows the Menu Bar settings, and `--page=profile-1` (2 resets),
-`profile-2` (no reset info) or `profile-3` (no resets) show the usage section.
+In **Local** mode, opening the panel re-reads saved usage. In **Live** mode,
+only Refresh or the existing opt-in interval reads usage. The panel uses
+`TimelineView(.everyMinute)` to redraw countdowns, update ages and pace
+indicators from loaded data. “Hide Dock icon when the window is closed”
+switches to a menu-bar-only app while Settings is closed and needs the menu
+bar item to be shown.
+
+In debug builds, render a sample panel at 2x and exit:
+
+```sh
+swift run LarpCC --menubar-panel-snapshot=/abs/path.png --menubar-panel-tab=overview --appearance=dark
+```
+
+The snapshot accepts `overview`, `codex` or `claude` and `light` or `dark`.
+Release builds exclude the snapshot hook. Capture the live panel there with
+`screencapture -x -l <windowID>`.
+
+### Native Mac checklist
+
+- **A. Status item** Confirm Codex above Claude in sample mode, then verify the
+  per-provider pickers, one-provider layout and Icon only. Check the item against
+  both light and dark menu bars.
+- **B. Panel** Check all four sample profiles in Overview and the filtered
+  provider tabs. Confirm reserve, deficit, on-pace, all three reset-credit
+  states, and the profile with no saved usage. Check the full-width hover
+  highlight, disabled sample desktop action, and overflow on a small screen.
+- **C. Refresh** Reopen in Local mode and check the update age. Use ⌘R to
+  re-read usage.
+- **D. Keyboard and VoiceOver** Move through sections and footer rows, switch
+  tabs, activate with Return, and dismiss with Esc. Check one spoken summary
+  per profile and the selected state on tabs.
+- **E. Settings** Close Settings, confirm the item stays, then reopen Settings
+  with the footer action or ⌘,.
+- **F. Dock** Enable Dock hiding in Settings and verify the icon disappears on
+  close and returns on reopen. Restore the original setting afterwards.
+- **G. Visibility** Turn off “Show in menu bar” and verify the Dock icon remains.
+  Restore the original setting afterwards.
+- **H. Profile usage** Confirm the reset wording on the profile pages and
+  smoke-test opening and cancelling the New Profile sheet with ⌘N.
+- **I. Appearance** Capture Overview, a provider tab and the status item in both
+  light and dark. Check text and bar contrast, including on the highlight.
 
 From this directory:
 
