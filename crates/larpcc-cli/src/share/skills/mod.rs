@@ -82,6 +82,15 @@ fn single_link(file: &File) -> Result<()> {
 
 // Portable spelling prevents ADS/device paths and case-insensitive collisions.
 fn component(name: &str) -> Result<()> {
+    let lower = name.to_ascii_lowercase();
+    // No dot entries or credential-shaped names, including supporting directories.
+    if name.starts_with('.')
+        || lower == "auth.json"
+        || lower.ends_with(".pem")
+        || lower.starts_with("id_")
+    {
+        return Err(Error::Unsafe);
+    }
     if name.is_empty()
         || name.len() > 255
         || name == "."
@@ -115,16 +124,23 @@ pub(crate) fn source_directory(path: &Path) -> Result<(CheckedObject, platform::
 
 impl Package {
     pub fn read(source: &Path) -> Result<Self> {
-        Self::read_with(source, false)
+        Self::read_with(source, false, None)
     }
-    pub fn source(source: &Path) -> Result<Self> {
-        Self::read_with(source, true)
+    pub fn source(source: &Path, expected: &FileIdentity) -> Result<Self> {
+        Self::read_with(source, true, Some(expected))
     }
-    fn read_with(source: &Path, trusted_source: bool) -> Result<Self> {
+    fn read_with(
+        source: &Path,
+        trusted_source: bool,
+        expected: Option<&FileIdentity>,
+    ) -> Result<Self> {
         let _ancestors = ancestry(source)?;
         let source: PathBuf = source.components().collect();
         let _root = platform::read_skill_object(&source, ObjectKind::Directory, trusted_source)
             .map_err(|_| Error::Unsafe)?;
+        if expected.is_some_and(|identity| identity != &_root.identity) {
+            return Err(Error::Unsafe);
+        }
         let entry =
             platform::read_skill_object(&source.join("SKILL.md"), ObjectKind::File, trusted_source)
                 .map_err(|_| Error::Unsafe)?;

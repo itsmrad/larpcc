@@ -755,6 +755,53 @@ use super::fixture_private;
 pub(crate) fn single_link(file: &File) -> Result<(), Error> {
     single_link_info(file, Path::new("skills")).map(|_| ())
 }
+// Exclusion metadata only: no ACL policy, content reads, or reparse traversal.
+pub(crate) fn skill_directory_identity(path: &Path) -> Result<CheckedObject, Error> {
+    drive_root(path)?;
+    let file = open(
+        path,
+        FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    .ok_or_else(|| unsafe_path(path, "is missing"))?;
+    // SAFETY: initialized, plain output structures with the exact query sizes.
+    let (mut tag, mut id): (FILE_ATTRIBUTE_TAG_INFO, FILE_ID_INFO) =
+        unsafe { (zeroed(), zeroed()) };
+    // SAFETY: live metadata handle and exact writable output buffers.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileAttributeTagInfo,
+            (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+            size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    } == 0
+        || unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileIdInfo,
+                (&mut id as *mut FILE_ID_INFO).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        } == 0
+    {
+        return Err(io_path(path, "inspect directory identity"));
+    }
+    if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || tag.ReparseTag != 0
+    {
+        return Err(unsafe_path(path, "is not a plain directory"));
+    }
+    Ok(CheckedObject {
+        file,
+        identity: FileIdentity::Windows {
+            volume: id.VolumeSerialNumber,
+            id: id.FileId.Identifier,
+        },
+    })
+}
+
 /// Reuse the executable trusted-read ACL policy without executable qualification.
 pub(crate) fn read_skill_object(
     path: &Path,

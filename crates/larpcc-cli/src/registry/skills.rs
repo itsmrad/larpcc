@@ -172,7 +172,40 @@ impl SkillsAction {
     }
 }
 // Compare excluded directory identities before opening any package file.
-fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
+#[derive(Clone, Default)]
+struct VendorHomes {
+    configured: Vec<PathBuf>,
+    default_home: Option<PathBuf>,
+}
+impl VendorHomes {
+    #[cfg(not(test))]
+    fn from_environment() -> Self {
+        #[cfg(unix)]
+        let default_home = std::env::var_os("HOME").map(PathBuf::from);
+        #[cfg(windows)]
+        let default_home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from);
+        Self {
+            configured: ["CLAUDE_CONFIG_DIR", "CODEX_HOME"]
+                .into_iter()
+                .filter_map(std::env::var_os)
+                .map(PathBuf::from)
+                .collect(),
+            default_home,
+        }
+    }
+    #[cfg(test)]
+    fn from_environment() -> Self {
+        panic!("skills unit tests must inject private vendor homes");
+    }
+}
+fn source_package(
+    root: &Path,
+    source: &Path,
+    vendor: &VendorHomes,
+    profiles: &[super::Profile],
+) -> Result<Package, Error> {
     for component in source.components() {
         if let std::path::Component::Normal(name) = component {
             let name = name.to_string_lossy().to_ascii_lowercase();
@@ -186,20 +219,22 @@ fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
     }
     let (object, held) = skills::source_directory(source)?;
     let mut homes = vec![root.to_path_buf()];
-    for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
-        if let Some(value) = std::env::var_os(key) {
-            if value.is_empty() {
-                return Err(Error::ForbiddenSource);
-            }
-            homes.push(value.into());
-        }
+    for profile in profiles {
+        let container = root.join("profiles").join(profile.id.to_string());
+        homes.extend([
+            container.clone(),
+            container.join("cli"),
+            container.join("desktop"),
+        ]);
     }
-    #[cfg(unix)]
-    let home = std::env::var_os("HOME");
-    #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
-    if let Some(home) = home {
-        let entries = match fs::read_dir(PathBuf::from(home)) {
+    for home in &vendor.configured {
+        if home.as_os_str().is_empty() {
+            return Err(Error::ForbiddenSource);
+        }
+        homes.push(home.clone());
+    }
+    if let Some(home) = &vendor.default_home {
+        let entries = match fs::read_dir(home) {
             Ok(entries) => Some(entries),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(_) => return Err(Error::ForbiddenSource),
@@ -208,9 +243,9 @@ fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
             let entry = entry.map_err(|_| Error::ForbiddenSource)?;
             let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
             if name.starts_with(".claude") || name.starts_with(".codex") || name == ".agents" {
-                // Regular config files are not directory namespaces; never open them.
-                let kind = entry.file_type().map_err(|_| Error::ForbiddenSource)?;
-                if kind.is_dir() || kind.is_symlink() {
+                // Default namespaces constrain directories only. Resolve aliases
+                // using metadata; file/dangling aliases never open file contents.
+                if fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()) {
                     homes.push(entry.path());
                 }
             }
@@ -224,6 +259,10 @@ fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
             continue;
         };
         if object.identity == directory.identity
+            || ancestors
+                .ancestors
+                .iter()
+                .any(|p| p.identity == object.identity)
             || held
                 .ancestors
                 .iter()
@@ -233,7 +272,7 @@ fn source_package(root: &Path, source: &Path) -> Result<Package, Error> {
         }
         exclusions.push((directory, ancestors));
     }
-    Package::source(source).map_err(Into::into)
+    Package::source(source, &object.identity).map_err(Into::into)
 }
 
 fn digest_valid(d: &str) -> bool {
@@ -801,6 +840,13 @@ fn fault(_phase: &str) -> Result<(), Error> {
 
 impl Registry {
     pub fn skills(&self, action: SkillsAction) -> Result<Value, Error> {
+        self.skills_with_homes(action, None)
+    }
+    fn skills_with_homes(
+        &self,
+        action: SkillsAction,
+        homes: Option<&VendorHomes>,
+    ) -> Result<Value, Error> {
         let _ancestors = platform::anchor(self.root())?;
         let read_only = matches!(action, SkillsAction::List | SkillsAction::Matrix);
         if read_only
@@ -883,7 +929,8 @@ impl Registry {
                         .map_err(|e| paths::io("resolve source", Path::new("skills"), e))?
                         .join(source)
                 };
-                let snapshot = source_package(self.root(), &source)?;
+                let homes = homes.cloned().unwrap_or_else(VendorHomes::from_environment);
+                let snapshot = source_package(self.root(), &source, &homes, &data.profiles)?;
                 target_name = Some(name.clone());
                 index.skills.push(Skill {
                     name: name.clone(),
@@ -1082,11 +1129,26 @@ mod tests {
         let r = Registry::at(temp.path().join("root")).unwrap();
         (temp, r, source)
     }
+    fn private_skills(r: &Registry, action: SkillsAction) -> Result<Value, Error> {
+        let homes = VendorHomes {
+            configured: vec![],
+            default_home: Some(r.root().parent().unwrap().join("fake-home")),
+        };
+        r.skills_with_homes(action, Some(&homes))
+    }
+    #[test]
+    #[should_panic(expected = "skills unit tests must inject private vendor homes")]
+    fn stage06_unit_tests_forbid_ambient_vendor_home_access() {
+        VendorHomes::from_environment();
+    }
     fn add(r: &Registry, source: &Path) -> Value {
-        r.skills(SkillsAction::Add {
-            source: source.into(),
-            name: name("example"),
-        })
+        private_skills(
+            r,
+            SkillsAction::Add {
+                source: source.into(),
+                name: name("example"),
+            },
+        )
         .unwrap()
     }
     fn switch(r: &Registry, enabled: bool) -> Result<Value, Error> {
@@ -1195,10 +1257,13 @@ mod tests {
             r.add(name("claude-work"), Provider::Claude).unwrap();
             set_fault(Some(phase));
             assert!(
-                r.skills(SkillsAction::Add {
-                    source,
-                    name: name("example")
-                })
+                private_skills(
+                    &r,
+                    SkillsAction::Add {
+                        source,
+                        name: name("example")
+                    }
+                )
                 .is_err()
             );
             set_fault(None);
@@ -1226,10 +1291,13 @@ mod tests {
             let (_temp, r, source) = fixture();
             skills::set_io_fault(Some(phase));
             assert!(
-                r.skills(SkillsAction::Add {
-                    source,
-                    name: name("example")
-                })
+                private_skills(
+                    &r,
+                    SkillsAction::Add {
+                        source,
+                        name: name("example")
+                    }
+                )
                 .is_err()
             );
             skills::set_io_fault(None);
@@ -1344,10 +1412,13 @@ mod tests {
         platform::create_directory(&dir.join("example")).unwrap();
         let before = fs::read(r.root().join("registry.json")).unwrap();
         assert!(matches!(
-            r.skills(SkillsAction::Add {
-                source: source.clone(),
-                name: name("example")
-            }),
+            private_skills(
+                &r,
+                SkillsAction::Add {
+                    source: source.clone(),
+                    name: name("example")
+                }
+            ),
             Err(Error::Drift)
         ));
         assert_eq!(fs::read(r.root().join("registry.json")).unwrap(), before);
@@ -1393,7 +1464,13 @@ mod tests {
         .unwrap();
         assert!(!copy.exists());
         fs::hard_link(source.join("SKILL.md"), source.join("hardlink")).unwrap();
-        assert!(Package::source(&source).is_err());
+        assert!(
+            Package::source(
+                &source,
+                &skills::source_directory(&source).unwrap().0.identity
+            )
+            .is_err()
+        );
     }
     fn remove_profile_artifact(path: &Path) {
         #[cfg(unix)]
@@ -1528,10 +1605,13 @@ mod tests {
         let guard =
             crate::launch::admission::acquire_auth_guard(r.root(), ProfileId::new(2)).unwrap();
         assert!(matches!(
-            r.skills(SkillsAction::Add {
-                source,
-                name: name("example")
-            }),
+            private_skills(
+                &r,
+                SkillsAction::Add {
+                    source,
+                    name: name("example")
+                }
+            ),
             Err(Error::AuthBusy)
         ));
         let first =
@@ -1547,7 +1627,11 @@ mod tests {
         let parent = source.parent().unwrap().join("copies");
         platform::create_directory(&parent).unwrap();
         let copy = parent.join("example");
-        let package = Package::source(&source).unwrap();
+        let package = Package::source(
+            &source,
+            &skills::source_directory(&source).unwrap().0.identity,
+        )
+        .unwrap();
         package.resume_copy(&copy).unwrap();
         let receipt = OwnedCopy::capture(&copy, &package.sha256).unwrap();
         receipt.resume_remove(&copy).unwrap();
@@ -1555,5 +1639,23 @@ mod tests {
         Artifact::Copy { receipt }.remove(&copy).unwrap();
         assert!(!copy.exists());
         assert!(!r.root().exists());
+    }
+    #[test]
+    fn stage06_source_reopened_identity_must_match_authorized_directory() {
+        let (temp, _r, source) = fixture();
+        let (checked, ancestors) = skills::source_directory(&source).unwrap();
+        let expected = checked.identity;
+        drop(checked.file);
+        drop(ancestors);
+        fs::rename(&source, temp.path().join("original-source")).unwrap();
+        platform::create_directory(&source).unwrap();
+        platform::create_file(&source.join("SKILL.md"))
+            .unwrap()
+            .file
+            .write_all(b"replacement")
+            .unwrap();
+        assert!(Package::source(&source, &expected).is_err());
+        let current = skills::source_directory(&source).unwrap().0.identity;
+        assert!(Package::source(&source, &current).is_ok());
     }
 }

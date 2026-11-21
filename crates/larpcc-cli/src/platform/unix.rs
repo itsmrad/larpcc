@@ -836,6 +836,21 @@ pub(crate) fn terminate_by_signal(signal: i32) -> Result<u32, Error> {
     })
 }
 
+// Exclusion metadata only; deliberately accepts unmanaged vendor directory modes.
+pub(crate) fn skill_directory_identity(path: &Path) -> Result<CheckedObject, Error> {
+    let file = open(path, ObjectKind::Directory, false)?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| io_error("inspect directory identity", path, e))?;
+    if !metadata.is_dir() {
+        return Err(unsafe_path(path, "is not a directory"));
+    }
+    Ok(CheckedObject {
+        file,
+        identity: identity(&metadata),
+    })
+}
+
 /// Read an explicitly selected package, permitting trusted 0755/0644 sources.
 pub(crate) fn read_skill_object(
     path: &Path,

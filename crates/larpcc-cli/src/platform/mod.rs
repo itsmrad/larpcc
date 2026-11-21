@@ -39,7 +39,8 @@ mod macos;
 pub(crate) mod fixture_private;
 
 /// Directory metadata only: resolve an excluded vendor-home alias, then retain
-/// its checked target/ancestors without enumerating or reading home contents.
+/// its target/ancestor identities without trust checks or reading home contents.
+/// These handles authorize exclusion only, never managed reads or writes.
 pub(crate) fn skill_home(path: &Path) -> Result<Option<(CheckedObject, AnchoredPath)>, Error> {
     let path = if path.is_absolute() {
         path.to_owned()
@@ -68,8 +69,14 @@ pub(crate) fn skill_home(path: &Path) -> Result<Option<(CheckedObject, AnchoredP
         path: path.clone(),
         source,
     })?;
-    let ancestors = anchor(&resolved)?;
-    let object = read_skill_object(&resolved, ObjectKind::Directory, true)?;
+    let object = skill_directory_identity(&resolved)?;
+    let ancestors = AnchoredPath {
+        ancestors: resolved
+            .ancestors()
+            .skip(1)
+            .map(skill_directory_identity)
+            .collect::<Result<_, _>>()?,
+    };
     Ok(Some((object, ancestors)))
 }
 

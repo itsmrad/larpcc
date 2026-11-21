@@ -685,3 +685,259 @@ fn stage06_source_unresolvable_home_fails_closed_missing_home_allows_source() {
     assert!(!f.root.join("shared/skills/leak").exists());
     assert_eq!(std::fs::read(&config).unwrap(), config_before);
 }
+
+fn assert_parent_source_forbidden(variable: Option<&str>, alias: bool) {
+    let f = common::Fixture::new();
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "claude-work",
+            "--provider",
+            "claude",
+            "--json",
+        ],
+        0,
+    );
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "codex-45",
+            "--provider",
+            "codex",
+            "--json",
+        ],
+        0,
+    );
+    let source = if variable.is_none() {
+        f.temp.path().join("home")
+    } else {
+        let p = f.temp.path().join("package");
+        common::create_directory(&p);
+        p
+    };
+    common::create_file(&source.join("SKILL.md"), b"synthetic package");
+    let vendor = source.join(if variable.is_none() { ".claude" } else { "cfg" });
+    common::create_directory(&vendor);
+    common::create_file(
+        &vendor.join(if variable == Some("CODEX_HOME") {
+            "auth.json"
+        } else {
+            ".credentials.json"
+        }),
+        b"synthetic-private-data",
+    );
+    let home = if alias {
+        let link = f.temp.path().join("home-alias");
+        home_alias(&vendor, &link);
+        link
+    } else {
+        vendor
+    };
+    let before = std::fs::read(f.root.join("registry.json")).unwrap();
+    let mut cmd = f.command(&[
+        "cc",
+        "skills",
+        "add",
+        source.to_str().unwrap(),
+        "--name",
+        "leak",
+        "--json",
+    ]);
+    if let Some(variable) = variable {
+        cmd.env(variable, home);
+    }
+    let out = common::capture(cmd).unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stderr.is_empty());
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "forbidden_source");
+    assert_eq!(std::fs::read(f.root.join("registry.json")).unwrap(), before);
+    assert!(!f.root.join("shared").exists());
+    assert!(!f.root.join("share-journal.json").exists());
+    for id in [1, 2] {
+        assert_eq!(
+            std::fs::read_dir(f.root.join(format!("profiles/{id}/cli")))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    assert!(!common::stdout(&out).contains("synthetic-private-data"));
+}
+#[test]
+fn stage06_source_parent_containing_configured_or_default_vendor_home_refuses() {
+    for variable in ["CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+        for alias in [false, true] {
+            assert_parent_source_forbidden(Some(variable), alias);
+        }
+    }
+    assert_parent_source_forbidden(None, false);
+}
+#[test]
+fn stage06_source_parent_containing_managed_root_refuses() {
+    let f = common::Fixture::new();
+    request(
+        &f,
+        &[
+            "cc",
+            "profile",
+            "add",
+            "claude-work",
+            "--provider",
+            "claude",
+            "--json",
+        ],
+        0,
+    );
+    common::create_file(&f.temp.path().join("SKILL.md"), b"synthetic package");
+    let before = std::fs::read(f.root.join("registry.json")).unwrap();
+    let value = request(
+        &f,
+        &[
+            "cc",
+            "skills",
+            "add",
+            f.temp.path().to_str().unwrap(),
+            "--name",
+            "leak",
+            "--json",
+        ],
+        1,
+    );
+    assert_eq!(value["error"]["code"], "forbidden_source");
+    assert_eq!(std::fs::read(f.root.join("registry.json")).unwrap(), before);
+    assert!(!f.root.join("shared").exists());
+}
+#[test]
+fn stage06_store_credential_shaped_entries_refuse_without_copying() {
+    for denied in [
+        "auth.json",
+        "nested/.credentials.json",
+        "nested/key.pem",
+        "nested/KEY.PEM",
+        "nested/id_rsa",
+        "nested/.env",
+        "nested/.env.local",
+        "nested/.git/config",
+        "nested/.hidden",
+    ] {
+        let f = common::Fixture::new();
+        request(
+            &f,
+            &[
+                "cc",
+                "profile",
+                "add",
+                "claude-work",
+                "--provider",
+                "claude",
+                "--json",
+            ],
+            0,
+        );
+        let source = f.temp.path().join("package");
+        common::create_directory(&source);
+        common::create_file(&source.join("SKILL.md"), b"synthetic");
+        let file = source.join(denied);
+        let parent = file.parent().unwrap();
+        let mut current = source.clone();
+        for component in parent.strip_prefix(&source).unwrap().components() {
+            current.push(component);
+            common::create_directory(&current);
+        }
+        common::create_file(&file, b"synthetic-private-data");
+        let before = std::fs::read(f.root.join("registry.json")).unwrap();
+        let result = request(
+            &f,
+            &[
+                "cc",
+                "skills",
+                "add",
+                source.to_str().unwrap(),
+                "--name",
+                "leak",
+                "--json",
+            ],
+            1,
+        );
+        assert_eq!(result["error"]["code"], "unsafe_path");
+        assert_eq!(std::fs::read(f.root.join("registry.json")).unwrap(), before);
+        assert!(!f.root.join("shared").exists());
+        assert!(!f.root.join("share-journal.json").exists());
+        assert_eq!(
+            std::fs::read_dir(f.root.join("profiles/1/cli"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(!result.to_string().contains("synthetic-private-data"));
+    }
+}
+#[cfg(unix)]
+#[test]
+fn stage06_source_vendor_home_0775_does_not_block_unrelated_package() {
+    use std::os::unix::fs::PermissionsExt;
+    for configured in [false, true] {
+        let f = common::Fixture::new();
+        let source = f.temp.path().join("package");
+        common::create_directory(&source);
+        common::create_file(&source.join("SKILL.md"), b"synthetic");
+        let vendor = f.temp.path().join("home/.codex");
+        common::create_directory(&vendor);
+        std::fs::set_permissions(&vendor, std::fs::Permissions::from_mode(0o775)).unwrap();
+        let mut cmd = f.command(&[
+            "cc",
+            "skills",
+            "add",
+            source.to_str().unwrap(),
+            "--name",
+            "example",
+            "--json",
+        ]);
+        if configured {
+            cmd.env("CODEX_HOME", &vendor);
+        }
+        let out = common::capture(cmd).unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", common::stdout(&out));
+        assert!(out.stderr.is_empty());
+    }
+}
+#[test]
+fn stage06_source_default_claude_config_file_alias_is_not_a_home() {
+    for dangling in [false, true] {
+        let f = common::Fixture::new();
+        let source = f.temp.path().join("package");
+        common::create_directory(&source);
+        common::create_file(&source.join("SKILL.md"), b"synthetic");
+        let target = f.temp.path().join("settings.json");
+        if !dangling {
+            common::create_file(&target, b"synthetic config");
+        }
+        let alias = f.temp.path().join("home/.claude.json");
+        std::fs::remove_file(&alias).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&target, &alias)
+            .expect("native file alias fixture required");
+        request(
+            &f,
+            &[
+                "cc",
+                "skills",
+                "add",
+                source.to_str().unwrap(),
+                "--name",
+                "example",
+                "--json",
+            ],
+            0,
+        );
+    }
+}

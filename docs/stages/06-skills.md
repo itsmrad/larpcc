@@ -19,7 +19,20 @@ Add copies an explicit package once (not a live external link), after no-follow
 validation; reject special files, symlinks/reparse, traversal, hardlinked files,
 unsafe ancestry, collisions; limits 1,000 files/16 MiB/16 levels per package.
 Sources inside the managed root or known vendor homes refuse `forbidden_source`
-before any package contents are read. No scripts execute. SHA-256 digest is over sorted relative paths+file lengths+
+before any package contents are read. This comparison is bidirectional: a source
+cannot equal, contain or be inside a known vendor home, managed root or profile
+directory. Directory identities alone identify excluded vendor homes; permissive
+vendor modes do not authorize reads or block unrelated packages. Only directory
+targets found by the default namespace scan are homes; config-file aliases are
+ignored. Configured but unidentifiable homes still fail closed.
+
+Each source is one explicit package with a root `SKILL.md` and portable supporting
+regular files. All dot entries are refused (including `.credentials.json`, `.env*`
+and `.git/**`), as are case-insensitive `auth.json`, `*.pem` and `id_*` names at any
+depth. A denied name refuses the entire add with `unsafe_path` before its bytes
+are read; nothing is copied. No dot entries are needed or accepted by this
+restricted package format. Reopened source identity must match the directory
+already authorized. No scripts execute. SHA-256 digest is over sorted relative paths+file lengths+
 bytes, unambiguous length-prefixed encoding; store immutable, no overwrite.
 Remove refuses enabled references until disabled. Names use profile grammar.
 New skills default enabled for all active CLI profiles; new profiles inherit all
