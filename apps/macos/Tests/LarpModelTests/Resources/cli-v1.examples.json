@@ -693,16 +693,27 @@
     "schema": 1,
     "command": "host.list",
     "ok": true,
-    "revision": "1",
+    "revision": "2",
     "data": {
       "hosts": [
         {
           "name": "dev-vm",
           "ssh": {
+            "mode": "direct",
             "destination": "dev@sandbox.example:2222",
             "resolved": "dev@sandbox.example:2222"
           },
           "larp": "/opt/Larp Tools/larp",
+          "larpcc_home": null,
+          "identity_file": "/example/keys/dev-vm"
+        },
+        {
+          "name": "work-vm",
+          "ssh": {
+            "mode": "config",
+            "alias": "work.vm"
+          },
+          "larp": null,
           "larpcc_home": null,
           "identity_file": null
         }
@@ -716,12 +727,12 @@
     "revision": "1",
     "data": {
       "host": {
-        "name": "dev-vm",
+        "name": "work-vm",
         "ssh": {
-          "destination": "dev@sandbox.example:2222",
-          "resolved": "dev@sandbox.example:2222"
+          "mode": "config",
+          "alias": "work.vm"
         },
-        "larp": "/opt/Larp Tools/larp",
+        "larp": null,
         "larpcc_home": null,
         "identity_file": null
       }
@@ -789,7 +800,8 @@
       "entries": [
         {
           "name": "review",
-          "all_machines": false
+          "all_machines": false,
+          "content_sha256": "41203e722b2f9fe251e700133cba7a77f72d1d3ad38c9c1a82789d8d65e3821d"
         }
       ]
     }
@@ -870,6 +882,48 @@
     "error": {
       "code": "forbidden_source",
       "message": "Skill sources inside managed or vendor homes are forbidden."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.copy",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "review",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.import",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "review",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.import",
+    "ok": false,
+    "error": {
+      "code": "corrupt",
+      "message": "The skill package frame is incomplete or invalid."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.export",
+    "ok": false,
+    "error": {
+      "code": "conflict",
+      "message": "The source catalog revision changed."
     }
   }
 ]

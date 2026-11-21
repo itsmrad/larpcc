@@ -84,7 +84,10 @@ SwiftUI shells out to stable JSON; no library extraction or Tauri.
 
 Stage 13 follows the local CLI and GUI contracts. [Remote hosts over SSH](docs/stages/13-remote-hosts.md)
 freezes user-installed remote Larp, machine-scoped metadata in the app, and
-explicit MCP/skills copy and sync. The menu bar may list profiles from data
+explicit MCP/skills copy and sync. D20 allows user-configured SSH aliases
+and strictly parsed direct addresses. D21 permits validated skill packages
+and MCP definitions with secret reference names to cross SSH. Larp never
+transfers its binary. D22 limits the remote OS to Linux and macOS. The menu bar may list profiles from data
 already loaded. Remote native run remains closed pending qualification.
 
 - Use LarpCC only with one person's own machines and accounts. Include this

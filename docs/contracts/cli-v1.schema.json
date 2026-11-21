@@ -555,20 +555,45 @@
           "$ref": "#/$defs/name"
         },
         "ssh": {
-          "type": "object",
-          "properties": {
-            "destination": {
-              "type": "string"
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "const": "direct"
+                },
+                "destination": {
+                  "type": "string"
+                },
+                "resolved": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "mode",
+                "destination",
+                "resolved"
+              ],
+              "additionalProperties": false
             },
-            "resolved": {
-              "type": "string"
+            {
+              "type": "object",
+              "properties": {
+                "mode": {
+                  "const": "config"
+                },
+                "alias": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$"
+                }
+              },
+              "required": [
+                "mode",
+                "alias"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "destination",
-            "resolved"
-          ],
-          "additionalProperties": false
+          ]
         },
         "larp": {
           "anyOf": [
@@ -2211,11 +2236,23 @@
                   },
                   "all_machines": {
                     "type": "boolean"
+                  },
+                  "content_sha256": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
                   "name",
-                  "all_machines"
+                  "all_machines",
+                  "content_sha256"
                 ],
                 "additionalProperties": false
               },
@@ -2303,6 +2340,64 @@
           "const": 1
         },
         "command": {
+          "const": "host.catalog.copy"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "$ref": "#/$defs/host_mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "host.catalog.import"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "$ref": "#/$defs/host_mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
           "enum": [
             "profile.list",
             "profile.show",
@@ -2350,7 +2445,10 @@
             "host.check",
             "host.catalog.list",
             "host.catalog.share",
-            "host.catalog.apply"
+            "host.catalog.apply",
+            "host.catalog.copy",
+            "host.catalog.import",
+            "host.catalog.export"
           ]
         },
         "ok": {

@@ -148,19 +148,32 @@ can reject the new syntax as `parse`.
 | `host.list` | `{hosts:[Host]}`, ASCII name order, unique names | Local host store |
 | `host.show` | `{host:Host}` | Local host store |
 | `host.check` | `{name,status}` for the explicitly checked host. Status is `ok`, `unreachable`, `larp_missing` or `incompatible`. A classified probe failure is a completed check with exit 0. | Local host store |
-| `host.catalog.list` | `{kind,entries:[{name,all_machines}]}`, ASCII name order, unique names | Selected machine's registry |
-| `host.catalog.share`, `host.catalog.apply` | Common mutation receipt, non-null entry `name` and null `profile_id` | Selected machine's non-null registry revision |
+| `host.catalog.list` | `{kind,entries:[{name,all_machines,content_sha256}]}`, ASCII name order, unique names. The digest is null when the entry cannot be exported. | Selected machine's registry |
+| `host.catalog.share`, `host.catalog.apply`, `host.catalog.copy`, `host.catalog.import` | Common mutation receipt, non-null entry `name` and null `profile_id` | Selected machine's non-null registry revision. For copy, this is the destination. |
 
-`Host` is `{name,ssh:{destination,resolved},larp,larpcc_home,identity_file}` with
-nullable paths. Pending confirmation, `destination` is a direct
-`USER@HOST[:PORT]` and `resolved` is the same destination with an explicit
-port. The local `identity_file` option is pending user decision. Paths and
-SSH destination fields are display data in the app. Host store success
-revisions are canonical u64 strings, including `"0"` for a missing host store.
+`Host` is `{name,ssh,larp,larpcc_home,identity_file}` with nullable paths.
+The two host-add options are mutually exclusive. `--ssh-config-host ALIAS`
+uses `ssh:{mode:"config",alias}` and requires a null `identity_file`.
+`--ssh USER@HOST[:PORT]` uses `ssh:{mode:"direct",destination,resolved}`
+with the explicit port in `resolved`. Direct mode allows an optional
+`--identity-file LOCAL_PATH`. Paths and destinations are display data in
+the app. Host-store success revisions are canonical decimal u64 strings,
+including `"0"` for a missing host store.
 
 `host.catalog.share` advances the selected registry revision once when the
-flag changes and preserves it on a no-op. Catalog apply uses the destination's
-local inheritance rules, previewed against that registry revision.
+flag changes and preserves it on a no-op. Copy uses an approved content
+digest and independent source and destination revision checks. Catalog
+apply and skills import use the destination's inheritance rules, previewed
+against its registry revision.
+
+Stage 13 defines a private framed SSH stream for catalog exports and for
+`host.catalog.import skills`. Export success is a private frame rather than
+a CLI JSON success variant. Export errors and import results use schema 1.
+The transport consumes the import readiness marker before reading its JSON
+receipt. App callers use `host catalog copy`, which emits one ordinary JSON
+envelope and never returns payload bytes. See the
+[transfer protocol](../stages/13-remote-hosts.md#skills-transfer) for exact
+framing, limits and import exit codes.
 
 For host-store commands, `--expected-revision` is a host-store precondition.
 For forwarded commands it guards the remote registry. Forwarded app reads and

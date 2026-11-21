@@ -56,6 +56,15 @@ DESTINATION = re.compile(
 
 def check_host(host):
     ssh = host['ssh']
+    identity_file = host['identity_file']
+    if ssh['mode'] == 'config':
+        assert identity_file is None
+        return
+    if identity_file is not None:
+        assert '%' not in identity_file and '$' not in identity_file
+        assert not any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in identity_file)
+        assert (identity_file.startswith('/') and not identity_file.startswith('//')
+                or re.match(r'^[A-Za-z]:[/\\]', identity_file))
     match = DESTINATION.fullmatch(ssh['destination'])
     assert match is not None
     user, hostname, port = match.groups()
@@ -170,7 +179,21 @@ for field, destination in (
     invalid = copy.deepcopy(host_list)
     invalid['data']['hosts'][0]['ssh'][field] = destination
     invalid_mutations.append(invalid)
-for command in ('host.catalog.share', 'host.catalog.apply'):
+for identity_file in ('relative', '-i', '/keys/%h', '/keys/$HOME', '/keys/\nfile',
+                      r'\\server\share\key', r'\\?\C:\keys\id'):
+    invalid = copy.deepcopy(host_list)
+    invalid['data']['hosts'][0]['identity_file'] = identity_file
+    invalid_mutations.append(invalid)
+invalid = copy.deepcopy(host_list)
+invalid['data']['hosts'][1]['identity_file'] = '/keys/identity'
+invalid_mutations.append(invalid)
+for alias in ('-oProxyCommand=x', 'alias with space', 'bad*alias'):
+    invalid = copy.deepcopy(host_list)
+    invalid['data']['hosts'][1]['ssh']['alias'] = alias
+    assert not matches(invalid, SCHEMA)
+    negative_checks += 1
+for command in ('host.catalog.share', 'host.catalog.apply',
+                'host.catalog.copy', 'host.catalog.import'):
     invalid = copy.deepcopy(next(x for x in fixtures if x['command'] == command and x['ok']))
     invalid['revision'] = None
     assert not matches(invalid, SCHEMA)
