@@ -85,7 +85,16 @@ hosts are unsupported in v1.
 
 Invoke a validated system OpenSSH executable directly with an argv array.
 On Windows require a native `ssh.exe` and never use batch or command-script
-wrappers. Require OpenSSH 9.2 or later. Before using the selected binary, run
+wrappers. Require OpenSSH 7.3 or later. The newest required option is
+`IdentityAgent` in the strict authentication alternative, introduced in
+[7.3](https://www.openssh.org/txt/release-7.3). The 7.3 client already has
+`-F none` and `-S none` and recognizes the remaining options, including
+`ClearAllForwardings` and `LogLevel`. `UpdateHostKeys` dates to
+[6.8](https://www.openssh.org/txt/release-6.8). See the
+[7.3 CLI source](https://github.com/openssh/openssh-portable/blob/V_7_3_P1/ssh.c)
+and [7.3 option reference](https://github.com/openssh/openssh-portable/blob/V_7_3_P1/ssh_config.5).
+
+Before using the selected binary, run
 only its local `-V` invocation with a two-second deadline, closed stdin and a
 4 KiB combined output cap. Accept exit 0 and a single version line with an
 OpenSSH or OpenSSH_for_Windows version prefix and recognized numeric major
@@ -118,7 +127,10 @@ agent. Pass `SSH_AUTH_SOCK` through unchanged if present and omit
 `IdentityAgent=none`. OpenSSH may use the platform's default local agent
 when applicable. Larp never opens the socket, reads agent contents or
 forwards it, and `-a` still disables forwarding. The agent must be usable
-under BatchMode without a Larp prompt.
+under BatchMode without a Larp prompt. With `-F none`, a socket configured
+only via `ssh_config IdentityAgent` is unavailable. A macOS GUI launch gets
+`SSH_AUTH_SOCK` from its launchd environment, without a terminal shell's
+overrides.
 
 The recommended optional `--identity-file LOCAL_PATH` stores a nullable
 `identity_file` path in the host record. Validate syntax only. Require a
@@ -140,15 +152,19 @@ contract does not authorize either implementation until the decision lands.
 
 Send one generated POSIX script over SSH stdin and close it. The login shell
 only receives the fixed command `sh -s`, so customizable values never reach a
-non-POSIX login-shell parser. Generate the following lines, with exactly one
-LF after each. `{larp}` is the quoted executable word. `{home}` is empty or
-`LARPCC_HOME=` plus the quoted path and one trailing space. `{args}` is the
-space-joined quoted argument list excluding the executable.
+non-POSIX login-shell parser. Generate these lines, each ending in one LF.
+`{larp}` is the quoted executable word and `{args}` is the space-joined list
+of quoted argument words after it. With an absolute `--larp` path, use the
+two POSIX file tests on the second line. With the default PATH lookup replace
+that line with `command -v 'larp' </dev/null >/dev/null 2>&1 || exit 44`.
+Include the export line only when `--larpcc-home` is supplied, with
+`{home}` the quoted path.
 
 ```sh
 case "$(uname -s </dev/null 2>/dev/null)" in Linux|Darwin) ;; *) exit 45 ;; esac
-command -v {larp} </dev/null >/dev/null 2>&1 || exit 44
-{home}exec {larp} {args} </dev/null
+[ -f {larp} ] </dev/null && [ -x {larp} ] </dev/null || exit 44
+export LARPCC_HOME={home} </dev/null
+exec {larp} {args} </dev/null
 ```
 
 The executable is `larp` from remote PATH or the explicit absolute POSIX
@@ -185,9 +201,12 @@ neither qualify a native launch nor establish remote account identity.
 
 Drain both streams concurrently, with a 1 MiB cap per stream and empty stderr
 required for an accepted envelope. Probe/read deadline is 5 seconds per SSH
-child, plus at most 2 seconds for failure cleanup. Within the app the bounded
-local SSH version check also counts toward the read deadline. Cache the local
-client check by verified executable identity and invalidate it on replacement.
+child, including the 4-second OpenSSH connection timeout. Stop at the first
+failure and allow at most 2 seconds for cleanup. The app bridge has a
+15-second end-to-end deadline per read: up to 2 seconds for the local client
+version check, 5 for the remote version probe, 5 for the command, 2 for
+failure cleanup, and 1 for bridge overhead. Cache the local client check by
+verified executable identity and invalidate it on replacement.
 A dispatched mutation has a 60-second deadline. On timeout, cancel or overflow, terminate and reap the
 direct SSH child. Losing that process does not establish whether a remote
 mutation committed. Enforce one UTF-8 JSON object plus LF, exact discriminator
@@ -319,9 +338,9 @@ executables and outside sentinels. Use temporary roots and clean all artifacts.
 | Test | Required evidence |
 |---|---|
 | `stage13_hosts` | Strict direct DEST parsing, SSH config aliases refused, no SSH on CRUD or stale routing, atomic changes, concurrent name reuse refuses, no remote deletion on remove |
-| `stage13_argv` | Exact flags and one fixed SSH command across platforms, pending authentication policy passed correctly, exact spaces/quotes/dollars in paths and argv, attempted injected options/commands remain inert, no local SSH config or credentials inspected by Larp |
+| `stage13_argv` | Exact flags and one fixed SSH command across platforms, pending authentication policy passed correctly, identity_file rejects relative/leading-hyphen paths, percent/dollar expansion, control characters and Windows UNC/device paths before spawn, exact spaces/quotes/dollars in paths and argv, attempted injected options/commands remain inert, no local SSH config or credentials inspected by Larp |
 | `stage13_transport` | Missing client, host-key refusal and BatchMode prompt refusal with no fallback, banner and post-quantum warning on stderr rejected and redacted, caps on both streams, deadlines/cancel/reap, no raw output or secret sentinels in errors, unknown mutation outcome |
-| `stage13_protocol` | Missing/old/incompatible Larp, unsupported OS including MSYS/Cygwin exit 45, escaped paths, reserved router error codes, malformed/framed/trailing/unknown schema and wrong command or exit, compatible version, receiver allowlist, closed native admission and remote LIVE refusal before effects |
+| `stage13_protocol` | Missing/old/incompatible Larp, dash fixture with a non-executable absolute file and a directory both exit 44, unsupported OS including MSYS/Cygwin exit 45, escaped paths, reserved router error codes, malformed/framed/trailing/unknown schema and wrong command or exit, compatible version, receiver allowlist, closed native admission and remote LIVE refusal before effects |
 | `stage13_revision` | Same profile IDs/names on different machines, re-add race and stale target conflict before effects, one-shot mutation on disconnect, no fallback or retry |
 | `stage13_catalog` | Destination inheritance including MCP sync_all=true and skill future-profile defaults, isolated share revision/no-op and older writer invalidation, opt-in explicit sync, no file or secret bytes across SSH, missing executable/package and digest mismatch, same-name conflict and same-definition no-op, independent success amid partial failure |
 | App fixture suite | Decode new and old envelopes, add/remove/check states, revision/routing isolation, previewed copy and sync outcomes, no remote LIVE action, menu uses loaded data and does not poll, launch with N hosts and restore/wake/window/menu open spawn zero SSH processes |

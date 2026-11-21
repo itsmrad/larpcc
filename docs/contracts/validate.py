@@ -161,6 +161,9 @@ invalid['data']['hosts'].append(copy.deepcopy(invalid['data']['hosts'][0]))
 invalid_mutations.append(invalid)
 for field, destination in (
     ('destination', '-oProxyCommand=x'),
+    ('destination', '-o@host'),
+    ('destination', 'dev@-host'),
+    ('destination', 'dev@-oProxyCommand=x'),
     ('resolved', '-oProxyCommand=x'),
     ('destination', 'dev@0x7f000001'),
 ):
