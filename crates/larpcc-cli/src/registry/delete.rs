@@ -537,8 +537,13 @@ fn quiet(root: &Path, data: &store::Data, profile: &Profile, partial: bool) -> R
             .iter()
             .find(|b| b.provider == profile.provider)
             .ok_or(Error::AuthBusy)?;
-        let app = desktop::validate_binding(profile.provider, &application.path)
-            .map_err(|_| Error::AuthBusy)?;
+        let (app, _) = desktop::validate_binding(
+            profile.provider,
+            &application.path,
+            data.desktop_signature_cache.as_ref(),
+            false,
+        )
+        .map_err(|_| Error::AuthBusy)?;
         let snapshot = CheckedSnapshot {
             profile_id: profile.id,
             provider: profile.provider,
