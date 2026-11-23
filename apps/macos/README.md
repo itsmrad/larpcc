@@ -84,7 +84,8 @@ draws grouped forms in that release’s style, so LarpCC draws its own sections
 only when an earlier look runs on macOS 26. Each theme keeps Reduce
 Transparency (materials and glass turn opaque) and Increase Contrast (firm
 borders on cards and the selection). In dark mode the classic panels darken
-the menu material, a nearly-out percentage uses a lighter red, and a selected
+the menu material, a nearly-out percentage uses a lighter red (a deeper red in
+light mode), and a selected
 card is marked by its outline alone, so text stays at 4.5:1 or better; Tahoe
 keeps the system red and its tinted selection, exactly as before themes. Tahoe
 leaves the sidebar density to the system setting; Sequoia and Sonoma set their
@@ -93,7 +94,9 @@ own.
 For screenshots, `--theme=tahoe|sequoia|sonoma` overrides the setting for one
 launch, like `--appearance`. Settings, the panel and the status item all read
 the one stored setting through `.themed()`, so a change shows at once, even in
-a panel that is already open (`ThemePropagationTests` covers this). In debug
+a panel that is already open. `ThemePropagationTests` checks that a change
+reaches a view under `.themed()`; that the three scene roots use it was checked
+live with `--menubar-live-snapshots`. In debug
 builds, `--menubar-live-snapshots=<abs dir>` makes the running status item and
 panel write a PNG each time their theme changes, to check that live.
 

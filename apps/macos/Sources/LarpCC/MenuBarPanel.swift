@@ -713,10 +713,11 @@ private let classicBacking = Color(nsColor: NSColor(name: nil) { appearance in
     NSColor.black.withAlphaComponent(isDark(appearance) ? 0.5 : 0)
 })
 
-/// Classic themes: the system red in light mode; a lighter red in dark mode, so a nearly-out
-/// percentage reads at 4.5:1 or better on the classic dark cards.
+/// Classic themes only: a deeper red in light mode and a lighter one in dark mode, so a
+/// nearly-out percentage reads at 4.5:1 or better on the classic menu backgrounds.
 private let criticalRed = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1) : .systemRed
+    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1)
+                       : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
 })
 
 /// Sonoma widget tiles on the menu material.
