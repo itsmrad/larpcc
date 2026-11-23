@@ -129,6 +129,12 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     let mut alias_names = HashSet::new();
     for a in &data.aliases {
         if a.name.as_str() == "larp"
+            || ProfileName::parse_new(a.name.as_str()).is_err()
+            || a.receipt.len() != 64
+            || !a
+                .receipt
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             || !alias_names.insert(&a.name)
             || !data.profiles.iter().any(|p| p.id == a.profile_id)
         {

@@ -12,6 +12,7 @@ Commands:
   status    Show native authentication status
   logout    Log out a profile
   profile   Manage profile records (no login, no provider launch)
+  alias     Manage root-bound alias commands (no PATH or shell edits)
 
 Options:
       --json                                   Emit one local metadata JSON envelope

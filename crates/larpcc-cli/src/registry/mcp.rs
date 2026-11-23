@@ -2068,17 +2068,15 @@ mod tests {
         f.registry
             .add(name("claude-work"), Provider::Claude)
             .unwrap();
-        write_atomic(
-            f.root(),
-            JOURNAL,
-            br#"{"version":1,"kind":"skills","steps":[]}"#,
-        )
-        .unwrap();
-        assert!(matches!(
-            f.registry.mcp(McpAction::Sync),
-            Err(Error::RecoveryRequired)
-        ));
-        assert!(crate::share::pending(f.root()));
+        for kind in ["skills", "alias"] {
+            let bytes = serde_json::to_vec(&json!({"version":1,"kind":kind,"steps":[]})).unwrap();
+            write_atomic(f.root(), JOURNAL, &bytes).unwrap();
+            assert!(matches!(
+                f.registry.mcp(McpAction::Sync),
+                Err(Error::RecoveryRequired)
+            ));
+            assert_eq!(fs::read(f.root().join(JOURNAL)).unwrap(), bytes);
+        }
         fs::remove_file(f.root().join(JOURNAL)).unwrap();
     }
 

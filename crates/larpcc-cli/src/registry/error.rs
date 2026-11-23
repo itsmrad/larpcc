@@ -9,6 +9,10 @@ pub enum Error {
     Conflict,
     Drift,
     SkillNotFound,
+    AliasNotFound,
+    /// Alias launcher, receipt or mapping ownership cannot be established.
+    AliasInvalid,
+    AliasImageUnverified,
     ForbiddenSource,
     McpNotFound,
     McpInvalid,
@@ -118,6 +122,13 @@ impl fmt::Display for Error {
                 f.write_str("MCP reference is missing, invalid or unsupported")
             }
             Self::Unsupported => f.write_str("MCP transport or adapter is unsupported"),
+            Self::AliasNotFound => f.write_str("alias was not found"),
+            Self::AliasInvalid => {
+                f.write_str("alias launcher, receipt or mapping cannot be verified")
+            }
+            Self::AliasImageUnverified => {
+                f.write_str("cannot verify the loaded Larp image for alias creation")
+            }
             Self::Conflict => f.write_str("registry revision or references conflict"),
             Self::RecoveryRequired => {
                 f.write_str("explicit profile migration or recovery is required")
@@ -275,6 +286,8 @@ impl Error {
             ),
             Self::NewerSchema { .. } => "upgrade Larp CC; the file was not modified".into(),
             Self::NotFound { .. } => "run 'larp cc profile list'".into(),
+            Self::AliasNotFound => "run 'larp cc alias list'".into(),
+            Self::AliasInvalid => "run standard larp; restore the original alias files before retrying. For pending recovery or files you cannot restore, see Manual alias recovery in the Stage 05 guide".into(),
             Self::Busy { .. } => "retry when the other command finishes".into(),
             Self::TooLarge => "forget unused profiles or use a separate data root".into(),
             Self::Io {
