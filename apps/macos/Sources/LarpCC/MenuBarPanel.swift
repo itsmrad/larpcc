@@ -181,14 +181,7 @@ struct MenuBarPanel: View {
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { panelHeight = $0 }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background {
-            if tokens.panelMaterial && !isSnapshot {
-                MenuBarMaterial().overlay(classicBacking).accessibilityHidden(true)
-            } else {
-                // The offscreen snapshot cannot draw the menu material; it uses a colour sampled from it.
-                tokens.panelMaterial ? AnyView(menuMaterialStandIn.overlay(classicBacking)) : AnyView(panelBackground)
-            }
-        }
+        .modifier(PanelBackground(classic: tokens.panelMaterial, isSnapshot: isSnapshot))
         .background {
             if !isSnapshot {
                 // PanelStack already holds the panel to the screen limit, except for the footer's
@@ -621,18 +614,25 @@ private struct PanelCard: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: tokens.cardRadius, style: .continuous)
         let strong = contrast == .increased
         let boxed = tokens.card != .flat
+        // Tahoe tints a selected card; the classic cards mark it with the outline alone, so text
+        // on the darker classic backing keeps its contrast.
+        let classic = tokens.card != .glass
         let card = content
             .background {
                 ZStack {
-                    if boxed { shape.fill(tokens.card == .widget ? widgetFill : cardLift) }
+                    switch tokens.card {
+                    case .glass: shape.fill(cardLift)
+                    case .widget: shape.fill(widgetFill).shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+                    case .flat: EmptyView()
+                    }
                     // The selection sits above the fill, so it also shows on opaque cards.
-                    if highlighted { shape.fill(Color.primary.opacity(0.08)) }
+                    if highlighted && !classic { shape.fill(Color.primary.opacity(0.08)) }
                 }
-                .shadow(color: .black.opacity(tokens.card == .widget ? 0.12 : 0), radius: 2, y: 1)
             }
             .overlay {
-                if highlighted && (boxed || strong) {
-                    shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : 0.3), lineWidth: strong ? 2 : 1)
+                if highlighted {
+                    shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : classic ? 0.45 : 0.3),
+                                       lineWidth: strong ? 2 : 1)
                 } else if strong && boxed {
                     shape.strokeBorder(Color.primary.opacity(0.5), lineWidth: 1)
                 }
@@ -641,6 +641,23 @@ private struct PanelCard: ViewModifier {
             card.glassEffect(.regular, in: shape)
         } else {
             card.overlay(shape.strokeBorder(Color.primary.opacity(boxed ? 0.1 : 0), lineWidth: 0.5))
+        }
+    }
+}
+
+/// Tahoe: the opaque panel background, applied exactly as before themes existed. Classic: the
+/// menu material darkened in dark mode (a colour sampled from it in offscreen snapshots).
+private struct PanelBackground: ViewModifier {
+    let classic: Bool
+    let isSnapshot: Bool
+
+    func body(content: Content) -> some View {
+        if !classic {
+            content.background(panelBackground)
+        } else if isSnapshot {
+            content.background(menuMaterialStandIn.overlay(classicBacking))
+        } else {
+            content.background(MenuBarMaterial().overlay(classicBacking).accessibilityHidden(true))
         }
     }
 }
@@ -696,8 +713,8 @@ private let classicBacking = Color(nsColor: NSColor(name: nil) { appearance in
     NSColor.black.withAlphaComponent(isDark(appearance) ? 0.5 : 0)
 })
 
-/// The system red in light mode; a lighter red in dark mode, so a nearly-out percentage
-/// reads at 4.5:1 or better on dark cards.
+/// Classic themes: the system red in light mode; a lighter red in dark mode, so a nearly-out
+/// percentage reads at 4.5:1 or better on the classic dark cards.
 private let criticalRed = Color(nsColor: NSColor(name: nil) { appearance in
     isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1) : .systemRed
 })
@@ -778,7 +795,7 @@ private struct MenuBarProfileSummary: View {
             UsageMeter(leftPercent: window.leftPercent, level: level)
             Text("\(Int(window.leftPercent.rounded()))%")
                 .fontWeight(.semibold)
-                .foregroundStyle(level.tint ?? .primary)
+                .foregroundStyle(level.tint(in: theme) ?? .primary)
                 .frame(width: 32, alignment: .trailing)
             // Fixed widths keep every card's meter the same length.
             Label(resetText(window), systemImage: "clock")
@@ -851,6 +868,7 @@ private struct MenuBarProfileDetail<Actions: View>: View {
 private struct ProfileRing: View {
     let provider: Provider
     let session: UsageWindow?
+    @Environment(\.theme) private var theme
 
     var body: some View {
         let left = session?.leftPercent ?? 0
@@ -861,7 +879,7 @@ private struct ProfileRing: View {
                 Circle()
                     .inset(by: 1)
                     .trim(from: 0, to: left / 100)
-                    .stroke(UsageLevel(leftPercent: left).tint ?? Color.primary.opacity(0.7),
+                    .stroke(UsageLevel(leftPercent: left).tint(in: theme) ?? Color.primary.opacity(0.7),
                             style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
@@ -885,13 +903,14 @@ private struct ResetLabelStyle: LabelStyle {
 private struct UsageMeter: View {
     let leftPercent: Double
     let level: UsageLevel
+    @Environment(\.theme) private var theme
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.12))
                 Capsule()
-                    .fill(level.tint ?? Color.primary.opacity(0.7))
+                    .fill(level.tint(in: theme) ?? Color.primary.opacity(0.7))
                     .frame(width: max(leftPercent > 0 ? 4 : 0, proxy.size.width * leftPercent / 100))
             }
         }
@@ -902,12 +921,13 @@ private struct UsageMeter: View {
 }
 
 private extension UsageLevel {
-    /// Calm by default; colour only when a limit is running low.
-    var tint: Color? {
+    /// Calm by default; colour only when a limit is running low. Tahoe keeps the system red;
+    /// the classic themes use a red that stays readable on their darker dark-mode backing.
+    func tint(in theme: Theme) -> Color? {
         switch self {
         case .normal: return nil
         case .low: return .orange
-        case .critical: return criticalRed
+        case .critical: return theme == .tahoe ? .red : criticalRed
         }
     }
 }

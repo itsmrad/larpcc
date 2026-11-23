@@ -7,10 +7,6 @@ struct GeneralPage: View {
     @ObservedObject var store: AppStore
     @Binding var appearance: String
     @AppStorage(ThemeChoice.key) private var theme = ThemeChoice.automatic.rawValue
-    @FocusState private var themePickerFocused: Bool
-    /// A theme change rebuilds the Settings split view and this page with it; the new page
-    /// takes keyboard focus back to the Theme picker.
-    @MainActor private static var refocusThemePicker = false
     @State private var binding: BindTarget?
     @State private var confirmation: Confirmation?
 
@@ -45,13 +41,6 @@ struct GeneralPage: View {
                     Text(themeNote)
                 }
                 .disabled(ThemePreference.launchOverride != nil)
-                .focused($themePickerFocused)
-                .onChange(of: theme) { _, _ in Self.refocusThemePicker = true }
-                .onAppear {
-                    guard Self.refocusThemePicker else { return }
-                    Self.refocusThemePicker = false
-                    themePickerFocused = true
-                }
             }
 
             UsageSettingsSection(store: store)
