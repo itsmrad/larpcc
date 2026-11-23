@@ -240,15 +240,21 @@ fixed local error text, and the reserved `ssh_*`/`remote_*` codes.
   only release, and a receiver downgraded after the probe rejects the
   unknown option before effects. The ID is never silently dropped.
 - **Downgrade override.** A downgraded receiver rejects `--remote-account`
-  or `--expected-profile-id` with a valid `parse` or `usage` error envelope,
-  exit 2. Stage 13 normally preserves confirmed remote CLI errors, but the
-  router built and validated this fixed argv itself, so such a rejection can
-  only mean the receiver lacks stage 14. For any request carrying either
-  option, a validated remote `parse` or `usage` error therefore maps to local
-  `remote_incompatible`, exit 1, overriding stage 13's "confirmed remote CLI
-  error" row for these requests only. Malformed frames, unexpected stderr and
-  other invalid responses stay `remote_output`. Other confirmed remote errors
-  (`conflict`, `busy`, `not_found`) keep stage 13's rule.
+  or `--expected-profile-id` as an unknown option. Stage 13 normally
+  preserves confirmed remote CLI errors, but the router built and validated
+  this fixed argv itself, so such a rejection can only mean the receiver
+  lacks stage 14. The override applies **after** stage 13's transport,
+  deadline and stream-cap classification, so exit 255 stays `ssh_failed`, a
+  deadline stays `remote_timeout` and a cap stays `too_large`. It then
+  applies only to a fully validated reply that meets all of these: exit 2,
+  empty stderr, one schema-1 error envelope with `error.code` `usage`, and an
+  allowed discriminator (the requested `status` or `status.account`, or
+  `parse` for a parser rejection). For a request carrying either option, that
+  reply maps to local `remote_incompatible`, exit 1, overriding stage 13's
+  "confirmed remote CLI error" row for these requests only. Any other invalid
+  response (malformed frame, stderr on a non-255 exit, wrong discriminator)
+  stays `remote_output`. Other confirmed remote errors (`conflict`, `busy`,
+  `not_found`) keep stage 13's rule.
 - **Version changes.** If the remote is upgraded or downgraded between the
   version probe and the command login, a metadata request can never become an
   account request, and an account request either runs on a receiver that
@@ -597,11 +603,20 @@ values.
 5. **Stop, clean up, assess.** Stop on wrong account, unexpected backend,
    outside access, changed artifact, sensitive spill or failure to reap.
    Keep only safe diagnostics and block the affected rows. **Once login has
-   been dispatched**, any stopped, failed, cancelled or timed-out attempt
-   (including a login that exits non-zero, because it may already have
-   written a per-home credential) is followed by the selected sign-out path
-   (proven logout or approved cleanup) before anything else, and before
-   deleting the profile or the temporary root. After sign-out and quiescence, delete each throwaway profile with confirmed `profile delete`,
+   been dispatched**, every outcome (success, failure, non-zero exit,
+   cancellation, timeout or stop) follows this order, because a login may
+   already have written a per-home credential:
+   1. Confirmed reap of the login child and quiescence of its process tree
+      (no surviving provider process for that profile), so nothing can
+      rewrite the credential afterwards.
+   2. Then the selected sign-out path (proven logout or approved cleanup).
+   3. Then confirmed sign-out (signed-out status if its proof exists, or the
+      cleanup's confirmation) before any deletion.
+
+   If reap/quiescence or the sign-out confirmation is missing, do not run the
+   later steps and do not delete: keep the throwaway profile, root and
+   repository for recovery, and block that row. Otherwise delete each
+   throwaway profile with confirmed `profile delete`,
    then remove the temporary root and repository, inside the approved cleanup
    scope only. Never improvise a logout on a shared backend. Record cleanup
    status. Two profiles (one per provider) do not prove same-provider A/B
@@ -633,8 +648,10 @@ authorize any other operation.
 
 A Login row also records its selected sign-out path. Once a login has been
 dispatched, every outcome (success, failure, non-zero exit, cancellation,
-timeout or stop) is followed by that path before the profile or temporary
-root is deleted.
+timeout or stop) follows step 5's order: confirmed reap and quiescence of the
+login process tree, then the sign-out path, then confirmed sign-out, and only
+then deletion. A missing confirmation keeps the throwaway state for recovery
+and blocks the row.
 
 ### Tests
 
@@ -653,7 +670,7 @@ lifecycle evidence is incomplete.
 | `stage14_extras` | v3 → v4 metadata migration; label/arguments kept on rename; `@` refused; expected-revision and atomic failure; version cache invalidation on replacement; argv override, bare `--`, stale-default refusal. |
 | `stage14_usage_render` | Exactly one call to the stage 11 LOCAL reader and no LIVE request even with LIVE enabled; each stage 11 `reason`, including `reset_since_capture` with no percentage and `Reset due`; both windows reset → both labels with `Reset due` and no `usage: not available` line; one reset and one unusable → the reset line plus `…: not available`; stage 11 plan never in `account.plan`; 0% and 100%, floor rounding, reset text, narrow, non-TTY, `NO_COLOR`, ASCII, no live call. |
 | Mac live evidence | Per-operation identity/digest, G0 citation, path scope, exit/result and cleanup on the exact head; unresolved stage 3 dependencies listed one by one. |
-| `stage14_remote` (with stage 13) | Fake SSH and fake remote Larp: explicit-action only; remote states pass through; an unmarked `status` under `--remote-request` never spawns on any receiver; `--remote-account` refused outside `--remote-request` (`usage`), while public `status` accepts `--expected-profile-id` locally and with `--host`, in both modes; **remote metadata with ID** (compatible receiver gets `--expected-profile-id` without `--remote-account` and enforces it, mismatch → `conflict`; stage-13-only receiver → `remote_incompatible` before the command login; receiver downgraded after the probe rejects the option before effects; the ID is never dropped); **host revision** (app passes `--expected-host-revision`; a host alias rebound after the snapshot → `conflict` with zero SSH children; the host revision never appears in the receiver argv); stage-13-only remote gives `remote_incompatible` for account mode and plain metadata `status` for `--no-account`; **version change between probe and dispatch** (upgrade: metadata request stays metadata with zero spawns; downgrade: account request refused before effects); **app → router → receiver** (the app's `--host H status NAME --json --expected-host-revision 3 --expected-revision 7 --expected-profile-id 2` reaches the fake receiver as `--remote-account --expected-revision 7 --expected-profile-id 2`, with `--expected-host-revision` and its value absent from the receiver argv, exactly one probe and one command login, and no extra read); **downgrade override** (a probe shows stage 14, then the receiver returns a valid `parse`/`usage` envelope with exit 2 for `--expected-profile-id` or `--remote-account` → local `remote_incompatible`, exit 1; a malformed frame or stderr in the same case → `remote_output`); **discriminator by mode** (a pinned metadata request with name, ID 2 and revision 7 accepts a matching plain `status` reply; the same request rejects a `status.account` reply, and an account request rejects a plain `status` reply, both `remote_output`; ID and revision mismatches on each mode → `remote_output`); **direct CLI without ID** (only what was given is forwarded; the reply's ID is reported); **rename + name reuse** (snapshot rev 7 has ID 2 as `codex-45`, then ID 2 is renamed and ID 3 takes the name: stale revision → `conflict`, revision omitted but `--expected-profile-id 2` → `conflict`, both with zero spawns; a reply for ID 3 → `remote_output`); **revision binding** (a success with the right name and ID but revision `8` for a request pinned to `7` → `remote_output`, no account data); wrong discriminator, bad email form and stderr → `remote_output`; stream cap → `too_large`; 16 s child and 33 s bridge deadlines → `remote_timeout`; no account data in any failure; sentinel email absent from local and remote logs, files and diagnostics. |
+| `stage14_remote` (with stage 13) | Fake SSH and fake remote Larp: explicit-action only; remote states pass through; an unmarked `status` under `--remote-request` never spawns on any receiver; `--remote-account` refused outside `--remote-request` (`usage`), while public `status` accepts `--expected-profile-id` locally and with `--host`, in both modes; **remote metadata with ID** (compatible receiver gets `--expected-profile-id` without `--remote-account` and enforces it, mismatch → `conflict`; stage-13-only receiver → `remote_incompatible` before the command login; receiver downgraded after the probe rejects the option before effects; the ID is never dropped); **host revision** (app passes `--expected-host-revision`; a host alias rebound after the snapshot → `conflict` with zero SSH children; the host revision never appears in the receiver argv); stage-13-only remote gives `remote_incompatible` for account mode and plain metadata `status` for `--no-account`; **version change between probe and dispatch** (upgrade: metadata request stays metadata with zero spawns; downgrade: account request refused before effects); **app → router → receiver** (the app's `--host H status NAME --json --expected-host-revision 3 --expected-revision 7 --expected-profile-id 2` reaches the fake receiver as `--remote-account --expected-revision 7 --expected-profile-id 2`, with `--expected-host-revision` and its value absent from the receiver argv, exactly one probe and one command login, and no extra read); **downgrade override** (a probe shows stage 14, then the receiver returns exit 2, empty stderr and a valid `usage` error envelope under `parse`, `status` or `status.account` for `--expected-profile-id` or `--remote-account` → local `remote_incompatible`, exit 1; a malformed frame, stderr on exit 2, or a wrong discriminator → `remote_output`; exit 255 with stderr → `ssh_failed`; deadline → `remote_timeout`); **discriminator by mode** (a pinned metadata request with name, ID 2 and revision 7 accepts a matching plain `status` reply; the same request rejects a `status.account` reply, and an account request rejects a plain `status` reply, both `remote_output`; ID and revision mismatches on each mode → `remote_output`); **direct CLI without ID** (only what was given is forwarded; the reply's ID is reported); **rename + name reuse** (snapshot rev 7 has ID 2 as `codex-45`, then ID 2 is renamed and ID 3 takes the name: stale revision → `conflict`, revision omitted but `--expected-profile-id 2` → `conflict`, both with zero spawns; a reply for ID 3 → `remote_output`); **revision binding** (a success with the right name and ID but revision `8` for a request pinned to `7` → `remote_output`, no account data); wrong discriminator, bad email form and stderr → `remote_output`; stream cap → `too_large`; 16 s child and 33 s bridge deadlines → `remote_timeout`; no account data in any failure; sentinel email absent from local and remote logs, files and diagnostics. |
 | Later UI acceptance | CLI contract shipped first; explicit open/refresh only; stale-result guard; blur, reveal, re-blur on close/relaunch, hide setting, accessibility; menu bar never shows an email. |
 
 ## Resolved rulings (lead, 2026-11-21; the user may still veto)

@@ -171,8 +171,11 @@ lead to ask the user, per the rollout order.
   the exact build's credential backend, key, precedence and fallback are
   proven per-home (gate G0). No login runs until G0 proves status and login
   plus one sign-out path (logout or an approved cleanup path). Once login has
-  been dispatched, that path runs at teardown and after any stopped, failed
-  or timed-out attempt, before the profile or temporary root is deleted. PII-capable observations run only in the user's
+  been dispatched, every outcome (including failure, cancellation and
+  timeout) runs: confirmed reap and quiescence of the login process tree, then
+  the sign-out path, then confirmed sign-out, and only then deletion. A
+  missing confirmation keeps the throwaway state for recovery and blocks the
+  row. PII-capable observations run only in the user's
   unrecorded terminal. Rows land in a separate implementation PR.
 
 ---
