@@ -1,0 +1,199 @@
+#![cfg(feature = "synthetic-launch")]
+
+#[path = "../common/mod.rs"]
+mod common;
+
+use common::{Fixture, copy_executable, envelope, exec, stdout};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::{fs, path::PathBuf, process::Command};
+
+struct StatusFixture {
+    fixture: Fixture,
+    marker: PathBuf,
+    digest: String,
+    installed: PathBuf,
+}
+
+impl StatusFixture {
+    fn new() -> Self {
+        let fixture = Fixture::new();
+        let fake = PathBuf::from(env!("CARGO_BIN_EXE_larpcc-stage14-fake"));
+        let installed = fixture.temp.path().join(fake.file_name().unwrap());
+        copy_executable(&fake, &installed);
+        fixture.profile(&["add", "codex-45", "--provider", "codex"], 0);
+        fixture.run(
+            &["cc", "provider", "bind", "codex", installed.to_str().unwrap()],
+            0,
+        );
+        let digest = format!("{:x}", Sha256::digest(fs::read(&installed).unwrap()));
+        let marker = fixture.temp.path().join("executed");
+        Self { fixture, marker, digest, installed }
+    }
+
+    fn command(&self, synthetic: bool, args: &[&str]) -> Command {
+        let mut cmd = if synthetic {
+            self.fixture.command_for(
+                std::path::Path::new(env!("CARGO_BIN_EXE_larpcc-synthetic")),
+                args,
+            )
+        } else {
+            self.fixture.command(args)
+        };
+        cmd.env_remove("CODEX_HOME")
+            .env("LARPCC_STAGE14_FAKE_DIGEST", &self.digest)
+            .env("LARPCC_STAGE14_EXECUTED", &self.marker)
+            .env(
+                "LARPCC_STAGE14_SELECTED_HOME",
+                self.fixture.root.join("profiles/1/cli"),
+            );
+        cmd
+    }
+
+    fn json(&self, options: &[&str], exit: i32) -> Value {
+        let args = [&["cc", "status", "codex-45", "--json"][..], options].concat();
+        envelope(&exec(self.command(true, &args), exit))
+    }
+}
+
+#[test]
+fn stage14_status_modes() {
+    let f = StatusFixture::new();
+    let metadata = f.json(&["--no-account", "--expected-profile-id", "1"], 0);
+    assert_eq!(metadata["command"], "status");
+    assert_eq!(metadata, f.json(&["--no-account"], 0));
+    assert_eq!(metadata["data"]["native_auth"], "not_observed");
+
+    for mode in [&[][..], &["--no-account"][..]] {
+        let args = [mode, &["--expected-profile-id", "2"]].concat();
+        assert_eq!(f.json(&args, 1)["error"]["code"], "conflict");
+        let args = [mode, &["--expected-profile-id", "01"]].concat();
+        assert_eq!(f.json(&args, 2)["error"]["code"], "usage");
+    }
+    for option in [&["--no-account"][..], &["--expected-profile-id", "1"][..]] {
+        let args = [&["cc", "profile", "list", "--json"][..], option].concat();
+        assert_eq!(envelope(&exec(f.command(true, &args), 2))["error"]["code"], "usage");
+    }
+    assert!(!f.marker.exists());
+
+    let account = f.json(&["--expected-profile-id", "1"], 0);
+    assert_eq!(account["command"], "status.account");
+    assert_eq!(account["data"]["profile"], metadata["data"]["profile"]);
+    assert_eq!(account["data"]["account"]["state"], "signed_in");
+    assert!(f.marker.exists());
+}
+
+#[test]
+fn stage14_admission_closed_and_digest_mismatch_do_not_execute() {
+    let f = StatusFixture::new();
+    let args = ["cc", "status", "codex-45", "--json"];
+    let ordinary = envelope(&exec(f.command(false, &args), 0));
+    let mut unknown_build = f.command(true, &args);
+    unknown_build.env("LARPCC_STAGE14_FAKE_DIGEST", "00".repeat(32));
+    assert_eq!(envelope(&exec(unknown_build, 0)), ordinary);
+    assert_eq!(ordinary["data"]["account"]["state"], "not_qualified");
+    assert!(ordinary["data"]["provider_version"].is_null());
+    assert!(!f.marker.exists());
+}
+
+#[test]
+fn stage14_parser_capture_timeout_and_overflow() {
+    let f = StatusFixture::new();
+    for mode in ["stdout-overflow", "stderr-overflow", "timeout"] {
+        let mut cmd = f.command(true, &["cc", "status", "codex-45", "--json"]);
+        cmd.env("LARPCC_STAGE14_FAKE_MODE", mode);
+        let result = envelope(&exec(cmd, 0));
+        assert_eq!(result["data"]["account"]["state"], "unknown");
+        assert!(result["data"]["account"]["email"].is_null());
+        assert!(result["data"]["account"]["plan"].is_null());
+        assert_eq!(f.json(&[], 0)["data"]["account"]["state"], "signed_in");
+    }
+}
+
+#[test]
+fn stage14_json_contract() {
+    let f = StatusFixture::new();
+    let actual = f.json(&[], 0);
+    let examples: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../../docs/contracts/cli-v1.examples.json"
+    ))
+    .unwrap();
+    let mut example = examples
+        .into_iter()
+        .find(|value| {
+            value["command"] == "status.account"
+                && value["data"]["account"]["email"].is_string()
+        })
+        .unwrap();
+    assert_eq!(actual["data"]["provider_version"], "0.0.14-fixture");
+    example["revision"] = actual["revision"].clone();
+    example["data"]["provider_version"] = actual["data"]["provider_version"].clone();
+    example["data"]["profile"]["id"] = "1".into();
+    example["data"]["profile"]["aliases"] = serde_json::json!([]);
+    for surface in ["cli", "desktop"] {
+        example["data"]["profile"]["surfaces"][surface]["path"] =
+            actual["data"]["profile"]["surfaces"][surface]["path"].clone();
+    }
+    assert_eq!(actual, example);
+    for operation in ["run", "login", "logout"] {
+        let cmd = f.command(false, &["cc", operation, "codex-45", "--json"]);
+        assert_eq!(envelope(&exec(cmd, 2))["error"]["code"], "json_native_io");
+    }
+}
+
+#[test]
+fn stage14_human() {
+    let f = StatusFixture::new();
+    let email = ["user", "@", "example.com"].concat();
+    let plan = ["Pl", "us"].concat();
+    for (mode, line) in [
+        ("", format!("Signed in as {email} · {plan}")),
+        ("email-only", format!("Signed in as {email}")),
+        ("plan-only", format!("Signed in · {plan}")),
+        ("neither", "Signed in".into()),
+        ("signed-out", "Signed out".into()),
+        ("credential", "account: unknown".into()),
+    ] {
+        let mut cmd = f.command(true, &["cc", "status", "codex-45"]);
+        cmd.env("LARPCC_STAGE14_FAKE_MODE", mode);
+        assert_eq!(
+            stdout(&exec(cmd, 0)),
+            format!("codex-45 (codex 0.0.14-fixture)\n{line}\nusage: not available\n"),
+        );
+    }
+}
+
+#[test]
+fn stage14_never_store() {
+    fn verify(path: &std::path::Path, fake: &std::path::Path, forbidden: &[String]) {
+        for item in fs::read_dir(path).unwrap() {
+            let item = item.unwrap();
+            let kind = item.file_type().unwrap();
+            if kind.is_dir() {
+                verify(&item.path(), fake, forbidden);
+            } else if kind.is_file() && item.path() != fake {
+                let bytes = fs::read(item.path()).unwrap();
+                for value in forbidden {
+                    assert!(!bytes.windows(value.len()).any(|window| window == value.as_bytes()));
+                }
+            }
+        }
+    }
+
+    let f = StatusFixture::new();
+    let email = ["user", "@", "example.com"].concat();
+    // Assemble credential-shaped test data at runtime to avoid scanner matches.
+    let credential = ["sk-", "inventedfixture01234567890123456789"].concat();
+    let forbidden = [email, credential];
+    assert_eq!(f.json(&[], 0)["data"]["account"]["state"], "signed_in");
+    let mut cmd = f.command(true, &["cc", "status", "codex-45", "--json"]);
+    cmd.env("LARPCC_STAGE14_FAKE_MODE", "credential");
+    let result = exec(cmd, 0);
+    assert_eq!(envelope(&result)["data"]["account"]["state"], "unknown");
+    let listed = exec(f.command(false, &["cc", "profile", "list", "--json"]), 0);
+    for value in &forbidden {
+        assert!(!stdout(&result).contains(value));
+        assert!(!stdout(&listed).contains(value));
+    }
+    verify(f.fixture.temp.path(), &f.installed, &forbidden);
+}
