@@ -44,16 +44,20 @@ pub enum SecretRef {
     },
 }
 impl SecretRef {
-    fn valid(&self) -> bool {
+    fn validate(&self) -> Result<(), InputError> {
         match self {
-            Self::Env { name } => env_name(name),
-            Self::Keychain { name } => {
-                !name.is_empty()
+            Self::Env { name } => validate_env(name),
+            Self::Keychain { name } if token_like(name) => Err(InputError::SecretLiteral),
+            Self::Keychain { name }
+                if !name.is_empty()
                     && name.len() <= 64
                     && name
                         .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+                        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)) =>
+            {
+                Ok(())
             }
+            Self::Keychain { .. } => Err(InputError::SecretReference),
         }
     }
     pub fn kind(&self) -> &'static str {
@@ -116,11 +120,16 @@ impl Transport {
         match self {
             Self::Stdio { command, args, env } => {
                 command_syntax(command)?;
-                if args.len() > ALLOWED_ARGS.len()
-                    || args.iter().any(|a| !ALLOWED_ARGS.contains(&a.as_str()))
-                    || args.iter().collect::<BTreeSet<_>>().len() != args.len()
-                    || env.len() > MAX_REFS
-                    || env.iter().any(|r| !r.valid())
+                if args.iter().any(|a| !ALLOWED_ARGS.contains(&a.as_str())) {
+                    return Err(InputError::SecretLiteral);
+                }
+                if env.len() > MAX_REFS {
+                    return Err(InputError::TooLarge);
+                }
+                for reference in env {
+                    reference.validate()?;
+                }
+                if args.iter().collect::<BTreeSet<_>>().len() != args.len()
                     || env.windows(2).any(|w| w[0] >= w[1])
                 {
                     return Err(InputError::Usage);
@@ -128,13 +137,21 @@ impl Transport {
             }
             Self::Http { url, headers } => {
                 url_syntax(url)?;
-                if headers.len() > MAX_REFS
-                    || headers
-                        .iter()
-                        .any(|h| !header_name(&h.header) || !h.value.valid())
-                    || headers.windows(2).any(|w| {
-                        w[0].header.to_ascii_lowercase() >= w[1].header.to_ascii_lowercase()
-                    })
+                if headers.len() > MAX_REFS {
+                    return Err(InputError::TooLarge);
+                }
+                for h in headers {
+                    if h.header.contains([' ', ':']) || token_like(&h.header) {
+                        return Err(InputError::SecretLiteral);
+                    }
+                    if !header_name(&h.header) {
+                        return Err(InputError::SecretReference);
+                    }
+                    h.value.validate()?;
+                }
+                if headers
+                    .windows(2)
+                    .any(|w| w[0].header.to_ascii_lowercase() >= w[1].header.to_ascii_lowercase())
                 {
                     return Err(InputError::Usage);
                 }
@@ -212,8 +229,8 @@ impl Catalog {
             }
         }
         for s in &self.servers {
-            if ProfileName::parse_new(s.name.as_str()).is_err()
-                || s.switches.len() > MAX_PROFILES
+            server_name(s.name.as_str())?;
+            if s.switches.len() > MAX_PROFILES
                 || s.switches.iter().any(|w| w.profile_id.get() == 0)
                 || s.switches
                     .windows(2)
@@ -294,6 +311,69 @@ fn high_entropy(value: &str) -> bool {
         })
 }
 
+fn credential_component(part: &str) -> bool {
+    let lower = part.to_ascii_lowercase();
+    if [
+        "sk-",
+        "sk_",
+        "ghp_",
+        "gho_",
+        "ghs_",
+        "ghu_",
+        "ghr_",
+        "github_pat_",
+        "glpat-",
+        "xoxb-",
+        "xoxa-",
+        "xoxp-",
+        "xoxr-",
+        "xoxs-",
+        "-----begin",
+    ]
+    .iter()
+    .any(|prefix| lower.starts_with(prefix))
+        || lower == "bearer"
+        || lower
+            .strip_prefix("bearer")
+            .is_some_and(|s| s.starts_with([' ', '-', '_', '.']))
+    {
+        return true;
+    }
+    let base64url = |b: u8| b.is_ascii_alphanumeric() || b"-_".contains(&b);
+    if part.starts_with("eyJ")
+        && part
+            .split('.')
+            .take(3)
+            .filter(|s| s.len() >= 8 && s.bytes().all(base64url))
+            .count()
+            == 3
+    {
+        return true;
+    }
+    part.split('.').any(|segment| {
+        if segment.len() == 36
+            && segment.split('-').map(str::len).eq([8, 4, 4, 4, 12])
+            && segment.bytes().all(|b| b == b'-' || b.is_ascii_hexdigit())
+        {
+            return false;
+        }
+        let body = segment.trim_end_matches('=');
+        let aws = body.len() == 20
+            && matches!(&body.as_bytes()[..4], b"AKIA" | b"ASIA")
+            && body
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+        let google = body.len() == 39 && body.starts_with("AIza") && body.bytes().all(base64url);
+        let base64 = body.len() >= 20
+            && segment.len() - body.len() <= 2
+            && body.bytes().all(|b| base64url(b) || b == b'+')
+            && body.bytes().any(|b| b.is_ascii_lowercase())
+            && body.bytes().any(|b| b.is_ascii_uppercase())
+            && (segment.ends_with('=') || body.bytes().any(|b| !b.is_ascii_alphabetic()));
+        aws || google || base64
+    })
+}
+
 fn command_syntax(command: &str) -> Result<(), InputError> {
     if command.is_empty() || command.len() > MAX_COMMAND_BYTES {
         return Err(InputError::Usage);
@@ -322,9 +402,10 @@ fn command_syntax(command: &str) -> Result<(), InputError> {
         if part.is_empty() || part == "." || part == ".." {
             return Err(InputError::Usage);
         }
-        // Native config readers expand `$`/`%`; refuse rather than let a path
-        // become an environment reference. No token/entropy heuristic applies
-        // to paths: real install paths contain GUID and hash components.
+        if credential_component(part) {
+            return Err(InputError::SecretLiteral);
+        }
+        // Keep native config readers from expanding an environment reference.
         if part.contains(['$', '%']) {
             return Err(InputError::Usage);
         }
@@ -394,45 +475,25 @@ pub fn transport(
     url: Option<&str>,
     header_refs: &[String],
 ) -> Result<Transport, InputError> {
-    match (command, url) {
+    let transport = match (command, url) {
         (Some(command), None) => {
             if !header_refs.is_empty() {
                 return Err(InputError::Usage);
             }
-            command_syntax(command)?;
-            for arg in args {
-                if !ALLOWED_ARGS.contains(&arg.as_str()) {
-                    // Arbitrary literals are refused whatever they look like.
-                    return Err(InputError::SecretLiteral);
-                }
-            }
-            if args.iter().collect::<BTreeSet<_>>().len() != args.len() {
-                return Err(InputError::Usage);
-            }
-            if env_refs.len() > MAX_REFS {
-                return Err(InputError::TooLarge);
-            }
-            let mut env = Vec::new();
-            for value in env_refs {
-                env.push(env_reference(value)?);
-            }
+            let mut env: Vec<_> = env_refs
+                .iter()
+                .map(|name| SecretRef::Env { name: name.clone() })
+                .collect();
             env.sort();
-            if env.windows(2).any(|w| w[0] == w[1]) {
-                return Err(InputError::Usage);
-            }
-            Ok(Transport::Stdio {
+            Transport::Stdio {
                 command: command.into(),
                 args: args.to_vec(),
                 env,
-            })
+            }
         }
         (None, Some(url)) => {
             if !args.is_empty() || !env_refs.is_empty() {
                 return Err(InputError::Usage);
-            }
-            url_syntax(url)?;
-            if header_refs.len() > MAX_REFS {
-                return Err(InputError::TooLarge);
             }
             let mut headers = Vec::new();
             for value in header_refs {
@@ -443,38 +504,24 @@ pub fn transport(
                         InputError::SecretReference
                     });
                 };
-                if !header_name(header) {
-                    return Err(if header.contains([' ', ':']) || token_like(header) {
-                        InputError::SecretLiteral
-                    } else {
-                        InputError::SecretReference
-                    });
-                }
-                if token_like(header) {
-                    return Err(InputError::SecretLiteral);
-                }
                 headers.push(HeaderRef {
                     header: header.into(),
-                    value: env_reference(env)?,
+                    value: SecretRef::Env { name: env.into() },
                 });
             }
             headers.sort_by_key(|h| h.header.to_ascii_lowercase());
-            if headers
-                .windows(2)
-                .any(|w| w[0].header.eq_ignore_ascii_case(&w[1].header))
-            {
-                return Err(InputError::Usage);
-            }
-            Ok(Transport::Http {
+            Transport::Http {
                 url: url.into(),
                 headers,
-            })
+            }
         }
-        _ => Err(InputError::Usage),
-    }
+        _ => return Err(InputError::Usage),
+    };
+    transport.validate()?;
+    Ok(transport)
 }
 
-fn env_reference(value: &str) -> Result<SecretRef, InputError> {
+fn validate_env(value: &str) -> Result<(), InputError> {
     // `NAME=value`, spaces, `${...}` or token-shaped text are literal values.
     if value.contains(['=', ' ', ':', '$']) || token_like(value) {
         return Err(InputError::SecretLiteral);
@@ -482,7 +529,7 @@ fn env_reference(value: &str) -> Result<SecretRef, InputError> {
     if !env_name(value) {
         return Err(InputError::SecretReference);
     }
-    Ok(SecretRef::Env { name: value.into() })
+    Ok(())
 }
 
 /// A command must name an existing local regular file. Only metadata is read.
@@ -493,8 +540,11 @@ pub fn command_exists(command: &str) -> Result<(), InputError> {
     }
 }
 
-pub fn name_ambiguous(name: &str) -> bool {
-    token_like(name)
+pub fn server_name(name: &str) -> Result<ProfileName, InputError> {
+    if token_like(name) {
+        return Err(InputError::SecretLiteral);
+    }
+    ProfileName::parse_new(name).map_err(|_| InputError::Usage)
 }
 
 // ---------------------------------------------------------------------------

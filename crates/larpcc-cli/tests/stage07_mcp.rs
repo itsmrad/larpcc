@@ -387,6 +387,98 @@ fn stage07_matrix_cli_parse_shapes_exit_2_without_echo() {
 }
 
 #[test]
+fn stage07_secrets_human_parse_errors_hide_split_values() {
+    let f = common::Fixture::new();
+    let exe = command_file(&f);
+    let split_value = "SyntheticSplitValue0123456789";
+    for args in [
+        vec![
+            "cc",
+            "mcp",
+            "add",
+            "files",
+            "--url",
+            "https://docs.example.com/mcp",
+            "--header-ref",
+            "Authorization=Bearer",
+            split_value,
+        ],
+        vec![
+            "--expected-revision",
+            "0",
+            "cc",
+            "mcp",
+            "add",
+            "files",
+            "--command",
+            &exe,
+            "--env-ref",
+            "FILES_TOKEN=",
+            split_value,
+        ],
+    ] {
+        let out = f.run(&args, 2);
+        assert_eq!(
+            common::stderr(&out),
+            "error: Invalid command or arguments.\n"
+        );
+    }
+    assert!(!f.root.exists());
+}
+
+#[test]
+fn stage07_secrets_command_paths_refuse_credential_shapes_before_writes() {
+    let f = common::Fixture::new();
+    for shape in [
+        "Sk-AnT-invented",
+        "Sk_Invented",
+        "GhP_invented",
+        "gHo_invented",
+        "gHs_invented",
+        "gHu_invented",
+        "gHr_invented",
+        "GITHUB_PAT_invented",
+        "XoxB-invented",
+        "xoxa-invented",
+        "xoxp-invented",
+        "xoxr-invented",
+        "xoxs-invented",
+        "GlPaT-invented",
+        "AKIA0123456789ABCDEF",
+        "ASIA0123456789ABCDEF",
+        "AIza0123456789ABCDEFGHIJKLMNOPQRSTUVWXY",
+        "eyJhbGciOiJub25lIn0.abcdefgh.ijklmnop",
+        "Bearer",
+        "bEaReR invented",
+        "-----BEGIN INVENTED KEY-----",
+        "InventedSecretValue9xQ7",
+        "AbCdEfGhIjKlMnOpQrSt==",
+    ] {
+        let dir = f.temp.path().join(shape);
+        common::create_directory(&dir);
+        let nested = dir.join("server.exe");
+        let basename = f.temp.path().join(format!("{shape}.exe"));
+        for path in [nested, basename] {
+            common::create_file(&path, b"synthetic\n");
+            let argv = [
+                "cc",
+                "mcp",
+                "add",
+                "files",
+                "--command",
+                path.to_str().unwrap(),
+            ];
+            let human = f.run(&argv, 1);
+            assert!(!common::stderr(&human).contains(shape));
+            let reply = request(&f, &[argv.as_slice(), &["--json"]].concat(), 1);
+            assert_eq!(reply["error"]["code"], "secret_literal", "{shape}");
+            assert!(!reply.to_string().contains(shape));
+            assert!(!f.root.exists());
+        }
+    }
+}
+
+#[test]
 fn stage07_secrets_cli_refuses_literals_and_references_with_zero_secret_bytes() {
     let f = common::Fixture::new();
     let exe = command_file(&f);
@@ -535,6 +627,24 @@ fn stage07_secrets_cli_refuses_literals_and_references_with_zero_secret_bytes() 
                 "files",
                 "--command",
                 missing.to_str().unwrap(),
+                "--expected-revision",
+                "0",
+                "--json",
+            ],
+            1,
+        )["error"]["code"],
+        "conflict"
+    );
+    assert_eq!(
+        request(
+            &f,
+            &[
+                "cc",
+                "mcp",
+                "add",
+                "files",
+                "--command",
+                missing.to_str().unwrap(),
                 "--json"
             ],
             1
@@ -548,13 +658,12 @@ fn stage07_secrets_cli_refuses_literals_and_references_with_zero_secret_bytes() 
         assert!(hits.is_empty(), "{hits:?}");
     }
     // GUID/hash path components are ordinary install paths and are accepted.
-    let guid_dir = f.temp.path().join("4bbdac98-b7d0-457c-9168-fb946cea1607");
+    let guid_dir = f.temp.path().join("4BbdAC98-B7D0-457c-9168-fb946cea1607");
     common::create_directory(&guid_dir);
-    let guid_exe = guid_dir.join(if cfg!(windows) {
-        "server.exe"
-    } else {
-        "server"
-    });
+    let hash_dir = guid_dir.join("0123456789abcdfghijklmnpqrsvwxyz");
+    common::create_directory(&hash_dir);
+    let hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let guid_exe = hash_dir.join(format!("{hex}.exe"));
     common::create_file(&guid_exe, b"synthetic\n");
     let guid_exe = guid_exe.to_str().unwrap().to_owned();
     let accepted = request(
@@ -571,6 +680,16 @@ fn stage07_secrets_cli_refuses_literals_and_references_with_zero_secret_bytes() 
         0,
     );
     assert_eq!(accepted["data"]["name"], "guided");
+    request(
+        &f,
+        &["cc", "mcp", "enable", "guided", "claude-work", "--json"],
+        0,
+    );
+    let rendered: Value = serde_json::from_slice(
+        &fs::read(f.root.join("profiles/1/cli/larp-mcp/claude.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rendered["mcpServers"]["guided__p1"]["command"], guid_exe);
     request(&f, &["cc", "mcp", "remove", "guided", "--json"], 0);
     // A valid reference definition stores and renders names only.
     request(

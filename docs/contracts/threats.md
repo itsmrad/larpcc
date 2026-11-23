@@ -30,3 +30,18 @@ implementation and per-file coverage before merge; no review pass claimed here.
 Stale GUI intent: require `--expected-revision` on GUI mutation/open requests,
 checked under the resolution lock before effects. Name reuse after rename must
 fail with conflict; internal post-resolution revalidation alone is insufficient.
+
+MCP command admission checks each path component on add, catalog load and
+journal replay. Case-insensitive markers are `sk-` (including `sk-ant-`), `sk_`,
+`ghp_`, `gho_`, `ghs_`, `ghu_`, `ghr_`, `github_pat_`, `glpat-`,
+`xoxa-`, `xoxb-`, `xoxp-`, `xoxr-`, `xoxs-`, `-----begin`, and `Bearer`
+as a component or followed by a space, hyphen, underscore or dot. It also
+refuses uppercase `AKIA` or `ASIA` followed by 16 uppercase letters or digits,
+`AIza` followed by 35 base64url characters, and JWT-shaped names beginning
+`eyJ` with three dot-separated base64url segments of at least eight characters.
+A dot-delimited base64 or base64url segment is refused when it has 20 or more
+characters, both letter cases, and a digit, `+`, `-`, `_`, or trailing
+padding. The base64 shape allows up to two trailing padding characters.
+Standard 8-4-4-4-12 hex GUIDs and lowercase hex and Nix base32 hashes can be used
+in command paths. The finite shape list leaves other secret formats possible,
+so callers must provide only known non-secret paths.

@@ -3,7 +3,7 @@ Remove a definition, its switches and its renders
 Usage: larp cc mcp remove [OPTIONS] <NAME>
 
 Arguments:
-  <NAME>  
+  <NAME>  Server name
 
 Options:
       --json                                   Emit one local metadata JSON envelope

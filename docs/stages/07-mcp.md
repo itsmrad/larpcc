@@ -36,9 +36,13 @@ render refuses unsupported references. No `security`/keyring invocation.
 Allow command paths and arguments only through a reviewed non-secret adapter
 field allowlist; initial --arg values are exactly `--stdio` or `--transport=stdio`; all others
 refuse until a reviewed adapter amendment. Commands are validated absolute local
-file paths, never inline shell/program text. Do not pretend
-a regex recognizes secrets. Unsupported token-like/high-entropy/ambiguous values
-refuse `secret_literal` without echo. Initial URL permits https origin and exactly `/mcp` or `/sse` path only, no
+file paths, checked component by component on add, catalog load and journal
+replay. The [credential shape list](../contracts/threats.md) covers known API
+token prefixes, AWS and Google key forms, Bearer markers, JWTs and mixed-case
+base64-shaped segments of 20 or more characters. GUID, Nix base32 and
+lowercase hex hash components remain valid. On add, ambiguous values refuse
+`secret_literal` without echo. Invalid persisted definitions require recovery.
+Initial URL permits https origin and exactly `/mcp` or `/sse` path only, no
 percent-encoded credentials or other components; loopback http requires a later
 reviewed adapter. Names/hosts are not arbitrary secret carriers: ambiguous values
 refuse, and no secret-detection completeness claim is made. Env-ref identifiers
@@ -65,8 +69,12 @@ independent native lifecycle qualification. Claude OAuth scope remains unknown.
 Render pure plan from one snapshot, max 1 MiB/catalog, 256 servers, 256 profiles,
 1 MiB per render, 16 MiB total transaction. Preflight all files and manifest hashes
 and privacy, journal then atomic per-file replace+fsync; commit snapshot and clear
-journal only after all manifests consistent. Crash blocks consumers until explicit
-`mcp sync` recovery; stale revision or drift refuses, never overwrites edits.
+journal only after the final manifest matches the render identities and hashes
+on disk. Recovery verifies completed and unchanged renders before replay writes.
+A combined profile update stores MCP intent in the skills journal and atomically
+hands off to the MCP journal after skills commits. If interrupted, finish the
+current journal owner with `skills sync` or `mcp sync` as appropriate. Stale
+revision or drift refuses and leaves any existing journal pending.
 Revalidate at launch, no stale renders, no implicit repair on list/doctor/launch.
 See [threats](../contracts/threats.md); preserve stage-3 config/admission refusals
 until exact renderer+args+secret-reference amendment independently reviewed.

@@ -28,20 +28,29 @@ pub enum McpCommand {
         header_refs: Vec<String>,
     },
     /// Remove a definition, its switches and its renders
-    Remove { name: ProfileName },
+    Remove {
+        /// Server name
+        name: ProfileName,
+    },
     /// Enable a server for one profile or for all profiles
     Enable {
+        /// Server name
         name: ProfileName,
+        /// Target profile
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         profile: Option<ProfileName>,
+        /// Apply to all profiles
         #[arg(long)]
         all: bool,
     },
     /// Disable a server for one profile or for all profiles
     Disable {
+        /// Server name
         name: ProfileName,
+        /// Target profile
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         profile: Option<ProfileName>,
+        /// Apply to all profiles
         #[arg(long)]
         all: bool,
     },

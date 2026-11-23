@@ -578,8 +578,8 @@ pub(super) fn mutate_checked(
             serialize(&data)?
         };
         // MCP prepares without effects first, so its drift refuses before any commit.
-        let mcp = super::mcp::profile_prepare(root, &data)?;
-        if super::skills::profile_commit(root, &data, &mut registry_lock, expected)? {
+        let mut mcp = super::mcp::profile_prepare(root, &data)?;
+        if super::skills::profile_commit(root, &data, &mut registry_lock, expected, &mut mcp)? {
             applied = true;
         }
         if super::mcp::profile_apply(root, &data, mcp, &mut registry_lock, expected)? {

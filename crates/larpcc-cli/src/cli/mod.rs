@@ -253,7 +253,7 @@ pub fn run() -> ExitCode {
             || a.to_str()
                 .is_some_and(|s| s.starts_with("--expected-revision="))
     });
-    let cli = match Cli::try_parse_from(args) {
+    let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(mut error) => {
             use clap::error::ErrorKind;
@@ -282,6 +282,12 @@ pub fn run() -> ExitCode {
                     return json_success(command, None, data);
                 }
                 return json_error("parse", "usage", "Invalid command or arguments.", 2);
+            }
+            if !informational
+                && error.kind() != ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                && is_mcp_invocation(&args)
+            {
+                return json_or_usage(false, "parse", "usage", "Invalid command or arguments.");
             }
             escape_error_values(&mut error);
             if !error.use_stderr() {
@@ -405,6 +411,31 @@ pub fn run() -> ExitCode {
         ),
         Err(error) => operational_error(error),
     }
+}
+
+fn is_mcp_invocation(args: &[std::ffi::OsString]) -> bool {
+    let mut args = args.iter().skip(1);
+    let mut commands = ["cc", "mcp"].into_iter();
+    while let Some(arg) = args.next() {
+        if arg == "--expected-revision" {
+            args.next();
+            continue;
+        }
+        if arg == "--json"
+            || arg
+                .to_str()
+                .is_some_and(|s| s.starts_with("--expected-revision="))
+        {
+            continue;
+        }
+        if commands.next().is_none_or(|command| arg != command) {
+            return false;
+        }
+        if commands.len() == 0 {
+            return true;
+        }
+    }
+    false
 }
 
 // Clap echoes user values independently of the domain parser's escaped message.

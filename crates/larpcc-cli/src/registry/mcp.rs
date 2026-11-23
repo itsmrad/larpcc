@@ -115,7 +115,7 @@ impl Step {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Journal {
+pub(super) struct Journal {
     version: u64,
     kind: String,
     before_registry: String,
@@ -606,6 +606,61 @@ fn remove_render(
     Ok(())
 }
 
+fn verify_progress(root: &Path, data: &store::Data, j: &Journal) -> Result<(), Error> {
+    let mut expected = j.before_manifest.clone();
+    for step in &j.steps[..j.next] {
+        match step {
+            Step::Render {
+                profile_id,
+                provider,
+                sha256,
+                len,
+            } => {
+                let owned = j
+                    .manifest
+                    .find(*profile_id)
+                    .ok_or(Error::RecoveryRequired)?;
+                if owned.provider != *provider || owned.sha256 != *sha256 || owned.len != *len {
+                    return Err(Error::RecoveryRequired);
+                }
+                expected.upsert(owned.clone());
+            }
+            Step::Remove { profile_id, .. } => {
+                expected.entries.retain(|o| o.profile_id != *profile_id);
+                let dir = render_dir(root, *profile_id);
+                let _ancestors = platform::anchor(&dir)?;
+                if platform::inspect(&dir, ObjectKind::Directory)?.is_some() {
+                    return Err(Error::Drift);
+                }
+            }
+        }
+    }
+    if expected != j.manifest {
+        return Err(Error::RecoveryRequired);
+    }
+    let pending: BTreeSet<_> = j.steps[j.next..].iter().map(Step::id).collect();
+    for o in &j.manifest.entries {
+        if !pending.contains(&o.profile_id) && !verify_owned(root, o, false)? {
+            return Err(Error::Drift);
+        }
+    }
+    for p in &data.profiles {
+        if !pending.contains(&p.id) && j.manifest.find(p.id).is_none() {
+            let dir = render_dir(root, p.id);
+            let _ancestors = platform::anchor(&dir)?;
+            if platform::inspect(&dir, ObjectKind::Directory)?.is_some()
+                && fs::read_dir(&dir)
+                    .map_err(|e| paths::io("read MCP render directory", &dir, e))?
+                    .next()
+                    .is_some()
+            {
+                return Err(Error::Drift);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn apply(root: &Path, j: &mut Journal) -> Result<(), Error> {
     let after = store::parse(Path::new("registry.json"), j.after_registry.as_bytes())?;
     while j.next < j.steps.len() {
@@ -637,6 +692,7 @@ fn apply(root: &Path, j: &mut Journal) -> Result<(), Error> {
         fault("step")?;
     }
     validate(&j.after_catalog, &j.manifest, &after)?;
+    verify_progress(root, &after, j)?;
     for p in &after.profiles {
         let want = desired(&j.after_catalog, p)?.map(|b| digest(&b));
         if want.as_deref() != j.manifest.find(p.id).map(|o| o.sha256.as_str()) {
@@ -652,7 +708,11 @@ fn apply(root: &Path, j: &mut Journal) -> Result<(), Error> {
     fault("catalog")?;
     write_atomic(root, MANIFEST, &bounded(&j.manifest, store::LIMIT)?)?;
     fault("manifest")?;
-    if j.before_registry != j.after_registry {
+    let registry = store::serialize(&store::load_unchecked(root)?)?;
+    if registry != j.after_registry.as_bytes() {
+        if registry != j.before_registry.as_bytes() {
+            return Err(Error::Conflict);
+        }
         let mut applied = false;
         let mut tmp = false;
         store::persist(root, j.after_registry.as_bytes(), &mut applied, &mut tmp)?;
@@ -669,17 +729,40 @@ fn begin(
     before: &store::Data,
     after: &store::Data,
     before_catalog: Catalog,
-    mut catalog: Catalog,
+    catalog: Catalog,
     manifest: Manifest,
     steps: Vec<Step>,
 ) -> Result<(), Error> {
+    let mut j = prepare_journal(
+        root,
+        before,
+        after,
+        before_catalog,
+        catalog,
+        manifest,
+        steps,
+    )?;
+    publish(root, &j)?;
+    apply(root, &mut j)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_journal(
+    root: &Path,
+    before: &store::Data,
+    after: &store::Data,
+    before_catalog: Catalog,
+    mut catalog: Catalog,
+    manifest: Manifest,
+    steps: Vec<Step>,
+) -> Result<Journal, Error> {
     catalog.revision = after.revision;
     // Every persisted snapshot and public view must fit before intent is published.
     view(root, false, after, &catalog, &manifest)?;
     view(root, true, after, &catalog, &manifest)?;
     bounded(&catalog, model::MAX_CATALOG_BYTES)?;
     bounded(&manifest, store::LIMIT)?;
-    let mut j = Journal {
+    let j = Journal {
         version: 1,
         kind: "mcp".into(),
         before_registry: String::from_utf8(store::serialize(before)?)
@@ -693,16 +776,17 @@ fn begin(
         steps,
         next: 0,
     };
-    write_atomic(root, JOURNAL, &bounded(&j, JOURNAL_LIMIT)?)?;
-    fault("journal")?;
-    apply(root, &mut j)
+    verify_progress(root, after, &j)?;
+    bounded(&j, JOURNAL_LIMIT)?;
+    Ok(j)
 }
 
-fn recover(root: &Path, current: &store::Data) -> Result<(), Error> {
-    let bytes = read_file(&root.join(JOURNAL), JOURNAL_LIMIT)?
-        .ok_or(Error::RecoveryRequired)?
-        .0;
-    let mut j: Journal = decode(&bytes)?;
+pub(super) fn publish(root: &Path, j: &Journal) -> Result<(), Error> {
+    write_atomic(root, JOURNAL, &bounded(j, JOURNAL_LIMIT)?)?;
+    fault("journal")
+}
+
+fn validate_journal(j: &Journal, current: &store::Data) -> Result<store::Data, Error> {
     if j.version != 1
         || j.kind != "mcp"
         || j.next > j.steps.len()
@@ -728,6 +812,7 @@ fn recover(root: &Path, current: &store::Data) -> Result<(), Error> {
         }
     }
     validate(&j.after_catalog, &j.manifest, &union)?;
+    let mut ids = BTreeSet::new();
     for step in &j.steps {
         let ok = match step {
             Step::Render {
@@ -751,10 +836,50 @@ fn recover(root: &Path, current: &store::Data) -> Result<(), Error> {
                 .find(*profile_id)
                 .is_some_and(|o| o.provider == *provider),
         };
-        if !ok {
+        if !ok || !ids.insert(step.id()) {
             return Err(Error::RecoveryRequired);
         }
     }
+    Ok(after)
+}
+
+pub(super) fn validate_continuation(
+    root: &Path,
+    j: &Journal,
+    before: &store::Data,
+    after: &store::Data,
+) -> Result<(), Error> {
+    if j.next != 0
+        || j.before_registry.as_bytes() != store::serialize(before)?
+        || j.after_registry.as_bytes() != store::serialize(after)?
+    {
+        return Err(Error::RecoveryRequired);
+    }
+    validate_journal(j, before)?;
+    preflight(root, before, &j.before_manifest)?;
+    verify_progress(root, after, j)
+}
+
+pub(super) fn resume(
+    root: &Path,
+    revision: u64,
+    expected: Option<u64>,
+    lock: store::RegistryLock,
+) -> Result<store::RegistryLock, Error> {
+    let bytes = read_file(&root.join(JOURNAL), JOURNAL_LIMIT)?
+        .ok_or(Error::RecoveryRequired)?
+        .0;
+    if decode::<JournalKind>(&bytes)?.kind != "mcp" {
+        return Err(Error::RecoveryRequired);
+    }
+    let mut j: Journal = decode(&bytes)?;
+    let current = store::load_unchecked(root)?;
+    let after = validate_journal(&j, &current)?;
+    let (lock, _guards) = guarded_relock(root, revision, expected, &j.steps, lock)?;
+    if read_file(&root.join(JOURNAL), JOURNAL_LIMIT)?.map(|(b, _)| b) != Some(bytes) {
+        return Err(Error::Conflict);
+    }
+    verify_progress(root, &after, &j)?;
     for (name, old, new, limit) in [
         (
             CATALOG,
@@ -776,7 +901,8 @@ fn recover(root: &Path, current: &store::Data) -> Result<(), Error> {
             }
         }
     }
-    apply(root, &mut j)
+    apply(root, &mut j)?;
+    Ok(lock)
 }
 
 #[cfg(test)]
@@ -816,17 +942,11 @@ fn add_input(
     url: Option<&str>,
     header_refs: &[String],
 ) -> Result<(super::ProfileName, model::Transport), Error> {
-    if model::name_ambiguous(name) {
-        return Err(Error::SecretLiteral);
-    }
-    let name = super::ProfileName::parse_new(name).map_err(|_| Error::McpInvalid)?;
+    let name = model::server_name(name)?;
     let command = command
         .map(|c| c.to_str().ok_or(Error::McpInvalid))
         .transpose()?;
     let transport = model::transport(command, args, env_refs, url, header_refs)?;
-    if let Some(command) = command {
-        model::command_exists(command)?;
-    }
     Ok((name, transport))
 }
 
@@ -879,28 +999,15 @@ impl Registry {
             if !matches!(action, McpAction::Sync) {
                 return Err(Error::RecoveryRequired);
             }
-            let bytes = read_file(&self.root().join(JOURNAL), JOURNAL_LIMIT)?
-                .ok_or(Error::RecoveryRequired)?
-                .0;
-            // Each owner resumes only its own journal kind.
-            if decode::<JournalKind>(&bytes)?.kind != "mcp" {
-                return Err(Error::RecoveryRequired);
-            }
-            let journal: Journal = decode(&bytes)?;
-            let (_lock, _guards) = guarded_relock(
-                self.root(),
-                data.revision,
-                self.expected,
-                &journal.steps,
-                lock,
-            )?;
-            let current = store::load_unchecked(self.root())?;
-            recover(self.root(), &current)?;
+            let _lock = resume(self.root(), data.revision, self.expected, lock)?;
             data = store::load_unchecked(self.root())?;
             self.observed.set(Some(data.revision));
             return Ok(receipt(true, None, None, &[]));
         }
         store::require_v3(&data)?;
+        if let Some((_, model::Transport::Stdio { command, .. })) = &input {
+            model::command_exists(command)?;
+        }
         if data
             .profiles
             .iter()
@@ -1128,20 +1235,9 @@ pub(super) fn has_profile_references(
             .any(|p| p.id == id && catalog.servers.iter().any(|s| raw(&catalog, s, p))))
 }
 
-/// Prepared profile-hook plan; computed without effects.
-pub(super) struct ProfilePlan {
-    before_revision: u64,
-    before_catalog: Catalog,
-    catalog: Catalog,
-    manifest: Manifest,
-    steps: Vec<Step>,
-}
 /// Pure preparation for a profile add/rename/forget/surface commit `after`.
 /// Call before any other hook commits so that drift refuses without effects.
-pub(super) fn profile_prepare(
-    root: &Path,
-    after: &store::Data,
-) -> Result<Option<ProfilePlan>, Error> {
+pub(super) fn profile_prepare(root: &Path, after: &store::Data) -> Result<Option<Journal>, Error> {
     let before = store::load_unchecked(root)?;
     let (old, manifest) = load(root, &before)?;
     if old.servers.is_empty() && manifest.entries.is_empty() {
@@ -1153,52 +1249,44 @@ pub(super) fn profile_prepare(
     if steps.is_empty() && same_catalog(&catalog, &old) {
         return Ok(None);
     }
-    Ok(Some(ProfilePlan {
-        before_revision: before.revision,
-        before_catalog: old,
-        catalog,
-        manifest,
-        steps,
-    }))
+    prepare_journal(root, &before, after, old, catalog, manifest, steps).map(Some)
 }
-/// Apply a prepared plan. When an earlier hook already committed `after`
-/// (skills), only the MCP catalog/renders change; otherwise the MCP journal
-/// also commits the registry. Returns whether `after` is now committed.
+
 pub(super) fn profile_apply(
     root: &Path,
     after: &store::Data,
-    plan: Option<ProfilePlan>,
+    journal: Option<Journal>,
     lock: &mut Option<store::RegistryLock>,
     expected: Option<u64>,
 ) -> Result<bool, Error> {
-    let Some(plan) = plan else {
-        return Ok(false);
-    };
-    let current = store::load_unchecked(root)?;
-    let committed = store::serialize(&current)? == store::serialize(after)?;
-    if !committed && current.revision != plan.before_revision {
-        return Err(Error::Conflict);
+    if let Some(mut j) = journal {
+        let before = store::load(root)?;
+        let (registry_lock, _guards) = guarded_relock(
+            root,
+            before.revision,
+            expected,
+            &j.steps,
+            lock.take().ok_or(Error::RecoveryRequired)?,
+        )?;
+        *lock = Some(registry_lock);
+        store::load(root)?;
+        validate_continuation(root, &j, &before, after)?;
+        publish(root, &j)?;
+        apply(root, &mut j)?;
+        return Ok(true);
     }
-    let (registry_lock, _guards) = guarded_relock(
-        root,
-        current.revision,
-        if committed { None } else { expected },
-        &plan.steps,
-        lock.take().ok_or(Error::RecoveryRequired)?,
-    )?;
-    *lock = Some(registry_lock);
-    store::load(root)?;
-    preflight(root, &current, &plan.manifest)?;
-    begin(
-        root,
-        &current,
-        after,
-        plan.before_catalog,
-        plan.catalog,
-        plan.manifest,
-        plan.steps,
-    )?;
-    Ok(true)
+    // The skills hook has already committed the registry and published MCP intent.
+    if crate::share::pending(root) {
+        fault("handoff")?;
+        *lock = Some(resume(
+            root,
+            after.revision,
+            None,
+            lock.take().ok_or(Error::RecoveryRequired)?,
+        )?);
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -2071,9 +2159,11 @@ mod tests {
 
     #[test]
     fn stage07_recovery_after_skills_commit_each_boundary_resumes() {
-        // Skills commits the registry first; MCP then journals only catalog + renders.
+        // Skills commits with MCP intent already durable in the shared journal.
         for phase in [
+            "skills-registry",
             "journal",
+            "handoff",
             "render_create",
             "render_write",
             "render_fsync",
@@ -2094,7 +2184,11 @@ mod tests {
             f.add_stdio("files").unwrap();
             f.registry.mcp(McpAction::SyncAll(true)).unwrap();
             let before = store::load(f.root()).unwrap().revision;
-            set_fault(Some(phase));
+            if phase == "skills-registry" {
+                super::super::skills::set_fault(Some("registry"));
+            } else {
+                set_fault(Some(phase));
+            }
             assert!(
                 f.registry
                     .add(name("claude-work"), Provider::Claude)
@@ -2102,12 +2196,29 @@ mod tests {
                 "{phase}"
             );
             set_fault(None);
+            super::super::skills::set_fault(None);
             // The skills transaction already committed the profile.
             let committed = store::load_unchecked(f.root()).unwrap();
             assert_eq!(committed.revision, before + 1, "{phase}");
             assert!(f.root().join("profiles/1/cli/skills/example").exists());
             assert!(crate::share::pending(f.root()), "{phase}");
             assert!(matches!(f.registry.list(), Err(Error::RecoveryRequired)));
+            if phase == "skills-registry" {
+                assert!(matches!(
+                    f.registry.mcp(McpAction::Sync),
+                    Err(Error::RecoveryRequired)
+                ));
+                f.registry
+                    .skills(super::super::skills::SkillsAction::Sync)
+                    .unwrap();
+            }
+            if matches!(phase, "skills-registry" | "journal" | "handoff") {
+                let journal: Journal = decode(&fs::read(f.root().join(JOURNAL)).unwrap()).unwrap();
+                assert_eq!(journal.kind, "mcp");
+                assert_eq!(journal.next, 0);
+                assert!(!f.render(1, Provider::Claude).exists());
+                assert!(crate::share::pending(f.root()));
+            }
             f.registry.mcp(McpAction::Sync).unwrap();
             assert!(!crate::share::pending(f.root()));
             assert_eq!(
@@ -2119,5 +2230,108 @@ mod tests {
             assert_eq!(f.list()["servers"][0]["state"], "ok", "{phase}");
             assert_eq!(f.list()["servers"][0]["switches"][0]["enabled"], true);
         }
+    }
+
+    #[test]
+    fn stage07_recovery_completed_and_unchanged_render_drift_blocks_remaining_steps() {
+        let f = fixture();
+        for (profile, provider) in [
+            ("claude-work", Provider::Claude),
+            ("codex-45", Provider::Codex),
+            ("claude-two", Provider::Claude),
+        ] {
+            f.registry.add(name(profile), provider).unwrap();
+        }
+        f.add_stdio("files").unwrap();
+        f.switch("files", Some("claude-work"), true).unwrap();
+        let before = store::load(f.root()).unwrap().revision;
+        set_fault(Some("step"));
+        assert!(matches!(
+            f.switch("files", None, true),
+            Err(Error::RecoveryRequired)
+        ));
+        set_fault(None);
+        let journal_path = f.root().join(JOURNAL);
+        let journal = fs::read(&journal_path).unwrap();
+        let pending = f.render(3, Provider::Claude);
+        for path in [f.render(1, Provider::Claude), f.render(2, Provider::Codex)] {
+            let original = fs::read(&path).unwrap();
+            fs::write(&path, b"synthetic drift").unwrap();
+            assert!(matches!(f.registry.mcp(McpAction::Sync), Err(Error::Drift)));
+            assert_eq!(fs::read(&journal_path).unwrap(), journal);
+            assert_eq!(store::load_unchecked(f.root()).unwrap().revision, before);
+            assert!(!pending.exists());
+            fs::write(path, original).unwrap();
+        }
+        f.registry.mcp(McpAction::Sync).unwrap();
+        assert!(pending.is_file());
+        assert!(!crate::share::pending(f.root()));
+    }
+
+    #[test]
+    fn stage07_secrets_catalog_and_journal_refuse_the_same_ambiguous_definitions() {
+        let f = fixture();
+        f.registry
+            .add(name("claude-work"), Provider::Claude)
+            .unwrap();
+        f.add_url("docs", "https://docs.example.com/mcp").unwrap();
+        let catalog_path = f.root().join(CATALOG);
+        let catalog = f.catalog();
+        let mutations = [
+            ("/name", json!("sk-invented")),
+            (
+                "/transport/headers/0/header",
+                json!("InventedSecretValue9xQ7"),
+            ),
+            (
+                "/transport/headers/0/value/name",
+                json!("InventedSecretValue9xQ7"),
+            ),
+            (
+                "/transport",
+                json!({
+                    "kind": "stdio",
+                    "command": Path::new(&f.command).with_file_name("InventedSecretValue9xQ7.exe"),
+                    "args": [],
+                    "env": []
+                }),
+            ),
+        ];
+        for (field, value) in &mutations {
+            let mut forged = catalog.clone();
+            *forged["servers"][0].pointer_mut(field).unwrap() = value.clone();
+            fs::write(&catalog_path, serde_json::to_vec(&forged).unwrap()).unwrap();
+            assert!(matches!(
+                f.registry.mcp(McpAction::List),
+                Err(Error::RecoveryRequired)
+            ));
+            assert!(!crate::share::pending(f.root()));
+        }
+        fs::write(&catalog_path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+        set_fault(Some("journal"));
+        assert!(matches!(
+            f.switch("docs", None, true),
+            Err(Error::RecoveryRequired)
+        ));
+        set_fault(None);
+        let journal_path = f.root().join(JOURNAL);
+        let original = fs::read(&journal_path).unwrap();
+        for (field, value) in mutations {
+            for side in ["before_catalog", "after_catalog"] {
+                let mut forged: Value = decode(&original).unwrap();
+                *forged[side]["servers"][0].pointer_mut(field).unwrap() = value.clone();
+                let bytes = serde_json::to_vec(&forged).unwrap();
+                fs::write(&journal_path, &bytes).unwrap();
+                assert!(matches!(
+                    f.registry.mcp(McpAction::Sync),
+                    Err(Error::RecoveryRequired)
+                ));
+                assert_eq!(fs::read(&journal_path).unwrap(), bytes);
+                assert!(!f.render(1, Provider::Claude).exists());
+            }
+        }
+        fs::write(&journal_path, original).unwrap();
+        f.registry.mcp(McpAction::Sync).unwrap();
+        assert!(f.render(1, Provider::Claude).is_file());
     }
 }
