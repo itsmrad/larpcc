@@ -83,10 +83,15 @@ date — refresh” and the pace line does too. The panel shows only its own
 feedback (a failed desktop launch reads “Couldn’t open Claude.app.”) and the
 usage error. Other notices stay in the Settings window.
 
-On macOS 26 the cards are Liquid Glass. They sit 8 pt inside the panel with
-8 pt corners, concentric with the 16 pt panel corners. Earlier macOS versions
-and Reduce Transparency use an opaque card with a hairline edge. Increase
-Contrast adds a firm border. The panel is 360 pt wide and fits its content up
+The panel is drawn like the Settings window, so the two read as one app. Its
+background is the same translucent window material as the Settings page (the
+wallpaper tints it; Reduce Transparency makes it opaque). Each card is drawn
+like a Settings form section: a faint fill with 12 pt corners, with its rows
+(name and freshness, the meters, the reset credits) split by inset
+separators. Provider names are bold section titles, rows use the Settings
+fonts, and the footer items are plain menu items with the accent highlight.
+A selected card gets an outline, never a tint. Increase Contrast adds a firm
+border. The panel is 360 pt wide and fits its content up
 to 80% of the visible height of its own screen, then the cards scroll. The
 header, notices and footer are measured, and even the first layout is held to
 that height. The window resizes as cards expand.
@@ -95,8 +100,7 @@ Use ↑/↓ to move between cards, card actions and footer rows. Return opens
 the highlighted card’s profile in Settings or activates the highlighted action.
 VoiceOver offers “Show in Settings” directly on each card. Mouse and keyboard
 share one selection. It stays when the pointer leaves a row, so Return still
-acts on it, and it clears when its row goes away. The selection draws above
-the card fill, so it shows on opaque cards too. Esc closes the panel, and the
+acts on it, and it clears when its row goes away. Esc closes the panel, and the
 next click on the item opens it again.
 ⌘R refreshes, even with the Settings window open; ⌘, opens Settings; and ⌘Q
 quits. Nothing is highlighted or expanded when the panel opens.
@@ -122,8 +126,9 @@ bar, and `--menubar-panel-accessibility` renders with Increase Contrast and
 Reduce Transparency. `--menubar-screen-height=<pt>` stands in for a short
 display (in the snapshot and in live debug runs), and `--menubar-notice=<text>`
 adds a notice, so overflow can be checked offscreen: the footer always stays
-whole, the header comes next, and the cards get what is left. Snapshots draw
-opaque cards because glass needs a live window. Release builds exclude the snapshot hook. Capture the live panel there
+whole, the header comes next, and the cards get what is left. Snapshots cannot
+draw the window material, so they use the Settings page colour sampled on
+macOS 26. Release builds exclude the snapshot hook. Capture the live panel there
 with `screencapture -x -o -l <windowID>`. Link debug builds the way
 `scripts/bundle.sh` does (`-Xlinker -platform_version …`); otherwise macOS
 draws the app in its compatibility style with small window corners.

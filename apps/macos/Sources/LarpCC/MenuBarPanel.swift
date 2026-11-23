@@ -85,14 +85,14 @@ private struct StatusRing: View {
 
 // MARK: - Panel
 
-/// The panel window's corner radius on macOS 26 (measured from the menu bar window),
-/// and the inset of the cards inside it. Cards are concentric: radius − inset.
+/// The panel follows the Settings window: profile cards are drawn like its grouped form
+/// sections (12 pt corners, measured from Settings), and the footer like menu items.
 private enum PanelMetrics {
-    static let radius: CGFloat = 16
     static let inset: CGFloat = 8
-    static let cardRadius = radius - inset
-    /// Footer rows sit 4 pt inside their card.
-    static let rowRadius = cardRadius - 4
+    static let cardRadius: CGFloat = 12
+    /// Menu items sit 5 pt inside the panel with a 6 pt highlight.
+    static let menuInset: CGFloat = 5
+    static let menuRowRadius: CGFloat = 6
 }
 
 struct MenuBarPanel: View {
@@ -103,7 +103,6 @@ struct MenuBarPanel: View {
     var snapshotSelectedID: String? = nil
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
     @AppStorage(UsagePreferences.consentKey) private var consented = false
     @FocusState private var hasKeyboardFocus: Bool
@@ -147,7 +146,6 @@ struct MenuBarPanel: View {
         return items + [.settings, .quit]
     }
     /// Glass needs a live window; the offscreen snapshot and Reduce Transparency use opaque cards.
-    private var glass: Bool { !isSnapshot && !reduceTransparency }
     private var highlighted: Item? {
         let item = isSnapshot ? snapshotSelectedID.map(Item.profile) : selection
         return item.flatMap { items.contains($0) ? $0 : nil }
@@ -164,7 +162,6 @@ struct MenuBarPanel: View {
             .clipped()
             list.padding(.horizontal, PanelMetrics.inset)
             footer
-                .padding(PanelMetrics.inset)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
         }
         .frame(width: 360)
@@ -173,7 +170,15 @@ struct MenuBarPanel: View {
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { panelHeight = $0 }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(panelBackground)
+        .background {
+            // The Settings page's own translucent material, so the wallpaper shows through the
+            // panel the same way (opaque with Reduce Transparency). Snapshots use a sampled colour.
+            if isSnapshot {
+                panelSnapshotBackground
+            } else {
+                MenuBarMaterial(material: .windowBackground).accessibilityHidden(true)
+            }
+        }
         .background {
             if !isSnapshot {
                 // PanelStack already holds the panel to the screen limit, except for the footer's
@@ -348,16 +353,17 @@ struct MenuBarPanel: View {
                     Text(emptyMessage)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(12)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .panelCard(highlighted: false, glass: glass)
+                        .panelCard(highlighted: false)
                 }
                 ForEach(groups, id: \.provider) { group in
+                    // Section titles like the Settings form's ("System", "Usage").
                     Text(group.provider.title)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 2)
+                        .font(.headline)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 6)
                         .padding(.bottom, -2)
                         .accessibilityAddTraits(.isHeader)
                     ForEach(group.profiles) { profile in
@@ -401,7 +407,7 @@ struct MenuBarPanel: View {
                 }
             }
         }
-        .panelCard(highlighted: highlighted == item, glass: glass)
+        .panelCard(highlighted: highlighted == item)
     }
 
     private func detailButton(_ item: Item, title: String, enabled: Bool) -> some View {
@@ -424,8 +430,10 @@ struct MenuBarPanel: View {
 
     // MARK: Footer
 
+    /// Plain menu items after a separator, as in any menu.
     private var footer: some View {
         VStack(spacing: 0) {
+            Divider().padding(.horizontal, 10).padding(.top, PanelMetrics.inset).padding(.bottom, 5)
             menuRow(.refresh, title: store.usageLoading ? "Updating Usage…" : "Refresh", shortcut: "⌘R",
                     enabled: canRefresh)
             menuRow(.settings, title: "LarpCC Settings…", shortcut: "⌘,")
@@ -433,24 +441,29 @@ struct MenuBarPanel: View {
             menuRow(.quit, title: "Quit LarpCC", shortcut: "⌘Q")
                 .keyboardShortcut("q", modifiers: .command)
         }
-        .padding(4)
-        .panelCard(highlighted: false, glass: glass)
+        .padding([.horizontal, .bottom], PanelMetrics.menuInset)
     }
 
     private func menuRow(_ item: Item, title: String, shortcut: String, enabled: Bool = true) -> some View {
-        Button { activate(item) } label: {
+        // The system menu highlight: the accent colour with light text.
+        let selected = highlighted == item
+        let text = Color(nsColor: .alternateSelectedControlTextColor)
+        return Button { activate(item) } label: {
             HStack {
                 Text(title)
                 Spacer()
-                Text(shortcut).foregroundStyle(.secondary).accessibilityHidden(true)
+                Text(shortcut)
+                    .foregroundStyle(selected ? AnyShapeStyle(text) : AnyShapeStyle(.secondary))
+                    .accessibilityHidden(true)
             }
             .font(.system(size: 13))
-            .padding(.horizontal, 8)
-            .frame(height: 26)
+            .foregroundStyle(selected ? text : .primary)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
             .opacity(enabled ? 1 : 0.45)
             .background {
-                RoundedRectangle(cornerRadius: PanelMetrics.rowRadius, style: .continuous)
-                    .fill(Color.primary.opacity(highlighted == item ? 0.08 : 0))
+                RoundedRectangle(cornerRadius: PanelMetrics.menuRowRadius, style: .continuous)
+                    .fill(selected ? Color(nsColor: .selectedContentBackgroundColor) : .clear)
             }
             .contentShape(Rectangle())
         }
@@ -565,42 +578,60 @@ private struct MenuBarWindowSizer: NSViewRepresentable {
 // MARK: - Cards
 
 private extension View {
-    /// A floating card inset from the panel edge, like the Settings sidebar: Liquid Glass on
-    /// macOS 26, an opaque fill with a hairline otherwise. Corners are concentric with the panel.
-    func panelCard(highlighted: Bool, glass: Bool) -> some View {
-        modifier(PanelCard(highlighted: highlighted, glass: glass))
+    /// A profile card drawn like a Settings form section: a faint fill with 12 pt corners.
+    /// The selection is an outline, as Settings groups never tint.
+    func panelCard(highlighted: Bool) -> some View {
+        modifier(PanelCard(highlighted: highlighted))
     }
 }
 
 private struct PanelCard: ViewModifier {
     let highlighted: Bool
-    let glass: Bool
     @Environment(\.colorSchemeContrast) private var contrast
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
         let strong = contrast == .increased
-        let card = content
-            .background {
-                ZStack {
-                    shape.fill(cardLift)
-                    // The selection sits above the fill, so it also shows on opaque cards.
-                    if highlighted { shape.fill(Color.primary.opacity(0.08)) }
-                }
-            }
+        content
+            .background(shape.fill(Color.primary.opacity(0.03)))
             .overlay {
                 if highlighted {
-                    shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : 0.3), lineWidth: strong ? 2 : 1)
+                    shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : 0.35), lineWidth: strong ? 2 : 1)
                 } else if strong {
                     shape.strokeBorder(Color.primary.opacity(0.5), lineWidth: 1)
                 }
             }
-        if #available(macOS 26, *), glass {
-            card.glassEffect(.regular, in: shape)
-        } else {
-            card.overlay(shape.strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
-        }
     }
+}
+
+/// Rows inside a card, split by separators inset like the Settings form's.
+private struct CardRow<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CardSeparator: View {
+    var body: some View { Divider().padding(.horizontal, 10) }
+}
+
+private struct MenuBarMaterial: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) { nsView.material = material }
 }
 
 private func isDark(_ appearance: NSAppearance) -> Bool {
@@ -609,15 +640,10 @@ private func isDark(_ appearance: NSAppearance) -> Bool {
     return match == .darkAqua || match == .accessibilityHighContrastDarkAqua
 }
 
-/// Behind the cards: the dark window background, or a soft grey in light mode
-/// (the light window background is nearly white and would swallow the cards).
-private let panelBackground = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? .windowBackgroundColor : NSColor(white: 0.925, alpha: 1)
-})
-
-/// Cards sit a step lighter than the panel in both appearances, like the Settings sidebar.
-private let cardLift = Color(nsColor: NSColor(name: nil) { appearance in
-    NSColor.white.withAlphaComponent(isDark(appearance) ? 0.08 : 0.8)
+/// Offscreen snapshots cannot draw the material; they use the Settings page colour sampled
+/// over a desktop on macOS 26 (dark: lightly tinted by the wallpaper).
+private let panelSnapshotBackground = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? NSColor(srgbRed: 0.106, green: 0.129, blue: 0.137, alpha: 1) : .white
 })
 
 // MARK: - Profile card
@@ -633,36 +659,44 @@ private struct MenuBarProfileSummary: View {
     private var kinds: [UsageWindowKind] { UsageWindowKind.allCases.filter { $0.window(in: report) != nil } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                ProfileRing(provider: profile.provider, session: report?.fiveHour)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(profile.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+        // Rows like a Settings form section: title and description, then the meters, then credits.
+        VStack(alignment: .leading, spacing: 0) {
+            CardRow {
+                HStack(spacing: 10) {
+                    ProfileRing(provider: profile.provider, session: report?.fiveHour)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile.name).font(.system(size: 13)).lineLimit(1)
+                        Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                        .accessibilityHidden(true)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(expanded ? 180 : 0))
-                    .accessibilityHidden(true)
             }
             if !kinds.isEmpty {
-                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 5) {
-                    ForEach(kinds, id: \.self) { kind in
-                        if let window = kind.window(in: report) {
-                            meterRow(kind, window)
+                CardSeparator()
+                CardRow {
+                    Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
+                        ForEach(kinds, id: \.self) { kind in
+                            if let window = kind.window(in: report) {
+                                meterRow(kind, window)
+                            }
                         }
                     }
+                    .font(.system(size: 11))
                 }
-                .font(.system(size: 11))
             }
+            CardSeparator()
             // Reset credits always show, whatever else the card has.
-            Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            CardRow {
+                Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
@@ -727,17 +761,19 @@ private struct MenuBarProfileDetail<Actions: View>: View {
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
+        VStack(alignment: .leading, spacing: 0) {
             if !paces.isEmpty {
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
-                    ForEach(paces, id: \.kind) { line("\($0.kind.title) pace", $0.text) }
+                CardSeparator()
+                CardRow {
+                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
+                        ForEach(paces, id: \.kind) { line("\($0.kind.title) pace", $0.text) }
+                    }
+                    .font(.system(size: 11))
                 }
-                .font(.system(size: 11))
             }
-            HStack(spacing: 6) { actions() }
+            CardSeparator()
+            CardRow { HStack(spacing: 6) { actions() } }
         }
-        .padding([.horizontal, .bottom], 12)
     }
 
     /// Pace as of the sample's capture time.
@@ -830,7 +866,8 @@ private extension UsageLevel {
 /// cards, so text uses a deeper red (4.5:1 or better) and the meter and ring a slightly
 /// deeper one (3:1 or better, also on a selected card).
 private let criticalTextRed = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
+    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1)
+                       : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
 })
 private let criticalGraphicRed = Color(nsColor: NSColor(name: nil) { appearance in
     isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.843, green: 0, blue: 0.082, alpha: 1)
