@@ -18,6 +18,7 @@ struct LarpCCApp: App {
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
+                .themed()
                 .onAppear { fitWindowOnScreen() }
         }
         .defaultSize(width: 900, height: 680)
@@ -33,8 +34,10 @@ struct LarpCCApp: App {
         }
         MenuBarExtra(isInserted: MenuBarDockPolicy.insertion($menuBarShown)) {
             MenuBarPanel(store: store)
+                .themed()
         } label: {
             MenuBarLabel(store: store)
+                .themed()
         }
         .menuBarExtraStyle(.window)
     }

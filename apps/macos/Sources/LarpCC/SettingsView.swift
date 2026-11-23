@@ -68,20 +68,10 @@ struct SettingsView: View {
     @State private var search = ""
     @State private var confirmingStop = false
     @AppStorage(PreferenceKey.appearance) private var appearance = AppearanceMode.system.rawValue
+    @Environment(\.theme) private var theme
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 300)
-        } detail: {
-            detail
-                // Minimum on the detail column, not the split view: a split-view
-                // minimum makes the detail snap instead of resizing as the sidebar slides in.
-                .frame(minWidth: 460, minHeight: 480)
-                .navigationTitle(title)
-                .toolbar { toolbar }
-                .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
-        }
+        split
         .task { store.startRefresh(); store.scheduleLiveRefresh() }
         .confirmationDialog("Stop this change?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("Stop", role: .destructive) { store.cancel() }
@@ -115,6 +105,40 @@ struct SettingsView: View {
     }
 
     // MARK: Sidebar
+
+    /// Tahoe: the system split view with its floating glass sidebar. Sequoia and Sonoma: an
+    /// edge-to-edge sidebar on the sidebar material with a hairline, as those releases drew it.
+    @ViewBuilder
+    private var split: some View {
+        if theme.tokens.floatingSidebar {
+            NavigationSplitView {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 300)
+            } detail: {
+                detailColumn
+            }
+        } else {
+            HStack(spacing: 0) {
+                sidebar
+                    .scrollContentBackground(.hidden)
+                    .frame(width: 230)
+                    .background(SidebarMaterial().ignoresSafeArea())
+                Divider().ignoresSafeArea()
+                detailColumn.background(classicPageBackground.ignoresSafeArea())
+            }
+            .modifier(ClearToolbar())
+        }
+    }
+
+    private var detailColumn: some View {
+        detail
+            // Minimum on the detail column, not the split view: a split-view
+            // minimum makes the detail snap instead of resizing as the sidebar slides in.
+            .frame(minWidth: 460, minHeight: 480)
+            .navigationTitle(title)
+            .toolbar { toolbar }
+            .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
+    }
 
     /// Shows the profile the menu bar asked for. Without metadata the request waits for it;
     /// a profile that no longer exists drops the request.
@@ -161,7 +185,8 @@ struct SettingsView: View {
             }
         }
         .listStyle(.sidebar)
-        .searchable(text: $search, placement: .sidebar, prompt: "Search")
+        .environment(\.sidebarRowSize, theme.tokens.sidebarRowSize)
+        .modifier(SidebarSearch(text: $search, inSidebarSplit: theme.tokens.floatingSidebar))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: store.isFixture ? "testtube.2" : "terminal")
@@ -233,6 +258,10 @@ struct SettingsView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        if !theme.tokens.floatingSidebar {
+            // Starts the navigation controls and title past the edge-to-edge sidebar.
+            SidebarWidthSpacer()
+        }
         ToolbarItem(placement: .navigation) {
             ControlGroup {
                 Button { move(back: true) } label: { Label("Back", systemImage: "chevron.left") }
@@ -333,3 +362,91 @@ private struct ProfileSidebarRow: View {
         .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
     }
 }
+
+/// The pre-glass sidebar material, edge to edge under the title bar.
+private struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// The system search field sits in the sidebar only inside a split view; elsewhere LarpCC
+/// puts a native search field at the top of the sidebar, as earlier releases did.
+private struct SidebarSearch: ViewModifier {
+    @Binding var text: String
+    let inSidebarSplit: Bool
+
+    func body(content: Content) -> some View {
+        if inSidebarSplit {
+            content.searchable(text: $text, placement: .sidebar, prompt: "Search")
+        } else {
+            content.safeAreaInset(edge: .top, spacing: 0) {
+                SearchField(text: $text)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 6)
+                    .padding(.bottom, 4)
+            }
+        }
+    }
+}
+
+private struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = "Search"
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        func controlTextDidChange(_ notification: Notification) {
+            text.wrappedValue = (notification.object as? NSSearchField)?.stringValue ?? ""
+        }
+    }
+}
+
+/// Lets the edge-to-edge sidebar run up under the title bar, as it did before Liquid Glass.
+private struct ClearToolbar: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.toolbarBackground(.hidden, for: .windowToolbar)
+        } else {
+            content
+        }
+    }
+}
+
+private struct SidebarWidthSpacer: ToolbarContent {
+    var body: some ToolbarContent {
+        if #available(macOS 26, *) {
+            ToolbarItem(placement: .navigation) { spacer }.sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .navigation) { spacer }
+        }
+    }
+
+    private var spacer: some View {
+        Color.clear.frame(width: 140, height: 1).accessibilityHidden(true)
+    }
+}
+
+/// The pre-Tahoe page background: light grey in light mode, as those releases drew windows.
+private let classicPageBackground = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .windowBackgroundColor : NSColor(white: 0.925, alpha: 1)
+})

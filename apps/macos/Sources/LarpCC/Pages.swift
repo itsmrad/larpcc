@@ -6,8 +6,16 @@ import LarpModel
 struct GeneralPage: View {
     @ObservedObject var store: AppStore
     @Binding var appearance: String
+    @AppStorage(ThemeChoice.key) private var theme = ThemeChoice.automatic.rawValue
     @State private var binding: BindTarget?
     @State private var confirmation: Confirmation?
+
+    private var themeNote: String {
+        if ThemePreference.launchOverride != nil { return "Set by a launch option for this session." }
+        let native = Theme.native(osMajor: ThemePreference.osMajor).title
+        return "Automatic matches this Mac (\(native)). Restyles the sidebar, forms and menu bar panel; "
+            + "window frames, title bars and the menu bar follow macOS."
+    }
 
     var body: some View {
         Form {
@@ -21,6 +29,18 @@ struct GeneralPage: View {
                     }
                 }
                 .disabled(AppearanceMode.launchOverride != nil)
+                Picker(selection: $theme) {
+                    ForEach(ThemeChoice.allCases, id: \.self) { choice in
+                        let available = choice.isAvailable(osMajor: ThemePreference.osMajor)
+                        Text(available ? choice.title : "\(choice.title) — Requires macOS 26")
+                            .tag(choice.rawValue)
+                            .selectionDisabled(!available)
+                    }
+                } label: {
+                    Text("Theme")
+                    Text(themeNote)
+                }
+                .disabled(ThemePreference.launchOverride != nil)
             }
 
             UsageSettingsSection(store: store)
@@ -83,7 +103,7 @@ struct GeneralPage: View {
             }
             .disabled(store.snapshot == nil)
         }
-        .formStyle(.grouped)
+        .themedFormStyle()
         .bindSheet($binding, store: store)
         .confirming($confirmation, store: store)
     }
@@ -182,7 +202,7 @@ struct CatalogPage: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .themedFormStyle()
         .confirming($confirmation, store: store)
     }
 
@@ -316,7 +336,7 @@ struct AliasesPage: View {
                 Text("New Alias")
             }
         }
-        .formStyle(.grouped)
+        .themedFormStyle()
         .confirming($confirmation, store: store)
     }
 
@@ -375,7 +395,7 @@ struct DesktopAppsPage: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .themedFormStyle()
         .bindSheet($binding, store: store)
     }
 
@@ -428,6 +448,6 @@ struct AboutPage: View {
                 Label { Text("No background activity or login items") } icon: { Image(systemName: "moon.zzz").frame(width: 20) }
             }
         }
-        .formStyle(.grouped)
+        .themedFormStyle()
     }
 }

@@ -7,6 +7,7 @@ import LarpModel
 /// One ring per provider: the session left, with the provider mark inside and the percent beside it.
 struct MenuBarLabel: View {
     @ObservedObject var store: AppStore
+    @Environment(\.theme) private var theme
     @AppStorage(MenuBarPreferences.modeKey) private var mode = MenuBarMode.tightest.rawValue
     @AppStorage(MenuBarPreferences.codexProfileKey) private var codexProfileID = ""
     @AppStorage(MenuBarPreferences.claudeProfileKey) private var claudeProfileID = ""
@@ -17,7 +18,8 @@ struct MenuBarLabel: View {
         let profiles = store.snapshot?.profiles ?? []
         let rings = Self.rings(store, codexProfileID: codexProfileID, claudeProfileID: claudeProfileID)
         Group {
-            if mode != MenuBarMode.icon.rawValue, !rings.isEmpty, let image = Self.templateImage(rings) {
+            if mode != MenuBarMode.icon.rawValue, !rings.isEmpty,
+               let image = Self.templateImage(rings, weight: theme.tokens.statusWeight) {
                 Image(nsImage: image)
             } else {
                 Image(systemName: MenuBarSummary.symbolName(leftPercent:
@@ -39,13 +41,13 @@ struct MenuBarLabel: View {
         }
     }
 
-    @MainActor static func templateImage(_ rings: [Ring]) -> NSImage? {
+    @MainActor static func templateImage(_ rings: [Ring], weight: Font.Weight) -> NSImage? {
         let content = HStack(spacing: 7) {
             ForEach(rings.indices, id: \.self) { index in
                 HStack(spacing: 3) {
                     StatusRing(provider: rings[index].provider, left: rings[index].left)
                     Text("\(Int(rings[index].left.rounded()))%")
-                        .font(.system(size: 12, weight: .medium).monospacedDigit())
+                        .font(.system(size: 12, weight: weight).monospacedDigit())
                         .foregroundStyle(.black)
                 }
             }
@@ -85,16 +87,6 @@ private struct StatusRing: View {
 
 // MARK: - Panel
 
-/// The panel window's corner radius on macOS 26 (measured from the menu bar window),
-/// and the inset of the cards inside it. Cards are concentric: radius − inset.
-private enum PanelMetrics {
-    static let radius: CGFloat = 16
-    static let inset: CGFloat = 8
-    static let cardRadius = radius - inset
-    /// Footer rows sit 4 pt inside their card.
-    static let rowRadius = cardRadius - 4
-}
-
 struct MenuBarPanel: View {
     @ObservedObject var store: AppStore
     /// Offscreen render for the debug snapshot hook: no scrolling, no focus.
@@ -103,6 +95,7 @@ struct MenuBarPanel: View {
     var snapshotSelectedID: String? = nil
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
     @AppStorage(UsagePreferences.consentKey) private var consented = false
@@ -148,6 +141,7 @@ struct MenuBarPanel: View {
     }
     /// Glass needs a live window; the offscreen snapshot and Reduce Transparency use opaque cards.
     private var glass: Bool { !isSnapshot && !reduceTransparency }
+    private var tokens: ThemeTokens { theme.tokens }
     private var highlighted: Item? {
         let item = isSnapshot ? snapshotSelectedID.map(Item.profile) : selection
         return item.flatMap { items.contains($0) ? $0 : nil }
@@ -160,11 +154,16 @@ struct MenuBarPanel: View {
                 notices
             }
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { headerHeight = $0 }
-            VStack(spacing: PanelMetrics.inset) {
+            VStack(spacing: tokens.footerInCard ? tokens.cardInset : 0) {
                 list
-                footer.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
+                VStack(spacing: 0) {
+                    // Classic menus: the footer items follow a separator instead of sitting in a card.
+                    if !tokens.footerInCard { Divider().padding(.horizontal, 7).padding(.vertical, 5) }
+                    footer
+                }
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
             }
-            .padding([.horizontal, .bottom], PanelMetrics.inset)
+            .padding([.horizontal, .bottom], tokens.cardInset)
         }
         .frame(width: 360)
         // The menu bar window keeps the size of its first layout, so it is resized
@@ -172,7 +171,13 @@ struct MenuBarPanel: View {
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { panelHeight = $0 }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(panelBackground)
+        .background {
+            if tokens.panelMaterial && !isSnapshot {
+                MenuBarMaterial().accessibilityHidden(true)
+            } else {
+                tokens.panelMaterial ? Color(nsColor: .windowBackgroundColor) : panelBackground
+            }
+        }
         .background {
             if !isSnapshot {
                 MenuBarWindowSizer(height: min(panelHeight, maxPanelHeight)) { if screenHeight != $0 { screenHeight = $0 } }
@@ -299,7 +304,7 @@ struct MenuBarPanel: View {
                 ScrollView { content }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(height: maxListHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: tokens.cardRadius, style: .continuous))
                     .onChange(of: selection) { _, item in
                         if let item { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(item) } }
                     }
@@ -323,18 +328,18 @@ struct MenuBarPanel: View {
 
     /// What is left for the cards once the measured header, notices and footer are placed.
     private var maxListHeight: CGFloat {
-        max(120, maxPanelHeight - headerHeight - footerHeight - 2 * PanelMetrics.inset)
+        max(120, maxPanelHeight - headerHeight - footerHeight - 2 * tokens.cardInset)
     }
 
     /// One card per profile, grouped under provider labels.
     private var profileList: some View {
         TimelineView(.everyMinute) { context in
-            VStack(alignment: .leading, spacing: PanelMetrics.inset) {
+            VStack(alignment: .leading, spacing: tokens.cardSpacing) {
                 if groups.isEmpty {
                     Text(emptyMessage)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(12)
+                        .padding(tokens.cardPadding)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .panelCard(highlighted: false, glass: glass)
                 }
@@ -342,11 +347,15 @@ struct MenuBarPanel: View {
                     Text(group.provider.title)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 2)
-                        .padding(.bottom, -2)
+                        .padding(.horizontal, tokens.cardPadding)
+                        .padding(.top, tokens.card == .flat ? 6 : 2)
+                        .padding(.bottom, tokens.card == .flat ? 0 : -2)
                         .accessibilityAddTraits(.isHeader)
-                    ForEach(group.profiles) { profile in
+                    ForEach(Array(group.profiles.enumerated()), id: \.element.id) { index, profile in
+                        // Flat cards are split by hairlines, like menu sections.
+                        if tokens.card == .flat, index > 0 {
+                            Divider().padding(.horizontal, tokens.cardPadding)
+                        }
                         profileCard(profile, now: context.date)
                     }
                 }
@@ -419,24 +428,32 @@ struct MenuBarPanel: View {
             menuRow(.quit, title: "Quit LarpCC", shortcut: "⌘Q")
                 .keyboardShortcut("q", modifiers: .command)
         }
-        .padding(4)
-        .panelCard(highlighted: false, glass: glass)
+        .padding(tokens.footerInCard ? 4 : 0)
+        .modifier(FooterCard(inCard: tokens.footerInCard, glass: glass))
     }
 
     private func menuRow(_ item: Item, title: String, shortcut: String, enabled: Bool = true) -> some View {
-        Button { activate(item) } label: {
+        let selected = highlighted == item
+        // Classic menus highlight with the accent colour; Tahoe with a quiet fill.
+        let accent = tokens.accentMenuHighlight && selected
+        return Button { activate(item) } label: {
             HStack {
                 Text(title)
                 Spacer()
-                Text(shortcut).foregroundStyle(.secondary).accessibilityHidden(true)
+                Text(shortcut)
+                    .foregroundStyle(accent ? AnyShapeStyle(Color(nsColor: .alternateSelectedControlTextColor))
+                                            : AnyShapeStyle(.secondary))
+                    .accessibilityHidden(true)
             }
             .font(.system(size: 13))
-            .padding(.horizontal, 8)
-            .frame(height: 26)
+            .foregroundStyle(accent ? Color(nsColor: .alternateSelectedControlTextColor) : .primary)
+            .padding(.horizontal, tokens.footerInCard ? 8 : 9)
+            .frame(height: tokens.footerInCard ? 26 : 24)
             .opacity(enabled ? 1 : 0.45)
             .background {
-                RoundedRectangle(cornerRadius: PanelMetrics.rowRadius, style: .continuous)
-                    .fill(Color.primary.opacity(highlighted == item ? 0.08 : 0))
+                RoundedRectangle(cornerRadius: tokens.menuRowRadius, style: .continuous)
+                    .fill(accent ? Color(nsColor: .selectedContentBackgroundColor)
+                                 : Color.primary.opacity(selected ? 0.08 : 0))
             }
             .contentShape(Rectangle())
         }
@@ -522,8 +539,8 @@ private struct MenuBarWindowSizer: NSViewRepresentable {
 // MARK: - Cards
 
 private extension View {
-    /// A floating card inset from the panel edge, like the Settings sidebar: Liquid Glass on
-    /// macOS 26, an opaque fill with a hairline otherwise. Corners are concentric with the panel.
+    /// A profile card in the theme's style. Tahoe: a floating Liquid Glass card, concentric with
+    /// the panel (opaque with a hairline without glass). Sequoia: a flat row. Sonoma: a widget tile.
     func panelCard(highlighted: Bool, glass: Bool) -> some View {
         modifier(PanelCard(highlighted: highlighted, glass: glass))
     }
@@ -533,31 +550,58 @@ private struct PanelCard: ViewModifier {
     let highlighted: Bool
     let glass: Bool
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.theme) private var theme
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
+        let tokens = theme.tokens
+        let shape = RoundedRectangle(cornerRadius: tokens.cardRadius, style: .continuous)
         let strong = contrast == .increased
+        let boxed = tokens.card != .flat
         let card = content
             .background {
                 ZStack {
-                    shape.fill(cardLift)
+                    if boxed { shape.fill(tokens.card == .widget ? widgetFill : cardLift) }
                     // The selection sits above the fill, so it also shows on opaque cards.
                     if highlighted { shape.fill(Color.primary.opacity(0.08)) }
                 }
+                .shadow(color: .black.opacity(tokens.card == .widget ? 0.12 : 0), radius: 2, y: 1)
             }
             .overlay {
-                if highlighted {
+                if highlighted && (boxed || strong) {
                     shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : 0.3), lineWidth: strong ? 2 : 1)
-                } else if strong {
+                } else if strong && boxed {
                     shape.strokeBorder(Color.primary.opacity(0.5), lineWidth: 1)
                 }
             }
-        if #available(macOS 26, *), glass {
+        if #available(macOS 26, *), glass, tokens.card == .glass {
             card.glassEffect(.regular, in: shape)
         } else {
-            card.overlay(shape.strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+            card.overlay(shape.strokeBorder(Color.primary.opacity(boxed ? 0.1 : 0), lineWidth: 0.5))
         }
     }
+}
+
+/// Tahoe keeps its footer items in a card of their own; classic menus list them plainly.
+private struct FooterCard: ViewModifier {
+    let inCard: Bool
+    let glass: Bool
+
+    func body(content: Content) -> some View {
+        if inCard { content.panelCard(highlighted: false, glass: glass) } else { content }
+    }
+}
+
+/// The classic menu material behind the Sequoia and Sonoma panels.
+private struct MenuBarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .menu
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 private func isDark(_ appearance: NSAppearance) -> Bool {
@@ -577,6 +621,11 @@ private let cardLift = Color(nsColor: NSColor(name: nil) { appearance in
     NSColor.white.withAlphaComponent(isDark(appearance) ? 0.08 : 0.8)
 })
 
+/// Sonoma widget tiles on the menu material.
+private let widgetFill = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? NSColor.white.withAlphaComponent(0.07) : NSColor.white.withAlphaComponent(0.6)
+})
+
 // MARK: - Profile card
 
 /// The always-visible part of a card: ring, name, freshness and one meter line per usage window.
@@ -586,6 +635,7 @@ private struct MenuBarProfileSummary: View {
     let source: UsageSource
     let now: Date
     let expanded: Bool
+    @Environment(\.theme) private var theme
 
     private var kinds: [UsageWindowKind] { UsageWindowKind.allCases.filter { $0.window(in: report) != nil } }
 
@@ -619,7 +669,7 @@ private struct MenuBarProfileSummary: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
-        .padding(12)
+        .padding(theme.tokens.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
@@ -682,6 +732,7 @@ private struct MenuBarProfileDetail<Actions: View>: View {
     let report: UsageReport?
     let now: Date
     @ViewBuilder let actions: () -> Actions
+    @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -694,7 +745,7 @@ private struct MenuBarProfileDetail<Actions: View>: View {
             }
             HStack(spacing: 6) { actions() }
         }
-        .padding([.horizontal, .bottom], 12)
+        .padding([.horizontal, .bottom], theme.tokens.cardPadding)
     }
 
     /// Pace as of the sample's capture time.

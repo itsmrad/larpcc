@@ -36,6 +36,7 @@ struct IconTile: View {
     let symbol: String
     let color: Color
     var size: CGFloat = 20
+    @Environment(\.theme) private var theme
 
     var body: some View {
         Image(systemName: symbol)
@@ -44,11 +45,11 @@ struct IconTile: View {
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(
-                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                RoundedRectangle(cornerRadius: size * theme.tokens.iconTileRadius, style: .continuous)
                     .fill(color.gradient)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
+                RoundedRectangle(cornerRadius: size * theme.tokens.iconTileRadius, style: .continuous)
                     .strokeBorder(.black.opacity(0.08), lineWidth: 0.5)
             )
             .accessibilityHidden(true)

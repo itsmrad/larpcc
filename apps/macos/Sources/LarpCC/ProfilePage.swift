@@ -106,7 +106,7 @@ struct ProfilePage: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .themedFormStyle()
         .sheet(isPresented: $renaming) { RenameProfileSheet(store: store, profile: profile) }
         .bindSheet($binding, store: store)
         .confirming($confirmation, store: store)

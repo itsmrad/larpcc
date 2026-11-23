@@ -184,7 +184,7 @@ enum MenuBarSnapshot {
 
     @MainActor private static func renderStatus(_ store: AppStore, to path: String) -> Bool {
         let rings = MenuBarLabel.rings(store, codexProfileID: "", claudeProfileID: "")
-        guard let image = MenuBarLabel.templateImage(rings) else { return false }
+        guard let image = MenuBarLabel.templateImage(rings, weight: ThemePreference.current.tokens.statusWeight) else { return false }
         func bar(_ dark: Bool) -> some View {
             Image(nsImage: image).renderingMode(.template)
                 .foregroundStyle(dark ? Color.white : Color.black.opacity(0.85))
@@ -219,7 +219,8 @@ enum MenuBarSnapshot {
                                                             snapshotSelectedID: selected)
             .environment(\.colorScheme, dark ? .dark : .light)
             .environment(\._colorSchemeContrast, accessible ? .increased : .standard)
-            .environment(\._accessibilityReduceTransparency, accessible))
+            .environment(\._accessibilityReduceTransparency, accessible)
+            .environment(\.theme, ThemePreference.current))
         renderer.scale = 2
         var png: Data?
         let name: NSAppearance.Name = accessible ? (dark ? .accessibilityHighContrastDarkAqua : .accessibilityHighContrastAqua)

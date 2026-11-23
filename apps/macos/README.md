@@ -56,6 +56,38 @@ references are never displayed or logged. The bundled frozen schema validates
 required fields, enums, numeric strings and rejects unknown fields before typed
 decoding; the workflow checks its bytes against the merged source contract.
 
+## Themes
+
+General › System › Theme picks the look of LarpCC’s own content: **Automatic**
+(the default), **Tahoe**, **Sequoia** or **Sonoma**. Automatic matches the
+running macOS (26 and later Tahoe, 15 Sequoia, 14 Sonoma). The setting is
+stored in UserDefaults with the other view preferences, is separate from
+Light/Dark/System, and restyles the open Settings window, the menu bar panel
+and the status item at once. Tahoe needs Liquid Glass, so on macOS 14 and 15
+it reads “Tahoe — Requires macOS 26” and can’t be chosen; a stored Tahoe falls
+back to Automatic there.
+
+- **Tahoe** is the macOS 26 design: the floating glass sidebar, glass cards in
+  the panel (8 pt corners, 8 pt inside the 16 pt panel corners), a quiet
+  neutral highlight and the system’s grouped forms.
+- **Sequoia** has an edge-to-edge sidebar on the sidebar material with a
+  hairline and a search field at its top, grouped sections with 10 pt corners
+  and hairline borders on a light grey page, and a panel on the classic menu
+  material with flat rows split by hairlines and accent-highlighted menu items.
+- **Sonoma** is like Sequoia with denser sidebar rows, 8 pt sections and
+  widget-like panel tiles (10 pt corners, hairline, soft shadow).
+
+macOS draws the window frame, title bar and toolbar controls, traffic lights,
+standard controls such as switches and pop-ups, and the menu bar itself. Those
+follow the running macOS, not the theme. On macOS 14 and 15 the system already
+draws grouped forms in that release’s style, so LarpCC draws its own sections
+only when an earlier look runs on macOS 26. Each theme keeps Reduce
+Transparency (materials and glass turn opaque) and Increase Contrast (firm
+borders on cards and the selection).
+
+For screenshots, `--theme=tahoe|sequoia|sonoma` overrides the setting for one
+launch, like `--appearance`.
+
 ## Menu bar
 
 The item is on by default under General › Menu Bar. For Codex and Claude it
@@ -160,6 +192,10 @@ draws the app in its compatibility style with small window corners.
   the status item in light and dark. Compare the panel corner with the
   previous release. Check Increase Contrast and Reduce Transparency with the
   accessibility snapshot or the system settings.
+- **J. Themes** Switch Theme between Automatic, Tahoe, Sequoia and Sonoma with
+  Settings and the panel open, and confirm both restyle at once in light and
+  dark. Check the sidebar search and title placement in Sequoia and Sonoma,
+  and that Tahoe reads “Requires macOS 26” on macOS 14 or 15.
 
 From this directory:
 
