@@ -35,6 +35,7 @@ enum SettingsSnapshot {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
         guard let window else { log("no Settings window"); return false }
+        MenuBarDockPolicy.showDockIcon()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.center()

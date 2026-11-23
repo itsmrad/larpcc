@@ -28,7 +28,13 @@ done
 
 pages=(general mcp skills aliases desktop about)
 # Every profile in the sample data, so new sample profiles are picked up automatically.
-while read -r id; do [[ -n "$id" ]] && pages+=("profile-$id"); done < <(perl -e 'alarm shift; exec @ARGV' 30 "$bin" --sample-profile-ids)
+if ! profile_ids="$(perl -e 'alarm shift; exec @ARGV' 30 "$bin" --sample-profile-ids)" || [[ -z "$profile_ids" ]]; then
+  echo 'Could not list sample profiles.' >&2
+  exit 1
+fi
+while IFS= read -r id; do
+  [[ -n "$id" ]] && pages+=("profile-$id")
+done <<< "$profile_ids"
 
 log="$out/render.log"
 : > "$log"
