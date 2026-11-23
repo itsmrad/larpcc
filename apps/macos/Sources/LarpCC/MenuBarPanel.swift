@@ -690,7 +690,7 @@ private struct MenuBarProfileSummary: View {
             UsageMeter(leftPercent: window.leftPercent, level: level)
             Text("\(Int(window.leftPercent.rounded()))%")
                 .fontWeight(.semibold)
-                .foregroundStyle(level.tint ?? .primary)
+                .foregroundStyle(level.textTint ?? .primary)
                 .frame(width: 32, alignment: .trailing)
             // Fixed widths keep every card's meter the same length.
             Label(resetText(window), systemImage: "clock")
@@ -813,12 +813,25 @@ private struct UsageMeter: View {
 }
 
 private extension UsageLevel {
-    /// Calm by default; colour only when a limit is running low.
+    /// Calm by default; colour only when a limit is running low. For the meter and ring.
     var tint: Color? {
         switch self {
         case .normal: return nil
         case .low: return .orange
-        case .critical: return .red
+        case .critical: return criticalGraphicRed
         }
     }
+
+    /// For the percentage text, which needs more contrast than the meter and ring.
+    var textTint: Color? { self == .critical ? criticalTextRed : tint }
 }
+
+/// The system red in dark mode. In light mode the system red is too pale on the white
+/// cards, so text uses a deeper red (4.5:1 or better) and the meter and ring a slightly
+/// deeper one (3:1 or better, also on a selected card).
+private let criticalTextRed = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
+})
+private let criticalGraphicRed = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.843, green: 0, blue: 0.082, alpha: 1)
+})
