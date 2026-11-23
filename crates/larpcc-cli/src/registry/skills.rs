@@ -1121,6 +1121,8 @@ impl PreparedProfileCleanup {
     pub(super) fn apply(self, root: &Path) -> Result<(), Error> {
         if let Some(bytes) = self.index {
             write_atomic(root, INDEX, &bytes)?;
+            #[cfg(test)]
+            fault("delete index")?;
         }
         if let Some(bytes) = self.manifest {
             write_atomic(root, MANIFEST, &bytes)?;

@@ -4,6 +4,8 @@
 mod unix;
 #[cfg(unix)]
 pub(crate) use unix::Profiles;
+#[cfg(all(test, unix))]
+pub(crate) use unix::before_unlink;
 
 #[cfg(windows)]
 mod windows;

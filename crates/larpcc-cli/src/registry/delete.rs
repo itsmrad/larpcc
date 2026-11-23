@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+mod activity;
 mod migration;
 #[cfg(all(test, unix))]
 mod tests;
@@ -68,7 +69,22 @@ enum DeleteStep {
 }
 
 fn read(root: &Path) -> Result<Option<Journal>, Error> {
-    let path = root.join(JOURNAL);
+    let Some((bytes, _)) = journal_bytes(root, JOURNAL)? else {
+        return Ok(None);
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(j @ (Journal::Delete { version: 1, .. } | Journal::Migrate { version: 1, .. })) => {
+            Ok(Some(j))
+        }
+        _ => Err(Error::RecoveryRequired),
+    }
+}
+
+fn journal_bytes(
+    root: &Path,
+    name: &str,
+) -> Result<Option<(Vec<u8>, platform::CheckedObject)>, Error> {
+    let path = root.join(name);
     let Some(file) = platform::inspect(&path, ObjectKind::File)? else {
         return Ok(None);
     };
@@ -81,20 +97,14 @@ fn read(root: &Path) -> Result<Option<Journal>, Error> {
     }
     platform::single_link(&opened.file)?;
     let mut bytes = Vec::new();
-    opened
-        .file
+    (&opened.file)
         .take(JOURNAL_LIMIT as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| paths::io("read", &path, e))?;
     if bytes.len() > JOURNAL_LIMIT {
         return Err(Error::RecoveryRequired);
     }
-    match serde_json::from_slice(&bytes) {
-        Ok(j @ (Journal::Delete { version: 1, .. } | Journal::Migrate { version: 1, .. })) => {
-            Ok(Some(j))
-        }
-        _ => Err(Error::RecoveryRequired),
-    }
+    Ok(Some((bytes, opened)))
 }
 
 fn write(root: &Path, journal: &Journal) -> Result<(), Error> {
@@ -103,16 +113,63 @@ fn write(root: &Path, journal: &Journal) -> Result<(), Error> {
         return Err(Error::TooLarge);
     }
     let temp = root.join(STAGING);
-    if platform::inspect(&temp, ObjectKind::File)?.is_some() {
-        fs::remove_file(&temp).map_err(|e| paths::io("remove", &temp, e))?;
+    let identity = match platform::create_file(&temp) {
+        Ok(mut object) => {
+            object
+                .file
+                .write_all(&bytes)
+                .and_then(|_| object.file.sync_all())
+                .map_err(|e| paths::io("write", &temp, e))?;
+            fault("lifecycle staging")?;
+            object.identity
+        }
+        Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+            let (staged, object) = journal_bytes(root, STAGING)?.ok_or(Error::Drift)?;
+            if staged != bytes || !same_transaction(read(root)?, journal) {
+                return Err(Error::Drift);
+            }
+            object
+                .file
+                .sync_all()
+                .map_err(|e| paths::io("sync", &temp, e))?;
+            object.identity
+        }
+        Err(e) => return Err(e),
+    };
+    if platform::inspect(&temp, ObjectKind::File)?.map(|o| o.identity) != Some(identity) {
+        return Err(Error::Drift);
     }
-    let mut file = platform::create_file(&temp)?.file;
-    file.write_all(&bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|e| paths::io("write", &temp, e))?;
-    drop(file);
     store::replace(&temp, &root.join(JOURNAL))?;
     paths::sync(root)
+}
+
+fn same_transaction(current: Option<Journal>, next: &Journal) -> bool {
+    match (current, next) {
+        (
+            Some(Journal::Delete {
+                transaction: active,
+                ..
+            }),
+            Journal::Delete {
+                transaction: next, ..
+            },
+        ) => {
+            active.id == next.id
+                && active.before == next.before
+                && active.after == next.after
+                && active.home == next.home
+        }
+        (
+            Some(Journal::Migrate {
+                transaction: active,
+                ..
+            }),
+            Journal::Migrate {
+                transaction: next, ..
+            },
+        ) => active.same_transaction(next),
+        _ => false,
+    }
 }
 
 fn finish(root: &Path) -> Result<(), Error> {
@@ -234,6 +291,9 @@ impl Registry {
             (id, fingerprint(&store::serialize(&data)?))
         };
         let _guard = acquire_auth_guard(root, id)?;
+        let role = id.to_string();
+        #[cfg(target_os = "macos")]
+        activity::require_quiet(&[root.join("profiles").join(&role).join("desktop")])?;
         let (_lock, mut data) = locked(root, self.expected)?;
         let pending = read(root)?;
         if fingerprint(&store::serialize(&data)?) != snapshot
@@ -242,7 +302,6 @@ impl Registry {
             return Err(Error::Conflict);
         }
         let profiles = Profiles::open(root)?;
-        let role = id.to_string();
         let mut journal = match pending {
             Some(j) => j,
             None if !recover => {

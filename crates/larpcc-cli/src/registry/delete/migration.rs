@@ -12,6 +12,19 @@ pub(super) struct Migration {
     next: usize,
 }
 
+impl Migration {
+    pub(super) fn same_transaction(&self, other: &Self) -> bool {
+        self.before == other.before
+            && self.after == other.after
+            && self.profiles == other.profiles
+            && self
+                .homes
+                .iter()
+                .map(|home| (&home.id, &home.legacy))
+                .eq(other.homes.iter().map(|home| (&home.id, &home.legacy)))
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Home {
@@ -87,6 +100,17 @@ impl Registry {
             .iter()
             .map(|id| acquire_auth_guard(root, *id))
             .collect::<Result<Vec<_>, _>>()?;
+        #[cfg(target_os = "macos")]
+        if !ids.is_empty() {
+            let candidates: Vec<_> = ids
+                .iter()
+                .flat_map(|id| {
+                    let legacy = root.join("profiles").join(id.to_string());
+                    [legacy.join("desktop"), legacy]
+                })
+                .collect();
+            activity::require_quiet(&candidates)?;
+        }
         let (_lock, mut data) = locked(root, self.expected)?;
         if fingerprint(&store::serialize(&data)?) != before {
             return Err(Error::Conflict);

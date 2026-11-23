@@ -336,6 +336,8 @@ fn apply_removal(
                     return Err(Error::AliasInvalid);
                 }
                 dirs.remove(&path, &artifact.identity)?;
+                #[cfg(test)]
+                fault("artifact leaf")?;
             }
         }
         fault("artifact")?;

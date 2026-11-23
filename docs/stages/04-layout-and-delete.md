@@ -147,6 +147,16 @@ arbitrary deletion authority. Same-user privileged racing remains a limitation;
 if native handle confinement cannot be proved, deletion on that OS stays refused.
 Windows deletion and recovery refuse before publishing a tombstone or removing
 an artifact. Linux and macOS use the retained-handle Unix implementation.
+Unix rechecks the full retained ancestry after syncing and immediately before
+unlinking a directory. The kernel does not make that check and the unlink a
+single operation. Same-user or privileged namespace changes can still race that
+interval. If a check cannot establish confinement, the attempt stops.
+
+Lifecycle journal staging uses exclusive creation. Recovery only promotes an
+occupied staging file when its bytes match the next journal record and the
+published journal identifies the same transaction. Preserve unproven staging
+files for inspection. An interruption before the first journal publication can
+require moving the orphaned staging file aside manually.
 
 ## Owned-file amendment
 

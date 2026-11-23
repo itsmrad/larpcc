@@ -461,15 +461,47 @@ impl Profiles {
                 if self.io(stat_at(dir, &name))?.as_ref().map(identity) != Some(identity(&stat)) {
                     return Err(Error::Drift);
                 }
+                if start.elapsed() >= Duration::from_secs(30) {
+                    return Err(Error::TooLarge);
+                }
                 self.io(unlink_at(dir, &name, false))?;
             }
         }
+        self.io(nodes.last().ok_or(Error::Drift)?.1.sync_all())?;
+        #[cfg(test)]
+        BEFORE_UNLINK.with(|hook| {
+            if let Some(hook) = hook.take() {
+                hook();
+            }
+        });
         self.verify_chain(nodes)?;
-        let (name, dir) = nodes.pop().ok_or(Error::Drift)?;
-        self.io(dir.sync_all())?;
+        if start.elapsed() >= Duration::from_secs(30) {
+            return Err(Error::TooLarge);
+        }
+        let (name, _dir) = nodes.pop().ok_or(Error::Drift)?;
         let parent = nodes.last().map_or(&self.dir, |(_, dir)| dir);
-        self.check_link(parent, &name, &dir)?;
         self.io(unlink_at(parent, &name, true))?;
         self.io(parent.sync_all())
     }
+}
+
+#[cfg(test)]
+type UnlinkHook = Box<dyn FnOnce()>;
+#[cfg(test)]
+thread_local! { static BEFORE_UNLINK: std::cell::Cell<Option<UnlinkHook>> = const { std::cell::Cell::new(None) }; }
+
+#[cfg(test)]
+pub(crate) fn before_unlink(hook: impl FnOnce() + 'static) {
+    BEFORE_UNLINK.with(|slot| slot.set(Some(Box::new(hook))));
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn stage04_delete_escape_mount_comparison() {
+    // CI does not create privileged mounts. Exercise the production check with
+    // already mounted directory descriptors and preserve both trees.
+    let root = File::open("/").unwrap();
+    let proc = open_dir(&root, c"proc").unwrap();
+    assert!(same_mount(&root, &root).unwrap());
+    assert!(!same_mount(&root, &proc).unwrap());
 }
