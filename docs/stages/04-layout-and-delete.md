@@ -115,11 +115,12 @@ and failed signature validation of a live candidate also refuse deletion.
 If the only blockers are live candidates that are mid-exit or whose liveness,
 path, or arguments could not be read conclusively, wait 150 ms and scan again.
 An `ESRCH` from an argument or path recheck counts as inconclusive when the
-same candidate is still alive. A candidate that has exited or become a zombie
-is skipped on the re-scan. Persistent uncertainty still refuses deletion.
-Each scan has a two-second deadline. A first-scan
-deadline triggers an immediate retry. Both retry reasons share one retry,
-for a total scan budget of at most four seconds plus the optional 150 ms wait.
+same candidate is still alive. The retry checks whether an already identified
+candidate is still alive even if its executable path cannot be read.
+Exited, zombie, or reused PIDs do not carry the earlier uncertainty forward.
+Persistent uncertainty still refuses deletion. Each scan has a two-second
+deadline checked between probes. A first-scan deadline triggers an immediate
+retry. Both retry reasons share at most one retry.
 Never inspect process environment, tokens or account data.
 
 The user must close sessions started outside Larp (including manual terminal

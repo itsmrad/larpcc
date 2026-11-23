@@ -4,7 +4,7 @@
 use crate::registry::Error;
 #[cfg(any(test, target_os = "macos"))]
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
 };
@@ -67,6 +67,12 @@ enum App {
 type StartTime = (u64, u64);
 
 #[cfg(any(test, target_os = "macos"))]
+struct Stamp {
+    start: StartTime,
+    exiting: bool,
+}
+
+#[cfg(any(test, target_os = "macos"))]
 fn candidate(path: &Path) -> Option<(App, bool)> {
     for contents in path.ancestors().skip(1) {
         if contents.file_name().is_some_and(|name| name == "Contents") {
@@ -94,7 +100,7 @@ fn candidate(path: &Path) -> Option<(App, bool)> {
 trait ProcessTable {
     fn pids(&self) -> Result<Vec<i32>, Error>;
     fn executable(&self, pid: i32) -> io::Result<Option<PathBuf>>;
-    fn stamp(&self, pid: i32, previous: Option<StartTime>) -> Result<Option<StartTime>, ScanError>;
+    fn stamp(&self, pid: i32, previous: Option<StartTime>) -> Result<Option<Stamp>, ScanError>;
     fn validate(&self, pid: i32, app: App, main: bool) -> Result<(), Error>;
     fn args(&self, pid: i32) -> Result<Option<Vec<u8>>, Error>;
 }
@@ -116,15 +122,16 @@ impl From<Error> for ScanError {
 
 #[cfg(any(test, target_os = "macos"))]
 fn retry_scan(
-    mut scan: impl FnMut() -> Result<(), ScanError>,
+    mut scan: impl FnMut(&mut HashMap<i32, Option<StartTime>>) -> Result<(), ScanError>,
     wait: impl FnOnce(),
 ) -> Result<(), Error> {
-    let result = match scan() {
+    let mut uncertain = HashMap::new();
+    let result = match scan(&mut uncertain) {
         Err(ScanError::CandidateUncertain) => {
             wait();
-            scan()
+            scan(&mut uncertain)
         }
-        Err(ScanError::Deadline) => scan(),
+        Err(ScanError::Deadline) => scan(&mut uncertain),
         result => result,
     };
     result.map_err(|_| Error::AuthBusy)
@@ -134,29 +141,47 @@ fn retry_scan(
 fn scan(
     table: &impl ProcessTable,
     expected: &HashSet<Vec<u8>>,
+    uncertain: &mut HashMap<i32, Option<StartTime>>,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
-    let mut candidate_uncertain = false;
+    let previous = std::mem::take(uncertain);
     for pid in table.pids()? {
         check_deadline()?;
-        // A denied path probe has identified no candidate and must not trigger an argv read.
-        let path = match table.executable(pid) {
-            Ok(Some(path)) => path,
-            Ok(None) => continue,
-            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => continue,
-            Err(_) => return Err(ScanError::Busy),
+        let path = match (table.executable(pid), previous.get(&pid)) {
+            (Ok(Some(path)), _) => path,
+            (_, Some(&start)) => {
+                // The earlier scan already identified a candidate at this PID.
+                if table.stamp(pid, start)?.is_some() {
+                    return Err(ScanError::CandidateUncertain);
+                }
+                continue;
+            }
+            (Ok(None), _) => continue,
+            (Err(e), _) if e.kind() == io::ErrorKind::PermissionDenied => continue,
+            (Err(_), _) => return Err(ScanError::Busy),
         };
         let Some(app) = candidate(&path) else {
             continue;
         };
-        match scan_candidate(table, pid, &path, app, expected, &check_deadline) {
+        let mut start = None;
+        match scan_candidate(
+            table,
+            pid,
+            &path,
+            app,
+            expected,
+            &mut start,
+            &check_deadline,
+        ) {
             Ok(()) => (),
-            Err(ScanError::CandidateUncertain) => candidate_uncertain = true,
+            Err(ScanError::CandidateUncertain) => {
+                uncertain.insert(pid, start);
+            }
             Err(error) => return Err(error),
         }
     }
     check_deadline()?;
-    if candidate_uncertain {
+    if !uncertain.is_empty() {
         return Err(ScanError::CandidateUncertain);
     }
     Ok(())
@@ -169,11 +194,17 @@ fn scan_candidate(
     path: &Path,
     (app, main): (App, bool),
     expected: &HashSet<Vec<u8>>,
+    start: &mut Option<StartTime>,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
-    let Some(before) = table.stamp(pid, None)? else {
+    let Some(stamp) = table.stamp(pid, None)? else {
         return Ok(());
     };
+    let before = stamp.start;
+    *start = Some(before);
+    if stamp.exiting {
+        return Err(ScanError::CandidateUncertain);
+    }
     let validation = table.validate(pid, app, main);
     if !same_process(table, pid, before, path)? {
         return Ok(());
@@ -202,8 +233,11 @@ fn same_process(
     path: &Path,
 ) -> Result<bool, ScanError> {
     let executable = table.executable(pid);
-    if table.stamp(pid, Some(before))? != Some(before) {
+    let Some(stamp) = table.stamp(pid, Some(before))? else {
         return Ok(false);
+    };
+    if stamp.exiting {
+        return Err(ScanError::CandidateUncertain);
     }
     match executable {
         Ok(Some(current)) if current == path => Ok(true),
@@ -264,7 +298,7 @@ mod tests {
     struct Fixture {
         path: Option<&'static str>,
         paths: RefCell<VecDeque<io::Result<Option<PathBuf>>>>,
-        stamps: RefCell<VecDeque<Result<Option<StartTime>, ScanError>>>,
+        stamps: RefCell<VecDeque<Option<Stamp>>>,
         args: Option<&'static [u8]>,
         argv_missing: bool,
         reads: Cell<usize>,
@@ -277,7 +311,17 @@ mod tests {
             Self {
                 path: Some(HELPER),
                 paths: RefCell::default(),
-                stamps: RefCell::new(stamps.iter().copied().map(Ok).collect()),
+                stamps: RefCell::new(
+                    stamps
+                        .iter()
+                        .map(|start| {
+                            start.map(|start| Stamp {
+                                start,
+                                exiting: false,
+                            })
+                        })
+                        .collect(),
+                ),
                 args,
                 argv_missing: false,
                 reads: Cell::new(0),
@@ -287,7 +331,20 @@ mod tests {
         }
 
         fn scan(&self, deadline: impl Fn() -> Result<(), ScanError>) -> Result<(), ScanError> {
-            scan(self, &HashSet::from([TARGET.as_bytes().to_vec()]), deadline)
+            self.scan_with_history(&mut HashMap::new(), deadline)
+        }
+
+        fn scan_with_history(
+            &self,
+            uncertain: &mut HashMap<i32, Option<StartTime>>,
+            deadline: impl Fn() -> Result<(), ScanError>,
+        ) -> Result<(), ScanError> {
+            scan(
+                self,
+                &HashSet::from([TARGET.as_bytes().to_vec()]),
+                uncertain,
+                deadline,
+            )
         }
     }
 
@@ -311,12 +368,14 @@ mod tests {
         fn stamp(
             &self,
             _pid: i32,
-            _previous: Option<StartTime>,
-        ) -> Result<Option<StartTime>, ScanError> {
-            self.stamps
+            previous: Option<StartTime>,
+        ) -> Result<Option<Stamp>, ScanError> {
+            Ok(self
+                .stamps
                 .borrow_mut()
                 .pop_front()
                 .expect("unexpected stamp")
+                .filter(|stamp| previous.is_none_or(|before| stamp.start == before)))
         }
 
         fn validate(&self, _pid: i32, app: App, main: bool) -> Result<(), Error> {
@@ -350,6 +409,19 @@ mod tests {
     }
 
     #[test]
+    fn stage04_delete_skips_first_lookup_esrch_despite_pid_reuse() {
+        let table = Fixture {
+            // The first lookup saw ESRCH before this unrelated process reused the PID.
+            paths: RefCell::new(VecDeque::from([Ok(None)])),
+            path: Some("/Applications/Other.app/Contents/MacOS/Other"),
+            ..Fixture::candidate(&[Some((11, 0))], None)
+        };
+        assert_eq!(table.scan(|| Ok(())), Ok(()));
+        assert_eq!(table.stamps.borrow().len(), 1);
+        assert_eq!(table.reads.get(), 0);
+    }
+
+    #[test]
     fn stage04_delete_skips_vanished_or_reused_candidate() {
         let stamp = Some((10, 0));
         // Failed argv followed by either ESRCH (no stamp) or a new start time.
@@ -380,8 +452,8 @@ mod tests {
                 ..Fixture::candidate(&[], None)
             };
             let result = retry_scan(
-                || {
-                    table.scan(|| {
+                |uncertain| {
+                    table.scan_with_history(uncertain, || {
                         if table.listings.get() == 1 || retry_expired {
                             Err(ScanError::Deadline)
                         } else {
@@ -398,15 +470,21 @@ mod tests {
 
     #[test]
     fn stage04_delete_rechecks_an_exiting_candidate_once() {
-        for after in [Ok(None), Err(ScanError::CandidateUncertain)] {
-            let remains_busy = after.is_err();
-            let table = Fixture {
-                // The stamp probe reports a live process with the mid-exit flag.
-                stamps: RefCell::new(VecDeque::from([Err(ScanError::CandidateUncertain), after])),
-                ..Fixture::candidate(&[], None)
+        for remains_busy in [false, true] {
+            let exiting = || Stamp {
+                start: (10, 0),
+                exiting: true,
             };
+            let table = Fixture::candidate(&[], None);
+            table
+                .stamps
+                .borrow_mut()
+                .extend([Some(exiting()), remains_busy.then(exiting)]);
             let waits = Cell::new(0);
-            let result = retry_scan(|| table.scan(|| Ok(())), || waits.set(waits.get() + 1));
+            let result = retry_scan(
+                |uncertain| table.scan_with_history(uncertain, || Ok(())),
+                || waits.set(waits.get() + 1),
+            );
             assert_eq!(result.is_err(), remains_busy);
             assert_eq!(table.listings.get(), 2);
             assert_eq!(waits.get(), 1);
@@ -436,7 +514,10 @@ mod tests {
             };
             let waits = Cell::new(0);
             assert!(matches!(
-                retry_scan(|| table.scan(|| Ok(())), || waits.set(waits.get() + 1)),
+                retry_scan(
+                    |uncertain| table.scan_with_history(uncertain, || Ok(())),
+                    || waits.set(waits.get() + 1)
+                ),
                 Err(Error::AuthBusy)
             ));
             assert_eq!(table.listings.get(), 2);
@@ -449,22 +530,68 @@ mod tests {
     fn stage04_delete_matching_candidate_refuses_without_retry_after_exiting_candidate() {
         let table = Fixture {
             pids: &[1, 2],
-            stamps: RefCell::new(VecDeque::from([
-                Err(ScanError::CandidateUncertain),
-                Ok(Some((10, 0))),
-                Ok(Some((10, 0))),
-                Ok(Some((10, 0))),
-            ])),
-            ..Fixture::candidate(&[], Some(b"--user-data-dir=/fixture/desktop\0"))
+            ..Fixture::candidate(
+                &[Some((10, 0)); 3],
+                Some(b"--user-data-dir=/fixture/desktop\0"),
+            )
         };
+        table.stamps.borrow_mut().push_front(Some(Stamp {
+            start: (9, 0),
+            exiting: true,
+        }));
         assert!(matches!(
             retry_scan(
-                || table.scan(|| Ok(())),
+                |uncertain| table.scan_with_history(uncertain, || Ok(())),
                 || panic!("matching an active profile is final")
             ),
             Err(Error::AuthBusy)
         ));
         assert_eq!(table.listings.get(), 1);
+    }
+
+    #[test]
+    fn stage04_delete_rechecks_a_remembered_candidate_after_path_denial() {
+        let start = Some((10, 0));
+        for after in [start, None, Some((11, 0))] {
+            let table = Fixture {
+                paths: RefCell::new(VecDeque::from([
+                    Ok(Some(HELPER.into())),
+                    Ok(Some(HELPER.into())),
+                    Ok(Some(HELPER.into())),
+                    Err(io::ErrorKind::PermissionDenied.into()),
+                ])),
+                ..Fixture::candidate(&[start, start, start, after], None)
+            };
+            let result = retry_scan(
+                |uncertain| table.scan_with_history(uncertain, || Ok(())),
+                || (),
+            );
+            assert_eq!(result.is_err(), after == start);
+            assert_eq!(table.listings.get(), 2);
+            assert_eq!(table.reads.get(), 1);
+            assert!(table.stamps.borrow().is_empty());
+        }
+    }
+
+    #[test]
+    fn stage04_delete_refuses_a_profile_match_found_on_retry() {
+        let table = Fixture::candidate(
+            &[Some((10, 0)); 3],
+            Some(b"--user-data-dir=/fixture/desktop\0"),
+        );
+        table.stamps.borrow_mut().push_front(Some(Stamp {
+            start: (10, 0),
+            exiting: true,
+        }));
+        assert!(matches!(
+            retry_scan(
+                |uncertain| table.scan_with_history(uncertain, || Ok(())),
+                || ()
+            ),
+            Err(Error::AuthBusy)
+        ));
+        assert_eq!(table.listings.get(), 2);
+        assert_eq!(table.reads.get(), 1);
     }
 
     #[test]
@@ -502,7 +629,7 @@ mod macos {
             uid: unsafe { libc::geteuid() },
         };
         retry_scan(
-            || {
+            |uncertain| {
                 let deadline = Instant::now() + Duration::from_secs(2);
                 let check_deadline = || {
                     if Instant::now() >= deadline {
@@ -524,7 +651,7 @@ mod macos {
                     }
                 }
                 check_deadline()?;
-                scan(&table, &expected, check_deadline)
+                scan(&table, &expected, uncertain, check_deadline)
             },
             || std::thread::sleep(Duration::from_millis(150)),
         )
@@ -567,8 +694,10 @@ mod macos {
                 unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
             if len <= 0 {
                 let error = io::Error::last_os_error();
-                // Confirm liveness even on ESRCH so a retry cannot silently lose a live candidate.
-                if process_info(pid).is_ok_and(|info| zombie(pid, &info)) || exited(pid) {
+                if error.raw_os_error() == Some(libc::ESRCH)
+                    || process_info(pid).is_ok_and(|info| zombie(pid, &info))
+                    || exited(pid)
+                {
                     return Ok(None);
                 }
                 return Err(error);
@@ -583,11 +712,7 @@ mod macos {
             Ok(Some(OsString::from_vec(path[..end].to_vec()).into()))
         }
 
-        fn stamp(
-            &self,
-            pid: i32,
-            previous: Option<StartTime>,
-        ) -> Result<Option<StartTime>, ScanError> {
+        fn stamp(&self, pid: i32, previous: Option<StartTime>) -> Result<Option<Stamp>, ScanError> {
             let info = match process_info(pid) {
                 Ok(info) => info,
                 Err(_) if exited(pid) => return Ok(None),
@@ -608,10 +733,10 @@ mod macos {
             {
                 return Err(ScanError::Busy);
             }
-            if info.pbi_flags & PROC_FLAG_INEXIT != 0 {
-                return Err(ScanError::CandidateUncertain);
-            }
-            Ok(Some(start))
+            Ok(Some(Stamp {
+                start,
+                exiting: info.pbi_flags & PROC_FLAG_INEXIT != 0,
+            }))
         }
 
         fn validate(&self, pid: i32, app: App, main: bool) -> Result<(), Error> {
