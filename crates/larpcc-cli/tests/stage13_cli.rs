@@ -2,7 +2,7 @@ mod common;
 
 use common::{Fixture, capture, create_file};
 use serde_json::{Value, json};
-use std::{fs, path::Path, thread};
+use std::{fs, thread};
 
 fn json_run(fixture: &Fixture, args: &[&str], expected: i32) -> Value {
     let output = capture(fixture.command(&[&["--json", "cc"][..], args].concat())).unwrap();
@@ -209,8 +209,9 @@ fn stage13_revision_native_and_receiver_gates_before_effects() {
 
 // Cargo exposes only the built local fixture here. Production SSH discovery stays independent.
 #[test]
+#[cfg(feature = "synthetic-launch")]
 fn stage13_transport_fixture_is_executable() {
-    let path = Path::new(env!("CARGO_BIN_EXE_larpcc-fake-ssh"));
+    let path = std::path::Path::new(env!("CARGO_BIN_EXE_larpcc-fake-ssh"));
     let output = std::process::Command::new(path)
         .arg("-V")
         .stdin(std::process::Stdio::null())

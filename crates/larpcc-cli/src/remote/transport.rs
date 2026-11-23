@@ -434,6 +434,7 @@ pub(super) fn collect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "synthetic-launch")]
     use crate::remote::protocol;
 
     #[test]
@@ -458,6 +459,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "synthetic-launch")]
     fn fake_fixture() -> (tempfile::TempDir, PathBuf) {
         let parent = std::env::var_os("LARPCC_TEST_PARENT")
             .map(PathBuf::from)
@@ -472,6 +474,7 @@ mod tests {
         (temp, path.canonicalize().unwrap())
     }
 
+    #[cfg(feature = "synthetic-launch")]
     fn run_fake(path: &Path) -> Child {
         pipes(
             Command::new(path)
@@ -484,6 +487,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "synthetic-launch")]
     fn stage13_transport_fake_stream_limits_timeout_and_stderr() {
         let (temp, executable) = fake_fixture();
         let path = temp.path();
@@ -530,6 +534,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "synthetic-launch")]
     fn stage13_skill_transfer_ready_handshake_and_early_refusal() {
         let (temp, executable) = fake_fixture();
         let path = temp.path();
@@ -568,6 +573,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "synthetic-launch")]
     fn stage13_transport_verified_fake_and_no_executable_fallback() {
         let (temp, executable) = fake_fixture();
         let spawn = |command: &mut Command| command.spawn().map_err(|_| unavailable());
