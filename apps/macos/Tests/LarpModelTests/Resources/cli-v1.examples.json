@@ -334,17 +334,12 @@
         },
         "windows": {
           "five_hour": {
-            "used_percent": 30.0,
-            "resets_at": "2026-11-21T14:00:00Z",
-            "captured_at": "2026-11-21T12:00:00Z",
+            "used_percent": null,
+            "resets_at": "2026-11-21T12:20:00Z",
+            "captured_at": null,
             "window_seconds": 18000,
-            "reason": null,
-            "pace": {
-              "elapsed_percent": 60.0,
-              "reserve_percent": 30.0,
-              "runs_out_at": "2026-11-21T14:00:00Z",
-              "lasts_until_reset": true
-            }
+            "reason": "reset_since_capture",
+            "pace": null
           },
           "weekly": {
             "used_percent": 75.0,
@@ -1587,6 +1582,47 @@
             "expires_at": null
           },
           "diagnostics": []
+        },
+        {
+          "profile_id": "4",
+          "name": "codex-47",
+          "provider": "codex",
+          "mode": "live",
+          "source": null,
+          "captured_at": null,
+          "client_version": null,
+          "plan": null,
+          "windows": {
+            "five_hour": {
+              "used_percent": null,
+              "resets_at": null,
+              "captured_at": null,
+              "window_seconds": 18000,
+              "reason": "live_unavailable",
+              "pace": null
+            },
+            "weekly": {
+              "used_percent": null,
+              "resets_at": null,
+              "captured_at": null,
+              "window_seconds": 604800,
+              "reason": "live_unavailable",
+              "pace": null
+            },
+            "extra": null
+          },
+          "reset_credits": {
+            "state": "not_recorded",
+            "count": null,
+            "expires_state": "not_recorded",
+            "expires_at": null
+          },
+          "diagnostics": [
+            {
+              "code": "live_unavailable",
+              "message": "Usage is not available right now."
+            }
+          ]
         }
       ]
     }

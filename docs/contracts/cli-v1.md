@@ -9,10 +9,12 @@ exceptions with distinct scopes:
    allowlisted LOCAL records and the opt-in LIVE usage response in
    [stage 11](../stages/11-usage.md). A plan appears only as the user-entered label, the
    client-recorded LOCAL plan (D29) or the Codex LIVE response plan (D32), never from
-   credentials and never stored. No native client output is read.
-2. **Stage 14 account summary (D25/D26):** `status.account` reads only the email and
-   plan lines from an admitted official status run, through the exact row's parser
-   ([§Account summary](#account-summary)), shown and never stored.
+   credentials. Provider-derived plans are never stored; only the user-entered
+   `plan_label` persists (in `usage.json`). No native client output is read.
+2. **Stage 14 account summary (D25/D26):** `status.account` parses an admitted official
+   status run through the exact row's parser ([§Account summary](#account-summary)) and
+   extracts the sign-in state plus any explicitly reported email and plan (either may
+   be absent), shown and never stored.
 Outside these two, account identity and auth inference stay forbidden.
 SwiftUI later executes the installed CLI; no library extraction.
 

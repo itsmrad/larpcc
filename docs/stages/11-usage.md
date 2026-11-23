@@ -109,8 +109,11 @@ Stage 14 merged first, so this PR performs its hand-off: `status.account`'s
 `usage` is widened from null to the selected profile's LOCAL usage row (the
 `usage_profile` shape, produced by the same reader as `usage PROFILE --local`,
 always `mode:"local"`, never LIVE data or a `live_endpoint` plan), or null.
-The human graph keeps stage 14's rendering rules. Stage 14's `account.plan`
-and this row's `plan` stay separate.
+The row is produced at the status command's read clock (its start time),
+which is not on the wire: every `reset_since_capture` decision in the row uses
+that clock, never a capture time. Fixtures use the documented fixture read
+clock `2026-11-21T12:30:00Z`. The human graph keeps stage 14's rendering rules.
+Stage 14's `account.plan` and this row's `plan` stay separate.
 
 ### Remote hosts (stage 13)
 
@@ -564,7 +567,7 @@ anywhere but its pinned endpoint.
 | headers | `Authorization: Bearer <token>`, `anthropic-beta: oauth-2025-04-20` (constant present; its use on this call **unverified**), `Accept: application/json`, `User-Agent: larpcc/<version>` | `Authorization: Bearer <token>`, `chatgpt-account-id: <account_id>` (`codex-rs/http-client/src/openai_headers.rs:3`, `codex-rs/backend-client/src/client.rs:388-392`; inside D14 per D29), `Accept`, `User-Agent: larpcc/<version>` |
 | response used | `five_hour`, `seven_day` → windows; `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps` → extras "Opus weekly", "Sonnet weekly", "OAuth apps weekly" (W 604800). Each `{utilization: number 0-100 \| null, resets_at: ISO 8601 \| null}` (binary response parser; units from the SDK schema description) | `rate_limit.primary_window`/`secondary_window` `{used_percent: i32, limit_window_seconds, reset_after_seconds, reset_at}` mapped by window length ±5%; `additional_rate_limits[] {limit_name, metered_feature, rate_limit}` → extras labelled `Other limit N` (names never output); `rate_limit_reset_credits.available_count` → `reset_credits`; `plan_type` → `plan` `live_endpoint`, held in memory only (D32) (`codex-rs/codex-backend-openapi-models/src/models/*.rs`, `codex-rs/backend-client/src/types.rs:22-75`) |
 | ignored | `extra_usage`, `cinder_cove`, `wattle_ember`, `limits[]`, all dollar fields | `credits`, `spend_control`, `account_id`, `user_id`, `rate_limit_upsell`, `rate_limit_reached_type` |
-| reset credits | `unsupported` (only an experimental `cedar_ember=1` variant has them; D29 keeps it unsupported) | count from the summary; expiry `unsupported` (needs a second request, which D29 rules out) |
+| reset credits | `unsupported` (only an experimental `cedar_ember=1` variant has them; D29 keeps it unsupported) | from `available_count` per the canonical count → expiry table under **Reset credits** above; a failed request (`source:null`) is `not_recorded`/`not_recorded` |
 
 **Network rules.** HTTPS only to the two fixed host/path pairs; TLS 1.2+ with
 certificate and hostname verification; proxy environment variables
@@ -613,7 +616,7 @@ every fixture deleted in finally. No vendor binary or real account.
 
 | test | discriminating assertions |
 |---|---|
-| `stage11_json` | every new example envelope byte-for-byte; ordering, framing, exit codes, empty stderr, `--expected-revision` conflict before reads, tombstone/unknown profile, `--local --live` usage error |
+| `stage11_json` | every new example envelope byte-for-byte; `status.account.usage` judged at the status read clock (a window reset between capture and read is `reset_since_capture`, never a stale percentage); a failed Codex LIVE row is `not_recorded`; ordering, framing, exit codes, empty stderr, `--expected-revision` conflict before reads, tombstone/unknown profile, `--local --live` usage error |
 | `stage11_pace` | loads `docs/contracts/usage-pace-vectors.json`; every vector exact; skew/reset/unknown cases |
 | `stage11_local_codex` | synthetic rollouts in both filename forms (`<thread>` and `<thread>_<rollout>`), malformed names skipped: 5h/weekly by `window_minutes` not position, buckets observed at different times keep their own window `captured_at` and pace (vector `extra_observed_two_hours_before_row`), no false `clock_skew`, a row mixing an expired window (own reset before the read clock → `reset_since_capture`, no percentage) with current windows, a grammar-valid private sentinel `limit_name`/`limit_id` never appears in stdout/stderr/files or forwarded output (label `Other limit N`), LOCAL plan allowlist, `plan_type` → `client_local` plan unless a user label overrides, unknown plan value → null, non-codex bucket → extra, newest per bucket, unverified version, `.zst`/archived skipped, symlink/hardlink/outside-root/oversize/line-cap/file-cap refusal, partial line ignored, conversation sentinel strings never appear in stdout/stderr/files |
 | `stage11_statusline_check` | negative fixtures each yield refuse-at-enable and no-injection-at-launch: malformed JSON, JSON with comments or trailing comma, duplicate top-level keys, non-object top level, trailing bytes, oversize, symlink, FIFO/non-regular, unreadable file, unreadable parent, undeterminable launch dir, 65 parent levels; a `statusLine` only in a parent's `.claude/settings.local.json` blocks injection; missing files everywhere establishes absence |

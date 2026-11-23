@@ -193,6 +193,8 @@ def credits_source_semantic(p):
     else:
         assert c['state'] != 'unsupported'
         assert c['state'] != 'available' or c['expires_state'] == 'unsupported'
+        if p['source'] is None:  # no usable LIVE response: nothing can have been recorded
+            assert c['state'] == 'not_recorded'
 
 def credits_semantic(c):
     state, count, es = c['state'], c['count'], c['expires_state']
@@ -431,7 +433,8 @@ live_usage = next(x for x in fixtures if x['command'] == 'usage' and x['ok']
                   and x['data']['requested_mode'] == 'live')
 live_counts = next(x for x in fixtures if x['command'] == 'usage' and x['ok']
                    and x['data']['requested_mode'] == 'live' and x is not live_usage)
-assert [p['reset_credits']['state'] for p in live_counts['data']['profiles']] == ['none', 'not_recorded']
+assert [p['reset_credits']['state'] for p in live_counts['data']['profiles']] == ['none', 'not_recorded', 'not_recorded']
+assert live_counts['data']['profiles'][2]['source'] is None
 def expired_but_current(x):
     w = codex(x)['windows']['five_hour']
     w['resets_at'] = '2026-11-21T12:20:00Z'
@@ -488,6 +491,11 @@ semantic_only = [
     (live_counts, lambda x: x['data']['profiles'][0]['reset_credits'].update(expires_state='unsupported')),
     (live_counts, lambda x: x['data']['profiles'][1]['reset_credits'].update(
         expires_state='unsupported')),
+    # A failed Codex LIVE row (source null) cannot report a count.
+    (live_counts, lambda x: x['data']['profiles'][2]['reset_credits'].update(
+        state='available', count=1, expires_state='unsupported')),
+    (live_counts, lambda x: x['data']['profiles'][2]['reset_credits'].update(
+        state='none', count=0, expires_state='none')),
     (next(x for x in fixtures if x['command'] == 'settings.usage'),
      lambda x: x['data']['profiles'][1].update(claude_statusline=True)),
     (next(x for x in fixtures if x['command'] == 'settings.usage.claude-statusline' and x['ok']),
@@ -510,7 +518,9 @@ for base, mutate in semantic_only:
         raise AssertionError(f'invalid usage fixture accepted: {mutate}')
 
 # Stage 14 account summary: semantic rules, then schema and semantic negatives.
-def check_account_status(value):
+STATUS_READ_CLOCK = '2026-11-21T12:30:00Z'  # fixture read clock for status.account usage rows
+
+def check_account_status(value, read_clock=STATUS_READ_CLOCK):
     data = value['data']
     account = data['account']
     for field in ('email', 'plan'):
@@ -526,8 +536,9 @@ def check_account_status(value):
         assert row['provider'] == data['profile']['provider'] and row['mode'] == 'local'
         assert row['source'] != 'live_endpoint'
         assert row['plan'] is None or row['plan']['source'] != 'live_endpoint'
-        usage_semantic({'requested_mode': 'local', 'generated_at': row['captured_at'] or '2026-11-21T12:00:00Z',
-                        'profiles': [row]})
+        # The row's read clock is the status command's start, which is not on the wire;
+        # fixtures pass the documented fixture read clock, never the capture time.
+        usage_semantic({'requested_mode': 'local', 'generated_at': read_clock, 'profiles': [row]})
 
 account_fixtures = [x for x in fixtures if x['command'] == 'status.account' and x['ok']]
 assert {x['data']['account']['state'] for x in account_fixtures} >= {'signed_in', 'unknown', 'not_qualified'}
@@ -568,6 +579,12 @@ schema_negatives.append(invalid)
 for invalid in schema_negatives:
     assert not matches(invalid, SCHEMA)
     negative_checks += 1
+def stale_five_hour(u):
+    # The pre-fix behaviour: keep a percentage after the window's reset passed the read clock.
+    w = u['windows']['five_hour']
+    w.update(used_percent=30.0, captured_at='2026-11-21T12:00:00Z', reason=None)
+    w['pace'] = pace(w['captured_at'], w['resets_at'], w['used_percent'], w['window_seconds'])
+
 semantic_negatives = []
 for field, text in (('email', 'user@example.com\n'), ('plan', 'Plus\n')):
     invalid = copy.deepcopy(signed_in)
@@ -577,10 +594,13 @@ invalid = copy.deepcopy(signed_in)
 invalid['data']['account'].update(state='unavailable', email=None, plan=None)
 semantic_negatives.append(invalid)
 assert signed_in['data']['usage'] is not None
+assert signed_in['data']['usage']['windows']['five_hour']['reason'] == 'reset_since_capture'
+assert signed_in['data']['usage']['windows']['weekly']['reason'] is None
 for mutate in (lambda u: u.update(profile_id='3'),
                lambda u: u.update(mode='live', source='live_endpoint'),
                lambda u: u.update(plan={'label': 'pro', 'source': 'live_endpoint'}),
-               lambda u: u['windows']['five_hour']['pace'].update(reserve_percent=0.0)):
+               lambda u: u['windows']['weekly']['pace'].update(reserve_percent=0.0),
+               stale_five_hour):
     invalid = copy.deepcopy(signed_in)
     mutate(invalid['data']['usage'])
     semantic_negatives.append(invalid)
