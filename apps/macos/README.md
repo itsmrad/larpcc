@@ -89,7 +89,11 @@ stays at 4.5:1 or better. Tahoe leaves the sidebar density to the system
 setting; Sequoia and Sonoma set their own.
 
 For screenshots, `--theme=tahoe|sequoia|sonoma` overrides the setting for one
-launch, like `--appearance`.
+launch, like `--appearance`. Settings, the panel and the status item all read
+the one stored setting through `.themed()`, so a change shows at once, even in
+a panel that is already open (`ThemePropagationTests` covers this). In debug
+builds, `--menubar-live-snapshots=<abs dir>` makes the running status item and
+panel write a PNG each time their theme changes, to check that live.
 
 ## Menu bar
 

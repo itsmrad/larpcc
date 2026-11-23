@@ -30,6 +30,14 @@ struct MenuBarLabel: View {
             (["LarpCC"] + rings.map { "\($0.provider.title) session, \(Int($0.left.rounded())) percent left" })
                 .joined(separator: ", "))
         .onAppear { MenuBarDockPolicy.install() }
+        #if DEBUG
+        .onChange(of: theme, initial: true) { _, theme in
+            MenuBarSnapshot.recordLive("status", theme: theme) {
+                Self.templateImage(Self.rings(store, codexProfileID: codexProfileID, claudeProfileID: claudeProfileID),
+                                   weight: theme.tokens.statusWeight)
+            }
+        }
+        #endif
     }
 
     @MainActor static func rings(_ store: AppStore, codexProfileID: String, claudeProfileID: String) -> [Ring] {
@@ -210,6 +218,17 @@ struct MenuBarPanel: View {
             return .handled
         }
         .onExitCommand(perform: closePanel)
+        #if DEBUG
+        .onChange(of: theme, initial: true) { _, theme in
+            guard !isSnapshot else { return }
+            MenuBarSnapshot.recordLive("panel", theme: theme) {
+                let renderer = ImageRenderer(content: MenuBarPanel(store: store, isSnapshot: true)
+                    .environment(\.theme, theme))
+                renderer.scale = 2
+                return renderer.nsImage
+            }
+        }
+        #endif
         .onAppear {
             guard !isSnapshot else { return }
             // Like a menu, every opening starts with nothing selected or expanded.

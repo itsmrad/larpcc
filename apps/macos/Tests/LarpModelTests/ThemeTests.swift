@@ -21,15 +21,11 @@ final class ThemeTests: XCTestCase {
     }
 
     func testStoredValuesRoundTripThroughUserDefaults() {
-        let suite = "larpcc.theme-tests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer {
-            // removePersistentDomain leaves an empty plist behind; remove the file too.
-            defaults.removePersistentDomain(forName: suite)
-            let file = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Preferences/\(suite).plist")
-            try? FileManager.default.removeItem(at: file)
-        }
+        // The test runner's own defaults: a suite would leave a preferences file behind.
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: ThemeChoice.key)
+        defer { defaults.set(saved, forKey: ThemeChoice.key) }
+        defaults.removeObject(forKey: ThemeChoice.key)
         XCTAssertEqual(ThemeChoice(stored: defaults.string(forKey: ThemeChoice.key)), .automatic, "unset")
         for choice in ThemeChoice.allCases {
             defaults.set(choice.rawValue, forKey: ThemeChoice.key)

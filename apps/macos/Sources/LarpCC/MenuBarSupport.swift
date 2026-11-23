@@ -160,6 +160,19 @@ enum MenuBarSnapshot {
             .flatMap { Double($0.dropFirst("--menubar-screen-height=".count)) }.map { CGFloat($0) }
     }
 
+    /// `--menubar-live-snapshots=<abs dir>`: whenever the running status item or panel receives
+    /// a theme, it writes `<dir>/<n>-<view>-<theme>.png` from that live environment. This checks
+    /// that a Settings theme change reaches the menu bar without a relaunch.
+    @MainActor private static var liveCount = 0
+    @MainActor static func recordLive(_ view: String, theme: Theme, image: () -> NSImage?) {
+        let prefix = "--menubar-live-snapshots="
+        guard let dir = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) })?.dropFirst(prefix.count),
+              dir.hasPrefix("/"), let tiff = image().flatMap({ $0.tiffRepresentation }),
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+        liveCount += 1
+        try? png.write(to: URL(fileURLWithPath: "\(dir)/\(liveCount)-\(view)-\(theme.rawValue).png"))
+    }
+
     /// `--menubar-notice=<text>`: shows that text as the panel's notice, for overflow checks.
     static var notice: String? {
         CommandLine.arguments.first { $0.hasPrefix("--menubar-notice=") }.map { String($0.dropFirst("--menubar-notice=".count)) }
