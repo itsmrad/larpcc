@@ -25,6 +25,46 @@ mod share;
 use desktop::{synthetic::*, *};
 use std::{ffi::OsString, path::PathBuf};
 
+#[test]
+fn production_open_command_filters_provider_environment() {
+    let f = Fixture::new(registry::Provider::Codex);
+    let names: Vec<OsString> = [
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_EXTRA",
+        "ANTHROPIC_API_KEY",
+        "CODEX_HOME",
+        "CODEX_OTHER",
+        "OPENAI_API_KEY",
+        "PATH",
+        "HOME",
+    ]
+    .map(Into::into)
+    .to_vec();
+    let args = open_arguments(&f.target).unwrap();
+    let command = open_command(args.clone(), names.clone());
+    assert_eq!(command.get_program(), "/usr/bin/open");
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        args.iter().map(|v| v.as_os_str()).collect::<Vec<_>>()
+    );
+    let removed = command
+        .get_envs()
+        .map(|(name, value)| {
+            assert!(value.is_none());
+            name.to_os_string()
+        })
+        .collect::<Vec<_>>();
+    for name in &names[..6] {
+        assert!(removed.contains(name));
+    }
+    for name in &names[6..] {
+        assert!(!removed.contains(name));
+    }
+    let assignment = format!("CODEX_HOME={}", f.target.snapshot().cli.path.display());
+    assert_eq!(args[3], "--env");
+    assert_eq!(args[4], OsString::from(assignment));
+}
+
 struct Fixture {
     // Retained Windows handles must close before TempDir removes the fixture.
     target: ValidatedDesktopTarget,
@@ -149,7 +189,7 @@ fn desktop_unsupported_admission_and_binding_before_effects() {
             "/tmp/Claude.app",
             "/Applications/../Applications/ChatGPT.app",
         ] {
-            assert!(desktop::validate_binding(p, std::path::Path::new(path)).is_err());
+            assert!(desktop::validate_binding(p, std::path::Path::new(path), None, true).is_err());
         }
     }
 }
@@ -458,7 +498,9 @@ fn desktop_claude_binding_is_qualification_pending() {
     assert!(matches!(
         validate_binding(
             registry::Provider::Claude,
-            std::path::Path::new("/Applications/Claude.app")
+            std::path::Path::new("/Applications/Claude.app"),
+            None,
+            true
         ),
         Err(registry::Error::QualificationPending)
     ));

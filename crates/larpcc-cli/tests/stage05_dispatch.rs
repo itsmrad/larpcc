@@ -296,6 +296,19 @@ fn stage05_dispatch_desktop_alias_forwards_to_app_open() {
     assert!(stderr(&output).starts_with("error: unsupported launch argument: argument syntax\n"));
     // Claude desktop (and every non-macOS desktop) stays closed: alias is no unlock.
     assert_eq!(stderr(&launch(&f, "codex-app", &[], 1)), PENDING);
+    f.larp_json(
+        &[
+            "cc",
+            "alias",
+            "add",
+            "chatgpt-app",
+            "claude-work",
+            "--desktop",
+            "--json",
+        ],
+        0,
+    );
+    assert_eq!(stderr(&launch(&f, "chatgpt-app", &[], 1)), PENDING);
 }
 
 #[cfg(feature = "synthetic-launch")]
