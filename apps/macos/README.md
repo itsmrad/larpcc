@@ -180,6 +180,28 @@ with `screencapture -x -o -l <windowID>`. Link debug builds the way
 `scripts/bundle.sh` does (`-Xlinker -platform_version …`); otherwise macOS
 draws the app in its compatibility style with small window corners.
 
+### Snapshot CI
+
+Every pull request that touches `apps/macos` runs the **macOS Snapshots**
+workflow. It calls `scripts/snapshots.sh`, which builds a debug app (linked
+like `scripts/bundle.sh`) and renders, with sample data only, every Settings
+page (`settings-<page>-<theme>-<appearance>.png`, one per sample profile too),
+the menu bar panel collapsed, expanded, selected, on a short screen and with
+accessibility settings (`panel-<variant>-<theme>-<appearance>.png`), and the
+status item (`status-item-<theme>-lightdark.png`) in Tahoe, Sequoia and Sonoma,
+light and dark. `index.md` lists the files and which macOS drew them.
+
+```sh
+gh run list --workflow 'macOS Snapshots' --branch <branch>
+gh run download <run id> -n snapshots -D /tmp/snapshots
+```
+
+Locally on a Mac: `scripts/snapshots.sh /tmp/snapshots` (it opens and closes
+the Settings window once per page). In debug builds,
+`--settings-snapshot=<abs path.png>` with `--page=`, `--theme=` and
+`--appearance=` captures the real Settings window (`screencapture -l`, or an
+in-process bitmap with `--settings-snapshot-method=cache`) and exits.
+
 ### Native Mac checklist
 
 - **A. Status item** Confirm the Codex ring before the Claude ring in sample
