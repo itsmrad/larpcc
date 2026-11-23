@@ -17,11 +17,11 @@ use std::{
     reason = "the test-only synthetic driver shares this module but has its own entrypoint"
 )]
 pub fn gate() -> Option<ExitCode> {
-    gate_with_rows(|| Ok(std::borrow::Cow::Borrowed(admission::ROWS)))
+    gate_with_rows(|_| Ok(std::borrow::Cow::Borrowed(admission::ROWS)))
 }
 
 pub(crate) fn gate_with_rows(
-    rows: impl FnOnce() -> Result<std::borrow::Cow<'static, [admission::ArtifactRow]>, Error>,
+    rows: impl FnOnce(&[OsString]) -> Result<std::borrow::Cow<'static, [admission::ArtifactRow]>, Error>,
 ) -> Option<ExitCode> {
     let mut args = std::env::args_os();
     let argv0 = args.next().unwrap_or_default();
@@ -44,7 +44,7 @@ fn dispatch(
     name: &ProfileName,
     argv0: &OsStr,
     args: Vec<OsString>,
-    rows: impl FnOnce() -> Result<std::borrow::Cow<'static, [admission::ArtifactRow]>, Error>,
+    rows: impl FnOnce(&[OsString]) -> Result<std::borrow::Cow<'static, [admission::ArtifactRow]>, Error>,
 ) -> Result<u32, Error> {
     let executable = std::env::current_exe().map_err(|_| Error::AliasInvalid)?;
     let (receipt, digest) = Receipt::adjacent(&executable, name)?;
@@ -54,7 +54,10 @@ fn dispatch(
     let (profile, pin, _held) = registry.alias_target(receipt, digest, &executable, argv0)?;
     let registry = registry.pin_alias(pin);
     match surface {
-        Surface::Cli => admission::invoke_pinned(registry, &profile, args, &rows()?),
+        Surface::Cli => {
+            let rows = rows(&args)?;
+            admission::invoke_pinned(registry, &profile, args, &rows)
+        }
         Surface::Desktop => {
             if !args.is_empty() {
                 return Err(Error::ArgConflict {

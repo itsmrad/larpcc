@@ -56,3 +56,24 @@ existing files/PATH collisions/reserved names; `stage05_transaction` interrupted
 add/remove/concurrent writers/forged receipt/moved root/drift; `stage05_closed`
 ordinary alias still qualification-refuses. Extend existing harness, use only
 claude-work/codex-45 in temporary LARPCC_HOME, finally delete aliases/receipts/home.
+
+## Manual alias recovery
+
+Use the standard `larp` executable with the affected data root. Check the
+launcher and receipt in `<root>/bin` and confirm that the original root and
+`bin` directories are in place. Restore the original files if they were moved
+or changed. An intact alias reported as `incompatible` can be removed and added
+again to copy the current executable.
+
+For a pending transaction, keep `share-journal.json` in place. Restore the
+original files, then run `larp cc alias list` without an expected revision to
+retry recovery. If an interrupted add left an unrecorded private staging file
+(`.NAME.launcher.pending` or `.NAME.receipt.pending`), move it aside only if you
+can identify it as a leftover from that add, then retry. Keep any moved files
+until recovery succeeds.
+
+If there is no pending transaction and the original files cannot be restored,
+inspect both final alias paths. Once you have identified and moved aside any
+remaining files at those paths, run `larp cc alias remove NAME` to retire the
+mapping, then add the alias again. If ownership or transaction state is unclear,
+leave the files and journal in place for manual inspection.

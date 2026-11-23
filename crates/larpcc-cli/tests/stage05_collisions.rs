@@ -170,3 +170,23 @@ fn stage05_collisions_windows_creation_refuses_before_alias_artifacts() {
     assert!(!f.root.join("bin").exists());
     assert!(!f.root.join("share-journal.json").exists());
 }
+
+#[test]
+fn stage05_collisions_staging_files_refuse_without_pending_journal() {
+    let f = setup();
+    let bin = f.root.join("bin");
+    create_directory(&bin);
+    for stage in [".codex-45.launcher.pending", ".codex-45.receipt.pending"] {
+        let path = bin.join(stage);
+        create_file(&path, b"existing staging sentinel");
+        let value = f.larp_json(
+            &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
+            1,
+        );
+        assert_eq!(code(&value), "conflict");
+        assert!(!f.root.join("share-journal.json").exists());
+        assert_eq!(fs::read(&path).unwrap(), b"existing staging sentinel");
+        f.profile(&["list"], 0);
+        fs::remove_file(path).unwrap();
+    }
+}
