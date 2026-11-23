@@ -211,16 +211,33 @@ enforces the receiver allowlist and LOCAL-only usage before IO. Old receivers
 must reject the unknown flag before effects. The probe and receiver gate
 neither qualify a native launch nor establish remote account identity.
 
+### Deadlines
+
+Each SSH child deadline covers the remote operation, OpenSSH's 4 s
+`ConnectTimeout`, and at least 2 s of margin. The child deadline also
+bounds hooks and jumps in config mode. Keep the read and mutation budgets
+separate.
+
+| SSH operation | Remote op budget | ConnectTimeout | Margin | SSH child deadline | App-bridge deadline |
+|---|---:|---:|---:|---:|---:|
+| Read or compatibility probe | 5 s | 4 s | 2 s | 11 s | 28 s (17 s for probe-only `host check`) |
+| Mutation | 54 s | 4 s | 2 s | 60 s | 77 s |
+| Skills import or catalog export | 54 s | 4 s | 2 s | 60 s | 77 s per leg, 148 s for a two-remote-leg copy |
+| Remote account status (`status --host`, Stage 14) | 10 s | 4 s | 2 s | 16 s | 33 s |
+
+The app-bridge deadline includes up to 2 s for local `ssh -V`, one
+compatibility probe per remote leg, up to 2 s for failure cleanup, and 2 s
+for bridge overhead and envelope encoding. A two-remote-leg copy allows
+for two probes and two transfers. Stop on first failure, with cleanup
+once. Cache the local version check by verified executable identity and
+invalidate it on replacement. Stage 14 ([PR #21](https://github.com/itsmrad/larpcc/pull/21))
+uses the same 10 s operation, 16 s child and 33 s app-bridge numbers for
+account status, including its compatibility probe. The Stage 14 request
+uses the existing metadata snapshot and adds no read to that budget.
+
 Drain both streams concurrently, with a 1 MiB cap per stream for ordinary
-envelopes and empty stderr required. Private export limits are specified below. Probe/read deadline is 4.5 seconds per SSH
-child, including the 4-second OpenSSH connection timeout. The outer
-deadline also covers hooks and jumps in config mode. Stop at the first
-failure and allow at most 2 seconds for cleanup. The app bridge has a
-15-second end-to-end deadline per read: up to 2 seconds for the local client
-version check, 4.5 for the remote version probe, 4.5 for the command and
-2 for failure cleanup, leaving 2 seconds of slack for bridge overhead. Cache the local client check by
-verified executable identity and invalidate it on replacement.
-A dispatched mutation or binary export has a 60-second per-child deadline. On timeout, cancel or overflow, terminate and reap the
+envelopes and empty stderr required. Private export limits are specified
+below. On timeout, cancel or overflow, terminate and reap the
 direct SSH child. Losing that process does not establish whether a remote
 mutation committed. Enforce one UTF-8 JSON object plus LF, exact discriminator
 (or `parse` for a parser rejection), schema and semantic invariants, and matching
@@ -350,7 +367,7 @@ TTY streams and checks arguments and the destination revision before
 emitting the exact readiness line `LARPCC-IMPORT/1 READY` plus LF. Send
 no package bytes until that marker is received, so the shell cannot
 consume them as script input. Bound the readiness wait to 5 seconds
-within the 60-second transfer deadline. The readiness marker has a fixed
+within the skills import child deadline above. The readiness marker has a fixed
 length and does not count toward the 1 MiB JSON receipt cap. Then send the frame and close
 stdin. The marker is stripped locally. An early valid JSON error can
 replace readiness. Only the ordinary JSON receipt or error follows a
