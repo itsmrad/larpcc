@@ -176,7 +176,9 @@ struct MenuBarPanel: View {
         .background(panelBackground)
         .background {
             if !isSnapshot {
-                MenuBarWindowSizer(height: min(panelHeight, maxPanelHeight)) { if screenHeight != $0 { screenHeight = $0 } }
+                // PanelStack already holds the panel to the screen limit, except for the footer's
+                // own minimum; the window follows the measured height so the footer is never cut.
+                MenuBarWindowSizer(height: panelHeight) { if screenHeight != $0 { screenHeight = $0 } }
             }
         }
         .background {
