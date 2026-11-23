@@ -80,6 +80,8 @@ fn stage14_status_modes() {
         assert_eq!(f.json(&args, 1)["error"]["code"], "conflict");
         let args = [mode, &["--expected-profile-id", "01"]].concat();
         assert_eq!(f.json(&args, 2)["error"]["code"], "usage");
+        let args = [mode, &["--expected-host-revision", "0"]].concat();
+        assert_eq!(f.json(&args, 1)["error"]["code"], "unsupported");
     }
     for option in [&["--no-account"][..], &["--expected-profile-id", "1"][..]] {
         let args = [&["cc", "profile", "list", "--json"][..], option].concat();
@@ -95,6 +97,52 @@ fn stage14_status_modes() {
     assert_eq!(account["data"]["profile"], metadata["data"]["profile"]);
     assert_eq!(account["data"]["account"]["state"], "signed_in");
     assert!(f.marker.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn stage14_human_interrupt_reaps_and_publishes_no_account() {
+    use std::{
+        os::unix::process::ExitStatusExt,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+
+    let f = StatusFixture::new();
+    let release = f.fixture.temp.path().join("release");
+    let mut cmd = f.command(true, &["cc", "status", "codex-45"]);
+    cmd.env("LARPCC_STAGE14_FAKE_MODE", "hold")
+        .env("LARPCC_STAGE14_RELEASE", &release)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let wrapper = common::spawn(&mut cmd).unwrap();
+    let end = Instant::now() + Duration::from_secs(5);
+    let pid = loop {
+        if let Some(pid) = fs::read_to_string(&f.marker)
+            .ok()
+            .and_then(|pid| pid.parse::<libc::pid_t>().ok())
+        {
+            break pid;
+        }
+        assert!(Instant::now() < end, "synthetic child did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    // SAFETY: wrapper is the direct test child and pid came from its isolated fake.
+    assert_eq!(
+        unsafe { libc::kill(wrapper.id() as libc::pid_t, libc::SIGINT) },
+        0
+    );
+    let output = common::wait_output(wrapper).unwrap();
+    assert_eq!(output.status.signal(), Some(libc::SIGINT));
+    assert!(output.stdout.is_empty());
+    // SAFETY: signal zero queries only the synthetic child PID.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    assert_eq!(f.json(&[], 0)["data"]["account"]["state"], "signed_in");
 }
 
 #[test]
@@ -234,7 +282,7 @@ fn stage14_never_store() {
     let email = ["user", "@", "example.com"].concat();
     // Assemble credential-shaped test data at runtime to avoid scanner matches.
     let credential = ["sk-", "inventedfixture01234567890123456789"].concat();
-    let forbidden = [email, credential];
+    let forbidden = [email, ["Pl", "us"].concat(), credential];
     assert_eq!(f.json(&[], 0)["data"]["account"]["state"], "signed_in");
     let mut cmd = f.command(true, &["cc", "status", "codex-45", "--json"]);
     cmd.env("LARPCC_STAGE14_FAKE_MODE", "credential");

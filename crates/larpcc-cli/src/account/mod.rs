@@ -274,6 +274,6 @@ pub(crate) fn synthetic_row(sha256: [u8; 32]) -> StatusRow {
             evidence: "test only",
         },
         parser: parser::invented,
-        deadline: Duration::from_secs(2),
+        deadline: Duration::from_secs(4),
     }
 }

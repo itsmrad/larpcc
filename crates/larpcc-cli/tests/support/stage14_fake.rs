@@ -28,7 +28,7 @@ fn main() -> ExitCode {
     match mode.as_str() {
         "email-only" => print!("signed-in\nemail={email}\n"),
         "plan-only" => print!("signed-in\nplan={plan}\n"),
-        "neither" => print!("signed-in\n"),
+        "neither" => println!("signed-in"),
         "signed-out" => {
             println!("signed-out");
             return ExitCode::from(3);

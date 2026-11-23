@@ -6,8 +6,8 @@ Arguments:
   <NAME>  
 
 Options:
-      --no-account                             Show local metadata without running the provider
       --json                                   Emit one local metadata JSON envelope
+      --no-account                             Show local metadata without running the provider
       --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
   -h, --help                                   Print help
 
