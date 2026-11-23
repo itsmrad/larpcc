@@ -132,6 +132,20 @@ fn locked(root: &Path, expected: Option<u64>) -> Result<(store::RegistryLock, st
     Ok((lock, data))
 }
 
+fn initial(
+    root: &Path,
+    expected: Option<u64>,
+) -> Result<(Option<store::RegistryLock>, store::Data), Error> {
+    if platform::inspect(&root.join("registry.lock"), ObjectKind::File)?.is_none() {
+        let data = store::load_unchecked(root)?;
+        store::precondition(&data, expected)?;
+        if data.version == 3 && data.revision == 0 && !crate::share::pending(root) {
+            return Ok((None, data));
+        }
+    }
+    locked(root, expected).map(|(lock, data)| (Some(lock), data))
+}
+
 fn selected<'a>(data: &'a store::Data, name: &ProfileName) -> Result<&'a Profile, Error> {
     data.profiles
         .iter()
@@ -215,7 +229,7 @@ impl Registry {
         let root = self.root();
         let _ancestors = platform::anchor(root)?.ancestors;
         let (id, snapshot) = {
-            let (_lock, data) = locked(root, self.expected)?;
+            let (_lock, data) = initial(root, self.expected)?;
             let id = deletion_id(&data, read(root)?, &name, recover)?;
             (id, fingerprint(&store::serialize(&data)?))
         };

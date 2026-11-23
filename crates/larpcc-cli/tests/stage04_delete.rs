@@ -155,6 +155,19 @@ fn stage04_delete_and_recover_refuse_stale_name_reuse() {
     }
 }
 
+#[test]
+fn stage04_delete_stale_revision_does_not_create_missing_root() {
+    let f = Fixture::new();
+    for args in [
+        &["delete", "codex-45", "--yes", "--expected-revision", "1"][..],
+        &["recover", "codex-45", "--yes", "--expected-revision", "1"][..],
+        &["migrate", "--expected-revision", "1"][..],
+    ] {
+        assert_eq!(request(&f, args, 1)["error"]["code"], "conflict");
+        assert!(!f.root.exists());
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn stage04_delete() {

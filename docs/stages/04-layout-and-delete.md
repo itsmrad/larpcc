@@ -172,7 +172,7 @@ implemented and actually executed with `cargo test --workspace --locked stage04_
 |---|---|
 | stage04_migration | v1/v2 read unchanged; empty/synthetic migration, IDs/bindings/next_id preserved; cli+desktop layout; old schema refusal; nonempty unknown home untouched |
 | stage04_migration_crash | crash each rename/journal/registry boundary; deterministic resume or safe refusal; two migrators serialize; no lost/outside bytes |
-| stage04_delete | delete removes the folder and cleans aliases and sharing references; forget retains the folder and refuses while references exist; ID never reused; --yes/--logout/JSON precedence; keychain warning |
+| stage04_delete | Delete removes the folder and cleans aliases and sharing references. Forget retains the folder and refuses while references exist. Verify ID retirement, --yes/--logout/JSON precedence and the keychain warning. |
 | stage04_delete_escape | traversal/forged manifest/journal, symlink/junction swap, mount/hardlink/outside sentinel; no outside deletion, no token-content reads |
 | stage04_delete_recovery | crash every cleanup boundary; tombstone blocks all consumers; busy CLI/desktop, surviving managed child and uncertain inspected app identity refuse; concurrent edits/drift retain tombstone |
 

@@ -67,7 +67,7 @@ impl Registry {
         let root = self.root();
         let _ancestors = platform::anchor(root)?.ancestors;
         let (ids, before) = {
-            let (_lock, data) = locked(root, self.expected)?;
+            let (_lock, data) = initial(root, self.expected)?;
             let pending = read(root)?;
             if pending
                 .as_ref()

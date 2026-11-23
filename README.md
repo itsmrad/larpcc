@@ -37,8 +37,8 @@ removes the managed profile directory and owned aliases, clears sharing
 references and retires the profile ID. If interrupted, resume with
 `profile recover NAME --yes`. Pending cleanup blocks registry consumers.
 Windows refuses profile-tree deletion and recovery until confined removal is
-available. `--logout` requires native qualification. Keychain items and remote
-grants may remain after deleting a directory.
+available. `--logout` requires native qualification. Keychain items, remote
+grants and Electron Safe Storage may remain after deleting a directory.
 
 `profile migrate` upgrades registries with empty legacy homes on Linux and
 macOS. Keep older Larp binaries and native sessions stopped while migrating.
