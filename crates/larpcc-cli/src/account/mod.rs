@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 pub(crate) struct StatusRow {
-    pub artifact: ArtifactRow,
+    artifact: ArtifactRow,
     parser: parser::Parser,
     deadline: Duration,
 }
@@ -19,12 +19,18 @@ pub(crate) const ROWS: &[StatusRow] = &[];
 const DEADLINE: Duration = Duration::from_secs(10);
 
 enum Account {
-    #[cfg_attr(not(feature = "synthetic-launch"), allow(dead_code, reason = "no qualified row yet"))]
+    #[cfg_attr(
+        not(feature = "synthetic-launch"),
+        allow(dead_code, reason = "no qualified row yet")
+    )]
     SignedIn {
         email: Option<String>,
         plan: Option<String>,
     },
-    #[cfg_attr(not(feature = "synthetic-launch"), allow(dead_code, reason = "no qualified row yet"))]
+    #[cfg_attr(
+        not(feature = "synthetic-launch"),
+        allow(dead_code, reason = "no qualified row yet")
+    )]
     SignedOut,
     Unknown,
     NotQualified,
@@ -73,15 +79,13 @@ pub(crate) struct Summary {
 
 impl Summary {
     pub(crate) fn json(self) -> Value {
-        let Value::Object(mut metadata) = self.metadata else {
-            unreachable!("status metadata is constructed locally")
-        };
+        let mut metadata = self.metadata;
         json!({
-            "profile": metadata.remove("profile"),
+            "profile": metadata["profile"].take(),
             "provider_version": self.version,
             "account": self.account.json(),
             "usage": null,
-            "diagnostics": metadata.remove("diagnostics"),
+            "diagnostics": metadata["diagnostics"].take(),
         })
     }
 
@@ -97,6 +101,27 @@ impl Summary {
     }
 }
 
+pub(crate) fn metadata_human(metadata: &Value) -> String {
+    let profile = &metadata["profile"];
+    let cli = &profile["surfaces"]["cli"];
+    let binding = &metadata["detected_versions"][0]["binding"];
+    let mut output = format!(
+        "Name:      {}\nProvider:  {}\nID:        {}\nState dir: {}\nState:     {}\nCLI binding: {}\n",
+        profile["name"].as_str().unwrap_or_default(),
+        profile["provider"].as_str().unwrap_or_default(),
+        profile["id"].as_str().unwrap_or_default(),
+        cli["path"].as_str().unwrap_or_default(),
+        cli["state"].as_str().unwrap_or_default(),
+        binding["state"].as_str().unwrap_or_default(),
+    );
+    if let Some(path) = binding["path"].as_str() {
+        output.push_str("Executable: ");
+        output.push_str(path);
+        output.push('\n');
+    }
+    output
+}
+
 enum Prepared<'a> {
     Observe(Box<Admitted<'a>>, &'a StatusRow),
     Complete(Account),
@@ -110,7 +135,10 @@ fn prepare<'a>(
     artifacts: &'a [ArtifactRow],
 ) -> Result<Prepared<'a>, Error> {
     let complete = |state| Ok(Prepared::Complete(state));
-    if !artifacts.iter().any(|row| row.operation == Operation::Status) {
+    if !artifacts
+        .iter()
+        .any(|row| row.operation == Operation::Status)
+    {
         return complete(Account::NotQualified);
     }
     let cli = &metadata["profile"]["surfaces"]["cli"];
@@ -122,17 +150,22 @@ fn prepare<'a>(
         return complete(Account::Unavailable);
     }
     let keys = std::env::vars_os().map(|(key, _)| key).collect::<Vec<_>>();
-    let admitted = match admission::admit(registry, Operation::Status, name, vec![], artifacts, &keys) {
-        Ok(admitted) => admitted,
-        Err(Error::QualificationPending | Error::ArtifactInvalid | Error::InvalidExecutable { .. }) => {
-            // Stage 08 has no approved version probe descriptor.
-            return complete(Account::NotQualified);
-        }
-        Err(Error::Unbound { .. } | Error::HomeUnavailable { .. } | Error::Unsafe { .. }) => {
-            return complete(Account::Unavailable);
-        }
-        Err(error) => return Err(error),
-    };
+    let admitted =
+        match admission::admit(registry, Operation::Status, name, vec![], artifacts, &keys) {
+            Ok(admitted) => admitted,
+            Err(
+                Error::QualificationPending
+                | Error::ArtifactInvalid
+                | Error::InvalidExecutable { .. },
+            ) => {
+                // Stage 08 has no approved version probe descriptor.
+                return complete(Account::NotQualified);
+            }
+            Err(Error::Unbound { .. } | Error::HomeUnavailable { .. } | Error::Unsafe { .. }) => {
+                return complete(Account::Unavailable);
+            }
+            Err(error) => return Err(error),
+        };
     let mut matching = rows.iter().filter(|row| {
         row.artifact.operation == admitted.row.operation
             && row.artifact.provider == admitted.row.provider
@@ -143,7 +176,9 @@ fn prepare<'a>(
     let Some(row) = matching.next() else {
         return complete(Account::NotQualified);
     };
-    if matching.next().is_some() || crate::registry::parse_recorded_version(row.artifact.release).is_err() {
+    if matching.next().is_some()
+        || crate::registry::parse_recorded_version(row.artifact.release).is_err()
+    {
         return complete(Account::NotQualified);
     }
     Ok(Prepared::Observe(Box::new(admitted), row))
@@ -163,17 +198,22 @@ pub(crate) fn status(
     finish(metadata, prepared, json)
 }
 
-fn finish(
-    metadata: Value,
-    prepared: Prepared<'_>,
-    json: bool,
-) -> Result<Summary, Error> {
+fn finish(metadata: Value, prepared: Prepared<'_>, json: bool) -> Result<Summary, Error> {
     let (admitted, row) = match prepared {
         Prepared::Observe(admitted, row) => (admitted, row),
-        Prepared::Complete(account) => return Ok(Summary { metadata, account, version: None }),
+        Prepared::Complete(account) => {
+            return Ok(Summary {
+                metadata,
+                account,
+                version: None,
+            });
+        }
     };
     let id = admitted.snapshot.target.profile.id;
-    let guard = admission::acquire_auth_guard(&admitted.root, id)?;
+    let guard = admission::acquire_auth_guard(&admitted.root, id).map_err(|error| match error {
+        Error::AdmissionChanged => Error::Conflict,
+        error => error,
+    })?;
     admission::revalidate(&admitted).map_err(|_| Error::Conflict)?;
     admission::revalidate_guard(&admitted.root, id, &guard).map_err(|_| Error::Conflict)?;
     if !json {
@@ -193,17 +233,26 @@ fn finish(
             admission::revalidate(&admitted).map_err(|_| Error::Conflict)?;
             admission::revalidate_guard(&admitted.root, id, &guard).map_err(|_| Error::Conflict)?;
             match captured? {
-                capture::Captured::Complete(exit, stdout, stderr) => (row.parser)(exit.code(), &stdout, &stderr),
+                capture::Captured::Complete(exit, stdout, stderr) => {
+                    (row.parser)(exit.code(), &stdout, &stderr)
+                }
                 capture::Captured::Incomplete => Account::Unknown,
                 capture::Captured::Cancelled(_) => unreachable!(),
             }
         }
     };
-    Ok(Summary { metadata, account, version })
+    Ok(Summary {
+        metadata,
+        account,
+        version,
+    })
 }
 
 #[cfg(feature = "synthetic-launch")]
-#[allow(dead_code, reason = "only the unpackaged synthetic driver injects a row")]
+#[allow(
+    dead_code,
+    reason = "only the unpackaged synthetic driver injects a row"
+)]
 pub(crate) fn synthetic_row(sha256: [u8; 32]) -> StatusRow {
     use crate::registry::Provider;
 

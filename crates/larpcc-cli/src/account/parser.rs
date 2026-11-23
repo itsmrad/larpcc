@@ -57,7 +57,9 @@ fn signed_in(stdout: &[u8]) -> Option<Account> {
 fn valid_email_part(value: &str, max: usize) -> bool {
     !value.is_empty()
         && value.len() <= max
-        && value.bytes().all(|byte| byte.is_ascii_graphic() && byte != b'@')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'@')
 }
 
 #[cfg(all(test, feature = "synthetic-launch"))]
@@ -69,7 +71,11 @@ mod tests {
         let email = ["user", "@", "example.com"].concat();
         let plan = ["Pl", "us"].concat();
         for (fields, expected_email, expected_plan) in [
-            (format!("email={email}\nplan={plan}\n"), Some(email.as_str()), Some(plan.as_str())),
+            (
+                format!("email={email}\nplan={plan}\n"),
+                Some(email.as_str()),
+                Some(plan.as_str()),
+            ),
             (format!("email={email}\n"), Some(email.as_str()), None),
             (format!("plan={plan}\n"), None, Some(plan.as_str())),
             (String::new(), None, None),
@@ -83,7 +89,10 @@ mod tests {
                 _ => panic!("fixture should parse as signed in"),
             }
         }
-        assert!(matches!(invented(Some(3), b"signed-out\n", b""), Account::SignedOut));
+        assert!(matches!(
+            invented(Some(3), b"signed-out\n", b""),
+            Account::SignedOut
+        ));
     }
 
     #[test]
@@ -113,7 +122,10 @@ mod tests {
             format!("signed-in\nemail=a@{}\n", "b".repeat(254)),
             format!("signed-in\nplan={}\n", "p".repeat(65)),
         ] {
-            assert!(matches!(invented(Some(0), output.as_bytes(), b""), Account::Unknown));
+            assert!(matches!(
+                invented(Some(0), output.as_bytes(), b""),
+                Account::Unknown
+            ));
         }
     }
 }

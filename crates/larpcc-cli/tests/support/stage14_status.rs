@@ -23,12 +23,23 @@ impl StatusFixture {
         copy_executable(&fake, &installed);
         fixture.profile(&["add", "codex-45", "--provider", "codex"], 0);
         fixture.run(
-            &["cc", "provider", "bind", "codex", installed.to_str().unwrap()],
+            &[
+                "cc",
+                "provider",
+                "bind",
+                "codex",
+                installed.to_str().unwrap(),
+            ],
             0,
         );
         let digest = format!("{:x}", Sha256::digest(fs::read(&installed).unwrap()));
         let marker = fixture.temp.path().join("executed");
-        Self { fixture, marker, digest, installed }
+        Self {
+            fixture,
+            marker,
+            digest,
+            installed,
+        }
     }
 
     fn command(&self, synthetic: bool, args: &[&str]) -> Command {
@@ -72,7 +83,10 @@ fn stage14_status_modes() {
     }
     for option in [&["--no-account"][..], &["--expected-profile-id", "1"][..]] {
         let args = [&["cc", "profile", "list", "--json"][..], option].concat();
-        assert_eq!(envelope(&exec(f.command(true, &args), 2))["error"]["code"], "usage");
+        assert_eq!(
+            envelope(&exec(f.command(true, &args), 2))["error"]["code"],
+            "usage"
+        );
     }
     assert!(!f.marker.exists());
 
@@ -94,6 +108,39 @@ fn stage14_admission_closed_and_digest_mismatch_do_not_execute() {
     assert_eq!(ordinary["data"]["account"]["state"], "not_qualified");
     assert!(ordinary["data"]["provider_version"].is_null());
     assert!(!f.marker.exists());
+}
+
+#[test]
+fn stage14_admission_cannot_publish_a_stale_snapshot() {
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+
+    let f = StatusFixture::new();
+    let release = f.fixture.temp.path().join("release");
+    let mut cmd = f.command(true, &["cc", "status", "codex-45", "--json"]);
+    cmd.env("LARPCC_STAGE14_FAKE_MODE", "hold")
+        .env("LARPCC_STAGE14_RELEASE", &release)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = common::spawn(&mut cmd).unwrap();
+    let end = Instant::now() + Duration::from_secs(5);
+    while !f.marker.exists() && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(f.marker.exists());
+    assert_eq!(f.json(&[], 1)["error"]["code"], "busy");
+    assert_eq!(f.json(&["--no-account"], 0)["command"], "status");
+    f.fixture.profile(&["rename", "codex-45", "claude-work"], 0);
+    fs::write(release, b"").unwrap();
+    let output = common::wait_output(child).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result = envelope(&output);
+    assert_eq!(result["command"], "status.account");
+    assert_eq!(result["error"]["code"], "conflict");
+    assert!(result.get("data").is_none());
 }
 
 #[test]
@@ -121,8 +168,7 @@ fn stage14_json_contract() {
     let mut example = examples
         .into_iter()
         .find(|value| {
-            value["command"] == "status.account"
-                && value["data"]["account"]["email"].is_string()
+            value["command"] == "status.account" && value["data"]["account"]["email"].is_string()
         })
         .unwrap();
     assert_eq!(actual["data"]["provider_version"], "0.0.14-fixture");
@@ -174,7 +220,11 @@ fn stage14_never_store() {
             } else if kind.is_file() && item.path() != fake {
                 let bytes = fs::read(item.path()).unwrap();
                 for value in forbidden {
-                    assert!(!bytes.windows(value.len()).any(|window| window == value.as_bytes()));
+                    assert!(
+                        !bytes
+                            .windows(value.len())
+                            .any(|window| window == value.as_bytes())
+                    );
                 }
             }
         }

@@ -6,7 +6,7 @@ use std::{
 
 fn main() -> ExitCode {
     if let Some(marker) = std::env::var_os("LARPCC_STAGE14_EXECUTED") {
-        std::fs::write(marker, b"executed").unwrap();
+        std::fs::write(marker, std::process::id().to_string()).unwrap();
     }
     if !std::env::args().skip(1).eq(["login", "status"]) {
         return ExitCode::from(91);

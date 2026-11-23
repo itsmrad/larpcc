@@ -1,3 +1,4 @@
+mod account;
 mod aliases;
 mod cli;
 #[cfg_attr(any(test, not(target_os = "macos")), allow(dead_code))]

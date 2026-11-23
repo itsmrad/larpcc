@@ -1,6 +1,7 @@
 mod alias;
 mod json;
 mod render;
+use crate::account::{self, StatusRow};
 #[allow(unused_imports, reason = "the synthetic driver has its own entrypoint")]
 pub use alias::gate;
 #[cfg(feature = "synthetic-launch")]
@@ -32,6 +33,12 @@ struct Cli {
     /// Refuse if the registry revision has changed
     #[arg(long, global = true, value_parser = parse_revision)]
     expected_revision: Option<u64>,
+    /// Refuse status if the profile identity has changed
+    #[arg(long, global = true, hide = true, allow_hyphen_values = true)]
+    expected_profile_id: Option<std::ffi::OsString>,
+    /// Require a routing revision for remote status
+    #[arg(long, global = true, hide = true, allow_hyphen_values = true)]
+    expected_host_revision: Option<std::ffi::OsString>,
     #[command(subcommand)]
     command: RootAction,
 }
@@ -95,8 +102,13 @@ enum CcAction {
         #[arg(long, help = "Confirm the authentication operation")]
         yes: bool,
     },
-    #[command(about = "Show native authentication status", after_help = admission::AUTH_HELP)]
-    Status { name: ProfileName },
+    #[command(about = "Show profile account status", after_help = STATUS_HELP)]
+    Status {
+        name: ProfileName,
+        /// Show local metadata without running the provider
+        #[arg(long)]
+        no_account: bool,
+    },
     #[command(about = "Log out a profile", after_help = admission::AUTH_HELP)]
     Logout {
         name: ProfileName,
@@ -338,21 +350,32 @@ enum ProfileAction {
 }
 
 const KEYCHAIN_RETAINED: &str = "Keychain items and remote grants may remain.";
+const STATUS_HELP: &str = "Use --expected-profile-id ID to require the selected profile identity.\nAccount details can appear in terminal scrollback and screenshots. Use --no-account to omit them.";
 
 use clap::builder::TypedValueParser;
 
 pub fn run() -> ExitCode {
+    run_with_status_rows(account::ROWS)
+}
+
+pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
     let early_json = args
         .iter()
         .skip(1)
         .take_while(|a| *a != "--")
         .any(|a| a == "--json");
-    let expected_present = args.iter().skip(1).take_while(|a| *a != "--").any(|a| {
-        a == "--expected-revision"
-            || a.to_str()
-                .is_some_and(|s| s.starts_with("--expected-revision="))
-    });
+    let has_option = |option: &str| {
+        args.iter().skip(1).take_while(|a| *a != "--").any(|a| {
+            a.to_str().is_some_and(|s| {
+                s == option || s.split_once('=').is_some_and(|(key, _)| key == option)
+            })
+        })
+    };
+    let profile_id_present = has_option("--expected-profile-id");
+    let host_revision_present = has_option("--expected-host-revision");
+    let expected_present =
+        has_option("--expected-revision") || profile_id_present || host_revision_present;
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(mut error) => {
@@ -366,7 +389,11 @@ pub fn run() -> ExitCode {
                     early_json,
                     "parse",
                     "usage",
-                    "Help and version do not accept a revision precondition.",
+                    if profile_id_present || host_revision_present {
+                        "Help and version do not accept a precondition."
+                    } else {
+                        "Help and version do not accept a revision precondition."
+                    },
                 );
             }
             if early_json {
@@ -383,6 +410,9 @@ pub fn run() -> ExitCode {
                 }
                 return json_error("parse", "usage", "Invalid command or arguments.", 2);
             }
+            if profile_id_present || host_revision_present {
+                return json_or_usage(false, "parse", "usage", "Invalid command or arguments.");
+            }
             escape_error_values(&mut error);
             if !error.use_stderr() {
                 return write_output(
@@ -396,6 +426,68 @@ pub fn run() -> ExitCode {
         }
     };
     let RootAction::Cc { command } = cli.command;
+    if let CcAction::Status { name, no_account } = &command {
+        let command = if *no_account {
+            "status"
+        } else {
+            "status.account"
+        };
+        let expected_id = match cli.expected_profile_id.as_deref() {
+            Some(value) => match value
+                .to_str()
+                .and_then(|id| parse_revision(id).ok())
+                .filter(|id| *id != 0)
+            {
+                Some(id) => Some(id),
+                None => {
+                    return json_or_usage(
+                        cli.json,
+                        command,
+                        "usage",
+                        "Expected profile ID must be a canonical nonzero decimal u64.",
+                    );
+                }
+            },
+            None => None,
+        };
+        if let Some(value) = cli.expected_host_revision.as_deref() {
+            if value
+                .to_str()
+                .is_none_or(|revision| parse_revision(revision).is_err())
+            {
+                return json_or_usage(
+                    cli.json,
+                    command,
+                    "usage",
+                    "Expected host revision must be a canonical decimal u64.",
+                );
+            }
+            const UNSUPPORTED: &str =
+                "Host revision preconditions require remote routing, which is unavailable.";
+            return if cli.json {
+                json_error(command, "unsupported", UNSUPPORTED, 1)
+            } else {
+                eprintln!("error: {UNSUPPORTED}");
+                ExitCode::FAILURE
+            };
+        }
+        return status(
+            name,
+            *no_account,
+            expected_id,
+            cli.expected_revision,
+            cli.json,
+            rows,
+        );
+    }
+    if cli.expected_profile_id.is_some() || cli.expected_host_revision.is_some() {
+        return json_or_usage(
+            cli.json,
+            "parse",
+            "usage",
+            "These preconditions are only accepted by status.",
+        );
+    }
     if cli.json {
         return execute_json(command, cli.expected_revision);
     }
@@ -450,7 +542,7 @@ pub fn run() -> ExitCode {
         }
         CcAction::Run { name, args } => return operation(Operation::Run, name, args, false),
         CcAction::Login { name, yes } => return operation(Operation::Login, name, vec![], yes),
-        CcAction::Status { name } => return operation(Operation::Status, name, vec![], true),
+        CcAction::Status { .. } => unreachable!(),
         CcAction::Logout { name, yes } => return operation(Operation::Logout, name, vec![], yes),
         CcAction::Provider { command } => {
             return match Registry::locate().and_then(|r| match command {
@@ -527,6 +619,47 @@ pub fn run() -> ExitCode {
             &mut io::stdout().lock(),
             &mut io::stderr().lock(),
         ),
+        Err(error) => operational_error(error),
+    }
+}
+
+fn status(
+    name: &ProfileName,
+    no_account: bool,
+    expected_id: Option<u64>,
+    expected_revision: Option<u64>,
+    json: bool,
+    rows: &[StatusRow],
+) -> ExitCode {
+    let command = if no_account {
+        "status"
+    } else {
+        "status.account"
+    };
+    let result = Registry::locate().and_then(|registry| {
+        let registry = registry.expecting(expected_revision);
+        let output = if no_account {
+            let (metadata, ()) = registry.with_status_metadata(name, expected_id, |_| Ok(()))?;
+            if json {
+                return Ok(json_success(command, registry.revision(), metadata));
+            }
+            account::metadata_human(&metadata)
+        } else {
+            let summary = account::status(&registry, name, expected_id, json, rows)?;
+            if json {
+                return Ok(json_success(command, registry.revision(), summary.json()));
+            }
+            summary.human()
+        };
+        Ok(write_output(
+            output.as_bytes(),
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        ))
+    });
+    match result {
+        Ok(code) => code,
+        Err(error) if json => json::failure(command, error),
         Err(error) => operational_error(error),
     }
 }

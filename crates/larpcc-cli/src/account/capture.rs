@@ -182,7 +182,9 @@ mod os {
     pub(super) struct Signals;
     impl Signals {
         pub(super) fn pending(&self) -> Option<i32> {
-            CANCELLED.load(Ordering::SeqCst).then_some(STATUS_CONTROL_C_EXIT)
+            CANCELLED
+                .load(Ordering::SeqCst)
+                .then_some(STATUS_CONTROL_C_EXIT)
         }
         pub(super) fn finish(self) -> Result<(), Error> {
             // SAFETY: remove the same static handler after the direct child was reaped.
@@ -229,7 +231,14 @@ mod os {
         let mut available = 0;
         // SAFETY: the handle is the owned read end, and available is writable.
         let ok = unsafe {
-            PeekNamedPipe(pipe.as_raw_handle(), null_mut(), 0, null_mut(), &mut available, null_mut())
+            PeekNamedPipe(
+                pipe.as_raw_handle(),
+                null_mut(),
+                0,
+                null_mut(),
+                &mut available,
+                null_mut(),
+            )
         };
         if ok == 0 {
             let error = io::Error::last_os_error();

@@ -457,7 +457,7 @@ pub(crate) fn acquire_auth_guard(root: &Path, id: ProfileId) -> Result<AuthGuard
         _held: held,
     })
 }
-fn revalidate_guard(root: &Path, id: ProfileId, guard: &AuthGuard) -> Result<(), Error> {
+pub(crate) fn revalidate_guard(root: &Path, id: ProfileId, guard: &AuthGuard) -> Result<(), Error> {
     let path = root.join("auth-locks").join(format!("{id}.lock"));
     let current = platform::open_auth_lock(&path).map_err(|_| Error::AdmissionChanged)?;
     let owned = platform::verify_opened(
