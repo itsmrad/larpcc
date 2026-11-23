@@ -101,6 +101,19 @@ The cli-v1 rule "no timestamps or nondeterministic keys" is amended for
 `usage` only: it carries `generated_at`, `captured_at`, `resets_at` and
 `runs_out_at`. `settings.usage` and all receipts stay timestamp-free.
 
+### Remote hosts (stage 13)
+
+Consistent with [stage 13](13-remote-hosts.md): remote profiles use LOCAL only,
+even when the destination enabled LIVE for its own local callers. The reviewed
+forwardable usage reads are exactly `usage [PROFILE]` and `settings usage`.
+Under the internal `--remote-request` flag the receiver runs `usage` as if
+`--local` were given (`requested_mode:"local"`, every row `mode:"local"`, no
+`live_endpoint` source or plan). A forwarded `--live` and every usage mutation
+(`settings usage …` changes and `profile plan-label`) are refused `unsupported`,
+exit 2, before any credential read, provider request or registry write. Usage
+settings, capture and plan labels are machine-scoped like all registry data.
+The envelope shape is unchanged; the app binds it to the route it used.
+
 ## Persistence
 
 - `usage.json` at the LARPCC_HOME root: strict `version:1`, at most 64 KiB, under
@@ -526,7 +539,7 @@ every fixture deleted in finally. No vendor binary or real account.
 | `stage11_live_fake` | fake HTTPS server: success mapping for both providers, Codex `plan_type` → `live_endpoint` plan, user label override, unknown plan value → null, plan bytes absent from every file under LARPCC_HOME after the run, 401 → `sign_in_again`, 3xx not followed, proxy env ignored, oversize/slow/unknown shape → `live_unavailable`, exactly one request per profile, no retry/refresh, `live_disabled` before any credential read, budget |
 | `stage11_secrets` | fake tokens `fake-token-…` and fake account IDs appear in zero bytes of stdout, stderr, any file under LARPCC_HOME, child argv/env, panic output and error envelopes (including injected parser/TLS/IO failures) |
 | `stage11_settings` | ack required on every enable, `live off` resets modes, mode/interval/capture/plan-label receipts, claude-statusline `--profile` required and Codex `unsupported`, label grammar refusals without echo, `changed:false`, registry revision bumps, pruning |
-| `stage11_closed` | default and `--local` make zero network connections (transport fake asserts unused); no background process or scheduler; hook binary has no network path; real hosts unreachable from tests |
+| `stage11_closed` | default and `--local` make zero network connections (transport fake asserts unused); no background process or scheduler; hook binary has no network path; real hosts unreachable from tests; with `--remote-request`, `usage` is forced LOCAL even when LIVE is enabled, and `--live` and every usage mutation are `unsupported` before credential reads, requests or writes |
 
 ## Decided (D29, lead 2026-11-21; the user may veto)
 

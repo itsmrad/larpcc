@@ -679,11 +679,306 @@
   },
   {
     "schema": 1,
+    "command": "host.add",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "dev-vm",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.list",
+    "ok": true,
+    "revision": "2",
+    "data": {
+      "hosts": [
+        {
+          "name": "dev-vm",
+          "ssh": {
+            "mode": "direct",
+            "destination": "dev@sandbox.example:2222",
+            "resolved": "dev@sandbox.example:2222"
+          },
+          "larp": "/opt/Larp Tools/larp",
+          "larpcc_home": null,
+          "identity_file": "/example/keys/dev-vm"
+        },
+        {
+          "name": "work-vm",
+          "ssh": {
+            "mode": "config",
+            "alias": "work.vm"
+          },
+          "larp": null,
+          "larpcc_home": null,
+          "identity_file": null
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.show",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "host": {
+        "name": "work-vm",
+        "ssh": {
+          "mode": "config",
+          "alias": "work.vm"
+        },
+        "larp": null,
+        "larpcc_home": null,
+        "identity_file": null
+      }
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.check",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "name": "dev-vm",
+      "status": "ok"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.check",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "name": "dev-vm",
+      "status": "larp_missing"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.check",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "name": "dev-vm",
+      "status": "unreachable"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.check",
+    "ok": true,
+    "revision": "1",
+    "data": {
+      "name": "dev-vm",
+      "status": "incompatible"
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.remove",
+    "ok": true,
+    "revision": "2",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "dev-vm",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.list",
+    "ok": true,
+    "revision": "12",
+    "data": {
+      "kind": "skills",
+      "entries": [
+        {
+          "name": "review",
+          "all_machines": false,
+          "content_sha256": "41203e722b2f9fe251e700133cba7a77f72d1d3ad38c9c1a82789d8d65e3821d"
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.share",
+    "ok": true,
+    "revision": "13",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "review",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.apply",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "review",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.list",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "profiles": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.rename",
+    "ok": false,
+    "error": {
+      "code": "conflict",
+      "message": "The displayed revision is stale."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.rename",
+    "ok": false,
+    "error": {
+      "code": "remote_outcome_unknown",
+      "message": "Refresh the machine before trying again."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.apply",
+    "ok": false,
+    "error": {
+      "code": "catalog_unavailable",
+      "message": "The target dependency is unavailable."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "ssh_failed",
+      "message": "Verify connectivity, host key and SSH authentication."
+    }
+  },
+  {
+    "schema": 1,
     "command": "skills.add",
     "ok": false,
     "error": {
       "code": "forbidden_source",
       "message": "Skill sources inside managed or vendor homes are forbidden."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.copy",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "review",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.import",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": "review",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.import",
+    "ok": false,
+    "error": {
+      "code": "corrupt",
+      "message": "The skill package frame is incomplete or invalid."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.export",
+    "ok": false,
+    "error": {
+      "code": "conflict",
+      "message": "The source catalog revision changed."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.list",
+    "ok": true,
+    "revision": "0",
+    "data": {
+      "kind": "skills",
+      "entries": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "ssh_unavailable",
+      "message": "No supported OpenSSH client is available."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "remote_larp_missing",
+      "message": "Install Larp on the selected host."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "remote_incompatible",
+      "message": "The selected host has an incompatible Larp installation."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "remote_timeout",
+      "message": "The remote request exceeded its deadline."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "remote_output",
+      "message": "The remote response was invalid."
     }
   },
   {

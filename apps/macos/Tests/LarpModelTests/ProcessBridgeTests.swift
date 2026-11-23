@@ -10,7 +10,8 @@ final class ProcessBridgeTests: XCTestCase {
         var bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]); bytes.append(10); return bytes
     }
     func testEveryFrozenExampleAndErrorVariant() throws {
-        let prospectiveCommands: Set<String> = ["usage", "settings.usage", "settings.usage.live", "settings.usage.interval"]
+        let prospectiveCommands: Set<String> = ["host.list", "host.show", "host.check", "host.catalog.list",
+                                                 "usage", "settings.usage", "settings.usage.live", "settings.usage.interval"]
         var checkedProspective: Set<String> = []
         for (index, e) in try Self.examples().enumerated() {
             if e["ok"] as? Bool == true, let command = e["command"] as? String,
