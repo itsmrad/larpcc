@@ -311,9 +311,8 @@ fn high_entropy(value: &str) -> bool {
         })
 }
 
-fn credential_component(part: &str) -> bool {
-    let lower = part.to_ascii_lowercase();
-    if [
+fn credential_at_boundary(value: &str, lower: &str) -> bool {
+    let prefixes = [
         "sk-",
         "sk_",
         "ghp_",
@@ -329,49 +328,54 @@ fn credential_component(part: &str) -> bool {
         "xoxr-",
         "xoxs-",
         "-----begin",
-    ]
-    .iter()
-    .any(|prefix| lower.starts_with(prefix))
-        || lower == "bearer"
+    ];
+    if prefixes.iter().any(|prefix| lower.starts_with(prefix))
         || lower
             .strip_prefix("bearer")
-            .is_some_and(|s| s.starts_with([' ', '-', '_', '.']))
+            .is_some_and(|s| s.chars().next().is_none_or(|c| !c.is_alphanumeric()))
     {
         return true;
     }
-    let base64url = |b: u8| b.is_ascii_alphanumeric() || b"-_".contains(&b);
-    if part.starts_with("eyJ")
-        && part
-            .split('.')
-            .take(3)
-            .filter(|s| s.len() >= 8 && s.bytes().all(base64url))
-            .count()
-            == 3
+    value.starts_with("eyJ")
+        && value
+            .split(|c: char| !(c.is_ascii_alphanumeric() || "-_.".contains(c)))
+            .next()
+            .is_some_and(|token| token.split('.').take(3).filter(|s| s.len() >= 8).count() == 3)
+}
+
+fn credential_component(part: &str) -> bool {
+    let lower = part.to_ascii_lowercase();
+    if credential_at_boundary(part, &lower)
+        || part.char_indices().any(|(i, c)| {
+            let next = i + c.len_utf8();
+            !c.is_alphanumeric() && credential_at_boundary(&part[next..], &lower[next..])
+        })
     {
         return true;
     }
-    part.split('.').any(|segment| {
-        if segment.len() == 36
-            && segment.split('-').map(str::len).eq([8, 4, 4, 4, 12])
-            && segment.bytes().all(|b| b == b'-' || b.is_ascii_hexdigit())
-        {
-            return false;
-        }
-        let body = segment.trim_end_matches('=');
-        let aws = body.len() == 20
-            && matches!(&body.as_bytes()[..4], b"AKIA" | b"ASIA")
-            && body
-                .bytes()
-                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
-        let google = body.len() == 39 && body.starts_with("AIza") && body.bytes().all(base64url);
-        let base64 = body.len() >= 20
-            && segment.len() - body.len() <= 2
-            && body.bytes().all(|b| base64url(b) || b == b'+')
-            && body.bytes().any(|b| b.is_ascii_lowercase())
-            && body.bytes().any(|b| b.is_ascii_uppercase())
-            && (segment.ends_with('=') || body.bytes().any(|b| !b.is_ascii_alphabetic()));
-        aws || google || base64
-    })
+    // Fixed-width keys can be embedded in a filename without a delimiter.
+    let bytes = part.as_bytes();
+    if bytes.windows(20).any(|key| {
+        matches!(&key[..4], b"AKIA" | b"ASIA")
+            && key[4..]
+                .iter()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    }) || bytes.windows(39).any(|key| {
+        key.starts_with(b"AIza")
+            && key[4..]
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(b))
+    }) {
+        return true;
+    }
+    part.split_inclusive(|c: char| !c.is_ascii_alphanumeric())
+        .any(|segment| {
+            let body = segment.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+            body.len() >= 20
+                && body.bytes().any(|b| b.is_ascii_lowercase())
+                && body.bytes().any(|b| b.is_ascii_uppercase())
+                && (body.bytes().any(|b| b.is_ascii_digit()) || segment.ends_with('='))
+        })
 }
 
 fn command_syntax(command: &str) -> Result<(), InputError> {

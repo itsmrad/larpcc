@@ -455,7 +455,35 @@ fn stage07_secrets_command_paths_refuse_credential_shapes_before_writes() {
         concat!("-----BEGIN ", "INVENTED KEY", "-----"),
         concat!("InventedSecretValue", "9xQ7"),
         concat!("AbCdEfGhIj", "KlMnOpQrSt", "=="),
-    ] {
+        concat!("x,", "ghp_", "invented0123456789abcdef"),
+        concat!("run ", "ghp_", "invented0123456789abcdef"),
+        concat!("u@", "sk-ant-", "api03-invented"),
+        concat!("k=", "ghp_", "invented0123456789abcdef"),
+        concat!("x~", "ghp_", "invented0123456789abcdef"),
+        concat!("AKIA", "0123456789ABCDEF", "-X"),
+        concat!("key", "AKIA", "0123456789ABCDEF"),
+        concat!("EMBEDDED", "AKIA", "0123456789ABCDEF"),
+        concat!("key", "ASIA", "0123456789ABCDEF"),
+        concat!(
+            "key=",
+            "AI",
+            "za",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHI",
+            "-X"
+        ),
+        concat!(
+            "auth=",
+            "eyJ",
+            "hbGciOiJub25lIn0",
+            ".",
+            "abcdefgh",
+            ".",
+            "ijklmnop"
+        ),
+    ]
+    .into_iter()
+    .chain(cfg!(unix).then_some(concat!("a\\", "ghp_", "invented0123456789abcdef")))
+    {
         let dir = f.temp.path().join(shape);
         common::create_directory(&dir);
         let nested = dir.join("server.exe");
@@ -477,6 +505,41 @@ fn stage07_secrets_command_paths_refuse_credential_shapes_before_writes() {
             assert!(!reply.to_string().contains(shape));
             assert!(!f.root.exists());
         }
+    }
+}
+
+#[test]
+fn stage07_secrets_command_paths_accept_package_and_version_names() {
+    let f = common::Fixture::new();
+    let hash = "0123456789abcdfghijklmnpqrsvwxyz";
+    for component in [
+        format!("{hash}-SDL2-2.28.5"),
+        format!("{hash}-ImageMagick-7.1.1-15"),
+        format!("{hash}-Xvfb"),
+        "weather-server-2Kq9Xb1Z-py3.12".into(),
+        "Microsoft.DesktopAppInstaller_1.22.11261.0_x64__8wekyb3d8bbwe".into(),
+        "Microsoft.WindowsTerminal_8wekyb3d8bbwe".into(),
+        "MyAwesomeMcpServer_v2".into(),
+    ] {
+        let dir = f.temp.path().join(component);
+        common::create_directory(&dir);
+        let path = dir.join("server.exe");
+        common::create_file(&path, b"synthetic\n");
+        request(
+            &f,
+            &[
+                "cc",
+                "mcp",
+                "add",
+                "files",
+                "--command",
+                path.to_str().unwrap(),
+                "--json",
+            ],
+            0,
+        );
+        request(&f, &["cc", "mcp", "list", "--json"], 0);
+        request(&f, &["cc", "mcp", "remove", "files", "--json"], 0);
     }
 }
 
