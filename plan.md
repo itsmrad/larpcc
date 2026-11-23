@@ -83,8 +83,10 @@ specifies; every other invariant stays binding.
   Codex account ID as a request header, D29). Native config values are still
   never read; the opt-in Claude capture only checks whether a `statusLine` key
   exists, so it never overwrites a user's own statusLine (D29).
-- Plan: the user-entered label, else (D29) the plan the client recorded in the
-  LOCAL non-credential data above. Never read from tokens or credential files.
+- Plan: the user-entered label, else the plan the client recorded in the LOCAL
+  non-credential data above (D29), else in LIVE the plan in the Codex usage
+  response (D32). Never read from tokens or credential files; provider plans are
+  held in memory for one invocation and never stored (as D14/D26).
   Account email/plan from status output is stage 14 (D25/D26).
 - Agents never read real tokens or call real endpoints (RULES 4a); LIVE is built
   and tested against fakes and labelled unverified until the user authorizes a

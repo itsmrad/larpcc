@@ -811,7 +811,8 @@
         "source": {
           "enum": [
             "user",
-            "client_local"
+            "client_local",
+            "live_endpoint"
           ]
         }
       },
@@ -820,7 +821,7 @@
         "source"
       ],
       "additionalProperties": false,
-      "description": "user = the user-entered plan_label (always wins); client_local = plan_type from the LOCAL Codex rollout record (D29). Never from tokens or credential files."
+      "description": "user = the user-entered plan_label (always wins); client_local = plan_type from the LOCAL Codex rollout record (D29); live_endpoint = plan_type from the Codex LIVE usage response (D32). Provider plans are never stored; never from tokens or credential files."
     },
     "client_version": {
       "type": "string",

@@ -834,6 +834,53 @@
               "message": "Sign in again in the official client."
             }
           ]
+        },
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "live",
+          "source": "live_endpoint",
+          "captured_at": "2026-11-21T12:00:05Z",
+          "client_version": null,
+          "plan": {
+            "label": "pro",
+            "source": "live_endpoint"
+          },
+          "windows": {
+            "five_hour": {
+              "used_percent": 30.0,
+              "resets_at": "2026-11-21T14:00:05Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 60.0,
+                "reserve_percent": 30.0,
+                "runs_out_at": "2026-11-21T14:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "weekly": {
+              "used_percent": 12.0,
+              "resets_at": "2026-11-24T12:00:05Z",
+              "window_seconds": 604800,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 57.1,
+                "reserve_percent": 45.1,
+                "runs_out_at": "2026-11-24T12:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "extra": []
+          },
+          "reset_credits": {
+            "state": "available",
+            "count": 2,
+            "expires_state": "unsupported",
+            "expires_at": null
+          },
+          "diagnostics": []
         }
       ]
     }

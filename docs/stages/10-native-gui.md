@@ -14,8 +14,8 @@ local app.open receipt; native terminal login/run remains a separately reviewed
 human path, never captured into GUI JSON. JSON status means local metadata only.
 No account identity or auth inference from zero exit/receipt. The only quota meter is
 the stage 11 `usage` envelope (D14 exception, [stage 11](11-usage.md)), shown exactly as
-reported with its reasons; a plan shows only as the user label or client-recorded
-LOCAL plan the envelope carries (D29).
+reported with its reasons; a plan shows only as the user label or the provider
+plan the envelope carries (D29/D32), and the app never stores a provider plan.
 
 UI handles unknown schema, empty arrays, absent/unsafe paths, null detected version,
 closed qualification, drift/recovery, stale names and ID precision; destructive

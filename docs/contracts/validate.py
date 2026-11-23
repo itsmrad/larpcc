@@ -183,6 +183,8 @@ def usage_semantic(data):
         credits_semantic(p['reset_credits'])
         if p['plan'] is not None and p['plan']['source'] == 'client_local':
             assert p['provider'] == 'codex' and src == 'codex_session_log'
+        if p['plan'] is not None and p['plan']['source'] == 'live_endpoint':
+            assert p['provider'] == 'codex' and src == 'live_endpoint'
         diags = [(d['code'], d['message']) for d in p['diagnostics']]
         assert diags == sorted(diags)
 
@@ -308,6 +310,8 @@ def two_extras_reversed(x):
 def duplicate_extras(x):
     extra(2)(x)
     codex(x)['windows']['extra'][1]['label'] = codex(x)['windows']['extra'][0]['label']
+live_usage = next(x for x in fixtures if x['command'] == 'usage' and x['ok']
+                  and x['data']['requested_mode'] == 'live')
 semantic_only = [
     (usage, set_window(reason=None, used_percent=None)),
     (usage, set_window(reason='not_reported')),
@@ -328,6 +332,9 @@ semantic_only = [
     (usage, lambda x: codex(x).update(captured_at='2026-11-21T13:00:00Z')),
     (usage, lambda x: x['data'].update(requested_mode='live')),
     (usage, lambda x: x['data']['profiles'][0].update(plan={'label': 'max', 'source': 'client_local'})),
+    (usage, lambda x: codex(x).update(plan={'label': 'pro', 'source': 'live_endpoint'})),
+    (live_usage, lambda x: x['data']['profiles'][0].update(plan={'label': 'max', 'source': 'live_endpoint'})),
+    (live_usage, lambda x: x['data']['profiles'][1].update(plan={'label': 'pro', 'source': 'client_local'})),
     (next(x for x in fixtures if x['command'] == 'settings.usage'),
      lambda x: x['data']['profiles'][1].update(claude_statusline=True)),
     (next(x for x in fixtures if x['command'] == 'settings.usage.claude-statusline' and x['ok']),

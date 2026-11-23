@@ -6,8 +6,9 @@ fresh profiles only. No account/auth output is captured, parsed or inferred. Onl
 version text may be parsed by doctor --detect-versions (stage 08). The only exception is
 the stage 11 usage exception (D14): usage windows, reset times and reset-credit counts
 from the allowlisted sources in [stage 11](../stages/11-usage.md). Account identity and
-auth inference stay forbidden; a plan appears only as the user-entered label or
-the client-recorded LOCAL plan (D29), never from credentials.
+auth inference stay forbidden; a plan appears only as the user-entered label, the
+client-recorded LOCAL plan (D29) or the Codex LIVE response plan (D32), never from
+credentials and never stored.
 SwiftUI later executes the installed CLI; no library extraction.
 
 ## Framing and compatibility
@@ -147,7 +148,8 @@ reason codes, ordering, normalization and the pace formula are normative in
 own bounded network request, not native IO, so it is not `json_native_io`;
 per-profile LIVE failures are row reasons in an `ok:true` envelope. Usage rows carry
 no tokens, account IDs, emails, spend, cost or token counts; `plan` is the user label
-or a client-recorded LOCAL plan value. `settings.usage.mode` carries the profile ID and
+(`user`), a client-recorded LOCAL plan (`client_local`) or the Codex LIVE plan
+(`live_endpoint`). `settings.usage.mode` carries the profile ID and
 name for a per-profile override and null/null installation-wide;
 `settings.usage.live|interval` carry null/null; `settings.usage.claude-statusline` and
 `profile.plan-label` carry the profile ID and name.

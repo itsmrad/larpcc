@@ -26,9 +26,10 @@ CLI data until the lead's explicit go. UI shows only fields the CLI provides.
 
 **Not in this stage.** Account email and plan from the official client's status
 command are stage 14 (D25/D26: shown from a fresh status run, never stored); this
-stage does not duplicate them. Here, a plan is the user-entered label or the
-plan the client recorded in LOCAL non-credential data (D29), never read from
-credentials. No spend, cost, credit balance or token counts anywhere.
+stage does not duplicate them. Here, a plan is the user-entered label, the
+plan the client recorded in LOCAL non-credential data (D29), or the plan in the
+Codex LIVE usage response (D32). It is never read from credentials and never
+stored. No spend, cost, credit balance or token counts anywhere.
 
 ## CLI surface
 
@@ -133,7 +134,7 @@ command. Each row:
 | `source` | `codex_session_log`, `claude_statusline`, `live_endpoint`, or null when nothing was read |
 | `captured_at` | when the values were observed (local clock), or null. Values are "as of last use" in LOCAL. |
 | `client_version` | version of the official client that wrote the LOCAL record (`^N.N.N$`), else null |
-| `plan` | null, or `{label, source}`: `user` (the user-entered label, wins) or `client_local` (Codex `plan_type` from the LOCAL record, D29) |
+| `plan` | null, or `{label, source}`: `user` (the user-entered label, wins), `client_local` (Codex `plan_type` from the LOCAL record, D29) or `live_endpoint` (Codex `plan_type` from the LIVE response, D32) |
 | `windows.five_hour`, `windows.weekly` | always present window objects, W = 18000 s and 604800 s |
 | `windows.extra` | null (this source has no extra windows) or an array of 0–8 extra windows |
 | `reset_credits` | always present tri-state object |
@@ -188,18 +189,25 @@ null means the source cannot report extras.
 expiry), `not_recorded` or `unsupported`; for `none|not_recorded|unsupported`
 states it equals the state. "Resets remaining" = `count` plus optional expiry.
 
-**Plan** (D29). Precedence: the user-entered `plan_label` (`source:"user"`)
-always wins; otherwise a plan the official client recorded in the LOCAL
-**non-credential** data this stage already reads (`source:"client_local"`);
-otherwise null. Today only Codex provides one: `rate_limits.plan_type` of the
+**Plan** (D29, D32). Precedence: the user-entered `plan_label`
+(`source:"user"`) always wins. Otherwise, in a LOCAL row, a plan the official
+client recorded in the LOCAL **non-credential** data this stage already reads
+(`source:"client_local"`). Otherwise, in a LIVE row, the plan in that profile's
+LIVE usage response (`source:"live_endpoint"`). Otherwise null.
+Provider plans are held **in memory for the current invocation only**: never
+written to `usage.json`, the capture file, a cache or a log, the same
+never-store rule as D14 tokens and D26 status output. Only the user label
+persists. Today only Codex provides one: `rate_limits.plan_type` of the
 selected `codex`-bucket `token_count` event, used only when it is one of the
 verified 0.169.0 `PlanType` values (`codex-rs/protocol/src/account.rs:9-49`,
 e.g. `plus`, `pro`, `team`) and fits the grammar; it is shown as recorded.
 Claude's statusLine input carries no plan, so Claude shows the user label only.
 Plans are **never** read from tokens or credential files (Claude
-`subscriptionType`/`rateLimitTier`, Codex `id_token` claims). LIVE response plan
-fields (Codex `plan_type`) are discarded: D14 covers only the usage numbers.
-A LIVE row still uses the user label. Grammar for both sources: ASCII, 1–32
+`subscriptionType`/`rateLimitTier`, Codex `id_token` claims). In LIVE, only the
+Codex response's top-level `plan_type` is used (D32, within D14 because it is
+part of the one usage response, LIVE enabled only), with the same verified
+`PlanType` value check. The Claude LIVE response has no plan field, so Claude
+LIVE rows show the user label only. Grammar for every source: ASCII, 1–32
 characters, starts with a letter or digit, letters/digits and `. _ + / ( ) -`,
 single inner spaces (`plan_label`). No `@`, quotes, control or non-ASCII
 characters, so it cannot carry an email. Plans are display-only and never
@@ -460,8 +468,8 @@ anywhere but its pinned endpoint.
 |---|---|---|
 | request | `GET https://api.anthropic.com/api/oauth/usage` (2.1.325: `BASE_API_URL`, usage paths, 5 s timeout) | `GET https://chatgpt.com/backend-api/wham/usage` (`codex-rs/backend-client/src/client/rate_limit_resets.rs:69-82`, `codex-rs/model-provider/src/chatgpt_base_url.rs:6`) |
 | headers | `Authorization: Bearer <token>`, `anthropic-beta: oauth-2025-04-20` (constant present; its use on this call **unverified**), `Accept: application/json`, `User-Agent: larpcc/<version>` | `Authorization: Bearer <token>`, `chatgpt-account-id: <account_id>` (`codex-rs/http-client/src/openai_headers.rs:3`, `codex-rs/backend-client/src/client.rs:388-392`; inside D14 per D29), `Accept`, `User-Agent: larpcc/<version>` |
-| response used | `five_hour`, `seven_day` → windows; `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps` → extras "Opus weekly", "Sonnet weekly", "OAuth apps weekly" (W 604800). Each `{utilization: number 0-100 \| null, resets_at: ISO 8601 \| null}` (binary response parser; units from the SDK schema description) | `rate_limit.primary_window`/`secondary_window` `{used_percent: i32, limit_window_seconds, reset_after_seconds, reset_at}` mapped by window length ±5%; `additional_rate_limits[] {limit_name, metered_feature, rate_limit}` → extras; `rate_limit_reset_credits.available_count` → `reset_credits` (`codex-rs/codex-backend-openapi-models/src/models/*.rs`, `codex-rs/backend-client/src/types.rs:22-75`) |
-| ignored | `extra_usage`, `cinder_cove`, `wattle_ember`, `limits[]`, all dollar fields | `plan_type`, `credits`, `spend_control`, `account_id`, `user_id`, `rate_limit_upsell`, `rate_limit_reached_type` |
+| response used | `five_hour`, `seven_day` → windows; `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps` → extras "Opus weekly", "Sonnet weekly", "OAuth apps weekly" (W 604800). Each `{utilization: number 0-100 \| null, resets_at: ISO 8601 \| null}` (binary response parser; units from the SDK schema description) | `rate_limit.primary_window`/`secondary_window` `{used_percent: i32, limit_window_seconds, reset_after_seconds, reset_at}` mapped by window length ±5%; `additional_rate_limits[] {limit_name, metered_feature, rate_limit}` → extras; `rate_limit_reset_credits.available_count` → `reset_credits`; `plan_type` → `plan` `live_endpoint`, held in memory only (D32) (`codex-rs/codex-backend-openapi-models/src/models/*.rs`, `codex-rs/backend-client/src/types.rs:22-75`) |
+| ignored | `extra_usage`, `cinder_cove`, `wattle_ember`, `limits[]`, all dollar fields | `credits`, `spend_control`, `account_id`, `user_id`, `rate_limit_upsell`, `rate_limit_reached_type` |
 | reset credits | `unsupported` (only an experimental `cedar_ember=1` variant has them; D29 keeps it unsupported) | count from the summary; expiry `unsupported` (needs a second request, which D29 rules out) |
 
 **Network rules.** HTTPS only to the two fixed host/path pairs; TLS 1.2+ with
@@ -489,6 +497,7 @@ verification waits for a later explicit user authorization.
 | Codex 0.169.0 LOCAL | `plan_type` in the same record (`PlanType` values, `account.rs:9-49`) | verified; shown as `client_local` plan unless a user label is set (D29) |
 | Codex 0.169.0 LOCAL | reset credits | not in the record: `unsupported` |
 | Codex LIVE | `/wham/usage` request, headers, response structs, `rate_limit_reset_credits.available_count` | from source; unverified against a live response |
+| Codex LIVE | `plan_type` (`RateLimitStatusPayload`, `rate_limit_status_payload.rs:16-53`) | from source; unverified against a live response; shown as `live_endpoint` plan unless a user label is set, in memory only (D32) |
 | Codex LIVE | reset-credit expiry | not available in v1 |
 | Claude 2.1.325 LOCAL | `rate_limits.five_hour/seven_day.{used_percentage, resets_at}`, `version`, `--settings`, statusLine schema | verified from binary + docs |
 | Claude 2.1.325 LOCAL | reset credits, plan, extra windows | not passed to statusLine: `unsupported` (plan = user label only) |
@@ -514,16 +523,17 @@ every fixture deleted in finally. No vendor binary or real account.
 | `stage11_pace` | loads `docs/contracts/usage-pace-vectors.json`; every vector exact; skew/reset/unknown cases |
 | `stage11_local_codex` | synthetic rollouts: 5h/weekly by `window_minutes` not position, `plan_type` → `client_local` plan unless a user label overrides, unknown plan value → null, non-codex bucket → extra, newest per bucket, unverified version, `.zst`/archived skipped, symlink/hardlink/outside-root/oversize/line-cap/file-cap refusal, partial line ignored, conversation sentinel strings never appear in stdout/stderr/files |
 | `stage11_local_claude_hook` | hook argv/env checks, 256 KiB cap, absent `rate_limits` keeps last capture, hostile input (deep nesting, huge strings, wrong types, NaN), atomic replace under kill, empty stdout and stderr, sentinel input fields never written; render file content/quoting/manifest drift refusal; opt-in default off; `statusline_exists` on enable; existing profile/project/local statusLine (including in a parent directory) → no `--settings` injection; settings values never read or output; `capture_not_installed` while rows are empty |
-| `stage11_live_fake` | fake HTTPS server: success mapping for both providers, 401 → `sign_in_again`, 3xx not followed, proxy env ignored, oversize/slow/unknown shape → `live_unavailable`, exactly one request per profile, no retry/refresh, `live_disabled` before any credential read, budget |
+| `stage11_live_fake` | fake HTTPS server: success mapping for both providers, Codex `plan_type` → `live_endpoint` plan, user label override, unknown plan value → null, plan bytes absent from every file under LARPCC_HOME after the run, 401 → `sign_in_again`, 3xx not followed, proxy env ignored, oversize/slow/unknown shape → `live_unavailable`, exactly one request per profile, no retry/refresh, `live_disabled` before any credential read, budget |
 | `stage11_secrets` | fake tokens `fake-token-…` and fake account IDs appear in zero bytes of stdout, stderr, any file under LARPCC_HOME, child argv/env, panic output and error envelopes (including injected parser/TLS/IO failures) |
 | `stage11_settings` | ack required on every enable, `live off` resets modes, mode/interval/capture/plan-label receipts, claude-statusline `--profile` required and Codex `unsupported`, label grammar refusals without echo, `changed:false`, registry revision bumps, pruning |
 | `stage11_closed` | default and `--local` make zero network connections (transport fake asserts unused); no background process or scheduler; hook binary has no network path; real hosts unreachable from tests |
 
 ## Decided (D29, lead 2026-11-21; the user may veto)
 
-1. **Client-recorded plan: shown.** From LOCAL non-credential data only (Codex
-   `plan_type` in rollout events); the user's `plan_label` overrides it. Never
-   from tokens or credential files. Claude has no LOCAL plan source.
+1. **Client-recorded plan: shown.** From LOCAL non-credential data (Codex
+   `plan_type` in rollout events; D32 adds the Codex LIVE response); the user's
+   `plan_label` overrides it. Never from tokens or credential files. Claude has
+   no plan source.
 2. **Claude reset credits** via the experimental `cedar_ember` variant:
    `unsupported`.
 3. **Codex `chatgpt-account-id` header: inside D14.** Read only when LIVE is
@@ -537,5 +547,14 @@ every fixture deleted in finally. No vendor binary or real account.
    launch), and it prints nothing.
 7. **Honest User-Agent** `larpcc/<version>`; imitating an official client is
    refused.
+
+## Decided (D32, lead 2026-11-23)
+
+1. **Existing-statusLine detection** is the key-presence-only check above
+   (profile `settings.json` at enable; launch directory and parents' `.claude`
+   settings at launch). Values are never read. Confirmed.
+2. **LIVE Codex `plan_type` may be shown** (source `live_endpoint`), in memory
+   only, never stored, cached or logged, LIVE enabled only; the user label
+   overrides it. This replaces the earlier "discarded" reading of D29.
 
 No open decisions remain in this plan.
