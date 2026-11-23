@@ -276,6 +276,269 @@
   },
   {
     "schema": 1,
+    "command": "status.account",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profile": {
+        "id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "state": "active",
+        "surfaces": {
+          "cli": {
+            "enabled": true,
+            "path": "/fixture/root/profiles/2/cli",
+            "state": "ok"
+          },
+          "desktop": {
+            "enabled": false,
+            "path": "/fixture/root/profiles/2/desktop",
+            "state": "ok"
+          }
+        },
+        "aliases": [
+          {
+            "name": "codex-45",
+            "profile_id": "2",
+            "surface": "cli",
+            "path": "/fixture/root/bin/codex-45",
+            "state": "ok"
+          }
+        ],
+        "desktop_binding": {
+          "path": null,
+          "recorded_version": null,
+          "detected_version": null,
+          "state": "unbound",
+          "qualified": false
+        }
+      },
+      "provider_version": "1.2.3",
+      "account": {
+        "state": "signed_in",
+        "email": "user@example.com",
+        "plan": "Plus"
+      },
+      "usage": {
+        "profile_id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "mode": "local",
+        "source": "codex_session_log",
+        "captured_at": "2026-11-21T12:00:00Z",
+        "client_version": "0.169.0",
+        "plan": {
+          "label": "pro",
+          "source": "client_local"
+        },
+        "windows": {
+          "five_hour": {
+            "used_percent": 30.0,
+            "resets_at": "2026-11-21T14:00:00Z",
+            "captured_at": "2026-11-21T12:00:00Z",
+            "window_seconds": 18000,
+            "reason": null,
+            "pace": {
+              "elapsed_percent": 60.0,
+              "reserve_percent": 30.0,
+              "runs_out_at": "2026-11-21T14:00:00Z",
+              "lasts_until_reset": true
+            }
+          },
+          "weekly": {
+            "used_percent": 75.0,
+            "resets_at": "2026-11-24T23:59:59Z",
+            "captured_at": "2026-11-21T12:00:00Z",
+            "window_seconds": 604800,
+            "reason": null,
+            "pace": {
+              "elapsed_percent": 50.0,
+              "reserve_percent": -25.0,
+              "runs_out_at": "2026-11-22T16:00:00Z",
+              "lasts_until_reset": false
+            }
+          },
+          "extra": [
+            {
+              "label": "Other limit 1 5h",
+              "used_percent": 10.0,
+              "resets_at": "2026-11-21T14:00:00Z",
+              "captured_at": "2026-11-21T10:00:00Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 20.0,
+                "reserve_percent": 10.0,
+                "runs_out_at": "2026-11-21T14:00:00Z",
+                "lasts_until_reset": true
+              }
+            }
+          ]
+        },
+        "reset_credits": {
+          "state": "unsupported",
+          "count": null,
+          "expires_state": "unsupported",
+          "expires_at": null
+        },
+        "diagnostics": []
+      },
+      "diagnostics": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "status.account",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profile": {
+        "id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "state": "active",
+        "surfaces": {
+          "cli": {
+            "enabled": true,
+            "path": "/fixture/root/profiles/2/cli",
+            "state": "ok"
+          },
+          "desktop": {
+            "enabled": false,
+            "path": "/fixture/root/profiles/2/desktop",
+            "state": "ok"
+          }
+        },
+        "aliases": [
+          {
+            "name": "codex-45",
+            "profile_id": "2",
+            "surface": "cli",
+            "path": "/fixture/root/bin/codex-45",
+            "state": "ok"
+          }
+        ],
+        "desktop_binding": {
+          "path": null,
+          "recorded_version": null,
+          "detected_version": null,
+          "state": "unbound",
+          "qualified": false
+        }
+      },
+      "provider_version": "1.2.3",
+      "account": {
+        "state": "signed_in",
+        "email": null,
+        "plan": null
+      },
+      "usage": null,
+      "diagnostics": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "status.account",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profile": {
+        "id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "state": "active",
+        "surfaces": {
+          "cli": {
+            "enabled": true,
+            "path": "/fixture/root/profiles/2/cli",
+            "state": "ok"
+          },
+          "desktop": {
+            "enabled": false,
+            "path": "/fixture/root/profiles/2/desktop",
+            "state": "ok"
+          }
+        },
+        "aliases": [
+          {
+            "name": "codex-45",
+            "profile_id": "2",
+            "surface": "cli",
+            "path": "/fixture/root/bin/codex-45",
+            "state": "ok"
+          }
+        ],
+        "desktop_binding": {
+          "path": null,
+          "recorded_version": null,
+          "detected_version": null,
+          "state": "unbound",
+          "qualified": false
+        }
+      },
+      "provider_version": "1.2.3",
+      "account": {
+        "state": "unknown",
+        "email": null,
+        "plan": null
+      },
+      "usage": null,
+      "diagnostics": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "status.account",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profile": {
+        "id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "state": "active",
+        "surfaces": {
+          "cli": {
+            "enabled": true,
+            "path": "/fixture/root/profiles/2/cli",
+            "state": "ok"
+          },
+          "desktop": {
+            "enabled": false,
+            "path": "/fixture/root/profiles/2/desktop",
+            "state": "ok"
+          }
+        },
+        "aliases": [
+          {
+            "name": "codex-45",
+            "profile_id": "2",
+            "surface": "cli",
+            "path": "/fixture/root/bin/codex-45",
+            "state": "ok"
+          }
+        ],
+        "desktop_binding": {
+          "path": null,
+          "recorded_version": null,
+          "detected_version": null,
+          "state": "unbound",
+          "qualified": false
+        }
+      },
+      "provider_version": null,
+      "account": {
+        "state": "not_qualified",
+        "email": null,
+        "plan": null
+      },
+      "usage": null,
+      "diagnostics": []
+    }
+  },
+  {
+    "schema": 1,
     "command": "doctor",
     "ok": true,
     "revision": "7",
@@ -630,6 +893,15 @@
       "profile_id": null,
       "name": null,
       "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "status.account",
+    "ok": false,
+    "error": {
+      "code": "busy",
+      "message": "Profile authentication operation is busy."
     }
   },
   {

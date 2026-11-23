@@ -103,6 +103,15 @@ The cli-v1 rule "no timestamps or nondeterministic keys" is amended for
 `usage` only: it carries `generated_at`, `captured_at`, `resets_at` and
 `runs_out_at`. `settings.usage` and all receipts stay timestamp-free.
 
+### Account status (stage 14)
+
+Stage 14 merged first, so this PR performs its hand-off: `status.account`'s
+`usage` is widened from null to the selected profile's LOCAL usage row (the
+`usage_profile` shape, produced by the same reader as `usage PROFILE --local`,
+always `mode:"local"`, never LIVE data or a `live_endpoint` plan), or null.
+The human graph keeps stage 14's rendering rules. Stage 14's `account.plan`
+and this row's `plan` stay separate.
+
 ### Remote hosts (stage 13)
 
 Consistent with [stage 13](13-remote-hosts.md): remote profiles use LOCAL only,

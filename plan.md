@@ -177,6 +177,43 @@ qualification, regardless of successful engineering/UI checks. Packaging/release
 signing/distribution and credentials/spending require later scoped gates; old
 stage-5 release goals are retained as future requirements, not this PR's completion.
 
+## Account summary
+
+Stage 14 follows the local CLI contract. [Account summary and profile extras](docs/stages/14-account-summary.md)
+freezes the CLI step only. The app and menu-bar steps each wait for the
+lead to ask the user, per the rollout order.
+
+- D25: `larp cc status NAME` shows the account email (in full) and plan by
+  default, in human and JSON output, from the official client's status
+  operation only. JSON uses the new `status.account` variant.
+  `--no-account` returns the unchanged metadata `status` and never runs a
+  client. This amends "JSON status is local metadata; human native status is
+  still gated pass-through" above for `status NAME` only: status output is
+  captured by an exact-row parser instead of passed through.
+  Under `--host` (implemented with stage 13) the remote Larp runs its own
+  status and returns the same variant over the user's SSH, only on explicit
+  user action, with never-store on both ends.
+- D26: email and plan are never stored by LarpCC or the app. Parsing is
+  exact-version and fail-closed (`account: unknown`). Invariant 2 stays: no
+  token or credential file reads, ever. Invariant 3 stays: LarpCC makes no
+  network calls; only the official child may.
+- D27: provider version, display name, default launch arguments (inert until
+  a run row widens its grammar) and the usage text graph from stage 11 local
+  data. Registry v4 and its JSON fields are a separate amendment.
+- D24: real-account qualification on the user's Mac with throwaway profiles,
+  the user completing every sign-in. This supersedes "Real-account tests
+  remain unauthorized" for that session only, after the lead merges the plan.
+  Each native operation, including the first status call, is blocked unless
+  the exact build's credential backend, key, precedence and fallback are
+  proven per-home (gate G0). No login runs until G0 proves status and login
+  plus one sign-out path (logout or an approved cleanup path). Once login has
+  been dispatched, every outcome (including failure, cancellation and
+  timeout) runs: confirmed reap and quiescence of the login process tree, then
+  the sign-out path, then confirmed sign-out, and only then deletion. A
+  missing confirmation keeps the throwaway state for recovery and blocks the
+  row. PII-capable observations run only in the user's
+  unrecorded terminal. Rows land in a separate implementation PR.
+
 ---
 
 ## Historical plan (superseded prospectively as above)

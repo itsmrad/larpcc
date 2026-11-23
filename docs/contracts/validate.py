@@ -472,4 +472,87 @@ for base, mutate in semantic_only:
         negative_checks += 1
     else:
         raise AssertionError(f'invalid usage fixture accepted: {mutate}')
+
+# Stage 14 account summary: semantic rules, then schema and semantic negatives.
+def check_account_status(value):
+    data = value['data']
+    account = data['account']
+    for field in ('email', 'plan'):
+        text = account[field]
+        if text is not None:
+            assert all(32 <= ord(char) < 127 for char in text)
+            assert text == text.strip()
+    if account['state'] == 'unavailable':
+        assert data['provider_version'] is None
+    row = data['usage']
+    if row is not None:  # stage 11 widening: this profile's LOCAL row only
+        assert row['profile_id'] == data['profile']['id'] and row['name'] == data['profile']['name']
+        assert row['provider'] == data['profile']['provider'] and row['mode'] == 'local'
+        assert row['source'] != 'live_endpoint'
+        assert row['plan'] is None or row['plan']['source'] != 'live_endpoint'
+        usage_semantic({'requested_mode': 'local', 'generated_at': row['captured_at'] or '2026-11-21T12:00:00Z',
+                        'profiles': [row]})
+
+account_fixtures = [x for x in fixtures if x['command'] == 'status.account' and x['ok']]
+assert {x['data']['account']['state'] for x in account_fixtures} >= {'signed_in', 'unknown', 'not_qualified'}
+for fixture in account_fixtures:
+    check_account_status(fixture)
+signed_in = next(x for x in account_fixtures if x['data']['account']['email'] is not None)
+legacy_status = next(x for x in fixtures if x['command'] == 'status' and x['ok'])
+schema_negatives = []
+for state, field, text in (('signed_out', 'email', 'user@example.com'),
+                           ('unknown', 'plan', 'Plus'),
+                           ('not_qualified', 'email', 'user@example.com'),
+                           ('signed_in', 'email', 'user example.com'),
+                           ('signed_in', 'email', 'user@@example.com'),
+                           ('signed_in', 'email', '@example.com'),
+                           ('signed_in', 'email', 'usér@example.com'),
+                           ('signed_in', 'plan', ' Plus'),
+                           ('signed_in', 'plan', 'Plus '),
+                           ('signed_in', 'plan', 'x' * 65),
+                           ('signed_in', 'state', 'verified')):
+    invalid = copy.deepcopy(signed_in)
+    invalid['data']['account'].update({'state': state, field: text})
+    schema_negatives.append(invalid)
+for mutate in (
+    lambda x: x['data']['account'].update(token='sentinel'),
+    lambda x: x['data'].update(usage={'session': None}),
+    lambda x: x['data'].update(profile=None),
+    lambda x: x['data'].update(provider_version='1.2.3 (build)'),
+    lambda x: x['data'].update(native_auth='not_observed'),
+    lambda x: x.update(revision=None),
+    lambda x: x.update(command='status'),
+):
+    invalid = copy.deepcopy(signed_in)
+    mutate(invalid)
+    schema_negatives.append(invalid)
+invalid = copy.deepcopy(legacy_status)
+invalid['data']['account'] = copy.deepcopy(signed_in['data']['account'])
+schema_negatives.append(invalid)
+for invalid in schema_negatives:
+    assert not matches(invalid, SCHEMA)
+    negative_checks += 1
+semantic_negatives = []
+for field, text in (('email', 'user@example.com\n'), ('plan', 'Plus\n')):
+    invalid = copy.deepcopy(signed_in)
+    invalid['data']['account'][field] = text
+    semantic_negatives.append(invalid)
+invalid = copy.deepcopy(signed_in)
+invalid['data']['account'].update(state='unavailable', email=None, plan=None)
+semantic_negatives.append(invalid)
+assert signed_in['data']['usage'] is not None
+for mutate in (lambda u: u.update(profile_id='3'),
+               lambda u: u.update(mode='live', source='live_endpoint'),
+               lambda u: u.update(plan={'label': 'pro', 'source': 'live_endpoint'}),
+               lambda u: u['windows']['five_hour']['pace'].update(reserve_percent=0.0)):
+    invalid = copy.deepcopy(signed_in)
+    mutate(invalid['data']['usage'])
+    semantic_negatives.append(invalid)
+for invalid in semantic_negatives:
+    try:
+        check_account_status(invalid)
+    except AssertionError:
+        negative_checks += 1
+    else:
+        raise AssertionError('invalid account summary accepted')
 print(f'{len(fixtures)} valid envelopes; all {len(expected)} success variants; {len(vectors)} pace vectors; {negative_checks} negative checks passed')
