@@ -56,7 +56,7 @@ impl StatusFixture {
             .env("LARPCC_STAGE14_EXECUTED", &self.marker)
             .env(
                 "LARPCC_STAGE14_SELECTED_HOME",
-                self.fixture.root.join("profiles/1/cli"),
+                self.fixture.root.join("profiles").join("1").join("cli"),
             );
         cmd
     }
