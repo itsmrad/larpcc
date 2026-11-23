@@ -26,9 +26,18 @@ reviewed qualification in [Phase 2](#phase-2--mac-qualification-plan).
 ### Commands
 
 ```text
-larp cc status NAME [--json] [--expected-revision REV]
-larp cc status NAME --no-account [--json] [--expected-revision REV]
+larp cc [--host H] status NAME [--json] [--expected-revision REV] [--expected-profile-id ID]
+larp cc [--host H] status NAME --no-account [--json] [--expected-revision REV] [--expected-profile-id ID]
 ```
+
+`--expected-profile-id ID` is a new public precondition, accepted only by
+`status` in this amendment (elsewhere `usage`, exit 2). ID is a canonical
+nonzero decimal u64; an invalid value is `usage`, exit 2, without echo. It
+works like `--expected-revision`: under the registry lock, after the
+revision check and before the auth guard, any probe or spawn, NAME must
+resolve to ID, or the command fails `conflict`, exit 1, with no effects. The
+app always sends both preconditions from its displayed snapshot (local or
+remote) for account status. A direct CLI caller may omit either.
 
 `status NAME` (no flag) is the **account status** mode. It runs the qualified
 official status operation for that profile, captures the account fields and
@@ -223,19 +232,25 @@ fixed local error text, and the reserved `ssh_*`/`remote_*` codes.
   probe and the command login, a metadata request can never become an
   account request, and an account request either runs on a receiver that
   understands the flag or is refused before effects.
-- **Expected identity.** The router takes the expected profile ID and
-  revision from the same metadata snapshot the request came from: the app's
-  displayed remote snapshot, or, for a direct CLI caller, the
-  `--expected-revision` and name it typed. It adds no extra remote read. It
-  sends `--expected-revision REV` and the internal
-  `--expected-profile-id ID` (also valid only with `--remote-request`). The
-  receiver checks the revision under its registry lock before name
-  resolution, then checks that NAME resolves to ID, all before the auth
-  guard and any spawn. A mismatch is `conflict`, exit 1, with no child. The
-  app always sends both. A direct CLI caller may omit them. The receiver then
-  resolves NAME at call time, and the router still requires the reply's
-  profile name to equal NAME. The router rejects a reply whose profile ID or
-  name differs from what was sent, before display, as `remote_output`.
+- **Expected identity.** The caller supplies the preconditions to the
+  LOCAL router with the public options: the app runs
+  `larp cc --host H status NAME --json --expected-revision R --expected-profile-id ID`
+  with R and ID taken from its displayed remote snapshot. The router adds no
+  extra SSH read. It forwards exactly the preconditions it was given
+  (`--expected-revision`, `--expected-profile-id`) next to
+  `--remote-account`. The receiver checks the revision under its registry
+  lock before name resolution, then that NAME resolves to ID, all before the
+  auth guard and any spawn. A mismatch is `conflict`, exit 1, with no child.
+- **Direct CLI without an ID.** The router forwards only what was given. With
+  only a revision, the receiver resolves NAME under that revision. With
+  neither, it resolves NAME at call time. The reply's ID is then reported,
+  not checked against anything.
+- **Reply binding.** Before display, the router requires: the reply's
+  profile name equals NAME; its profile ID equals the sent
+  `--expected-profile-id`, when one was sent; and the success envelope's
+  `revision` equals the sent `--expected-revision`, when one was sent. Any
+  mismatch is `remote_output` with no account data. A reply for the right
+  name and ID but revision 8, for a request pinned to 7, is rejected.
 - **Reply.** One schema-1 `status.account` envelope (or an allowed error),
   with the same shape as local and no host field.
 - **Deadlines.** See the table below.
@@ -270,8 +285,7 @@ stage 13 budgets.
 The 33 s app-bridge budget is 16 s for the account child, 11 s for the
 compatibility probe, 2 s for local `ssh -V`, 2 s for failure cleanup, and
 2 s for bridge overhead and envelope encoding. It uses the existing metadata
-snapshot and adds no read. This replaces the earlier 12 s and 22 s draft
-numbers, which did not allow for the 4 s `ConnectTimeout`.
+snapshot and adds no read.
 
 The email crosses the user's own encrypted SSH connection to their own
 machine. LarpCC adds no other transport.
@@ -367,8 +381,11 @@ Account mode calls the **same** stage 11 per-profile LOCAL reader that
 `larp cc usage PROFILE --local` uses, once, for the selected ID, and projects
 its `windows.five_hour` (Session) and `windows.weekly` (Weekly). It starts no
 LIVE request, refresh or separate scan, even if LIVE is enabled for that
-profile. Before stage 11 ships, or when neither window is usable, print
-`usage: not available`.
+profile. Before stage 11 ships, or when neither window is usable *and*
+neither has `reset_since_capture`, print the single line
+`usage: not available`. A `reset_since_capture` window always renders its
+label and `Reset due`, which takes precedence over that line. When both
+windows have reset, both render that way.
 
 Each window follows its stage 11 `reason`:
 
@@ -405,8 +422,10 @@ UI may only show data the CLI already provides.
 
 **App (step 2).** Run `status NAME --json` only when the user explicitly
 opens the selected profile's account view or presses Refresh. Never on
-launch, selection restore, wake or a timer. Use `--expected-revision` and
-check that the returned profile ID matches the request. Cancel or ignore
+launch, selection restore, wake or a timer. Always pass
+`--expected-revision` and `--expected-profile-id` from the displayed
+snapshot (local or remote), and check that the returned profile ID and
+revision match the request. Cancel or ignore
 in-flight results on selection or window change. Clear account fields on
 refresh, mismatch and close. All other views use `--no-account`.
 
@@ -512,8 +531,18 @@ values.
    times, allowed provider/browser network actions and state effects in the
    approved sheet beforehand. Steps 2–9 run in the user's terminal, and
    the email appears only there. The agent learns result categories and
-   field presence from the user, not values. A step whose G0 proof is
-   missing is skipped and recorded as blocked.
+   field presence from the user, not values.
+
+   **Sign-out before sign-in.** Step 3 (login) runs only if, for that
+   provider, G0 has already proven status, login **and logout**, or the
+   approved sheet has a G0-proven cleanup path that removes the new
+   credential from its proven per-home location. Deleting the temporary root
+   removes a file-backed store, but not a Keychain item, even a per-home one.
+   So a Keychain backend needs proven logout or an approved user-run removal
+   of that exact item. Without that, steps 3–9 do not run, and only the
+   signed-out status (step 2) is assessed. A missing run proof skips step 6
+   only. A missing status proof skips every status step. Every skip is
+   recorded as blocked.
 4. **Evidence, with no secrets.** For every invocation record: operation,
    exit/signal, parser result category, and `email: present|absent`,
    `plan: present|absent`. Never record the email, plan value, transcript,
@@ -530,8 +559,9 @@ values.
    traces are never persisted. Use invented fixtures to reproduce the schema.
 5. **Stop, clean up, assess.** Stop on wrong account, unexpected backend,
    outside access, changed artifact, sensitive spill or failure to reap.
-   Keep only safe diagnostics and block the affected rows. After sign-out and
-   quiescence, delete each throwaway profile with confirmed `profile delete`,
+   Keep only safe diagnostics and block the affected rows. If a stop
+   happens after login, the user runs the proven logout or the approved
+   cleanup before anything else. After sign-out and quiescence, delete each throwaway profile with confirmed `profile delete`,
    then remove the temporary root and repository, inside the approved cleanup
    scope only. Never improvise a logout on a shared backend. Record cleanup
    status. Two profiles (one per provider) do not prove same-provider A/B
@@ -553,11 +583,11 @@ authorize any other operation.
 | macOS candidate | Operation | Native argv to review | Depends on |
 |---|---|---|---|
 | Claude Code (nominated path) | Status | `auth status` (+ `--json` if qualified) | step 1, G0 (status) |
-| Claude Code | Login | `auth login` | G0 (login), Status |
+| Claude Code | Login | `auth login` | G0 (login and logout, or approved cleanup), Status |
 | Claude Code | Run | interactive root, no forwarded args, exact fixed options | G0 (run), Login |
 | Claude Code | Logout | `auth logout` | G0 (logout), Login |
 | Codex `/opt/homebrew/bin/codex` | Status | `login status` | step 1, G0 (status) |
-| Codex | Login | `login` | G0 (login), Status |
+| Codex | Login | `login` | G0 (login and logout, or approved cleanup), Status |
 | Codex | Run | interactive root, no forwarded args, exact fixed options | G0 (run), Login |
 | Codex | Logout | `logout` | G0 (logout), Login |
 
@@ -569,16 +599,16 @@ lifecycle evidence is incomplete.
 
 | Test | Required proof |
 |---|---|
-| `stage14_status_modes` | Default runs account mode; `--no-account` never spawns (fake binary counts zero execs) and emits the byte-compatible `status` envelope; `--no-account` refused on other commands. |
+| `stage14_status_modes` | `--expected-profile-id` locally: match proceeds, mismatch → `conflict` with zero spawns, invalid value → `usage` without echo, refused on non-`status` commands; default runs account mode; `--no-account` never spawns (fake binary counts zero execs) and emits the byte-compatible `status` envelope; `--no-account` refused on other commands. |
 | `stage14_admission` | Closed table → `not_qualified`, null version, exit 0 and zero provider executions (no status child, no `--version` probe); nonempty table without a matching row → at most the approved version probe; no binding/disabled/unsafe home → `unavailable`; exact SHA/OS/build/argv; revision drift before dispatch and after reap → `conflict`; auth guard held until reap; busy → `busy`; no fallback home. |
 | `stage14_parser` | Each invented row's signed-in, partial and signed-out shapes; `unknown` on wrong version, shape, exit/stream pair, encoding, duplicates, control bytes, invalid email/plan, overflow and timeout. |
 | `stage14_never_store` | Sentinel PII and sentinel credentials in fake output never appear in stdout of other commands, stderr, errors, registry, any file under the root, temp dirs or crash output; unrelated fields from the fake never appear anywhere. |
 | `stage14_json_contract` | Fixtures in cli-v1 examples; one LF-terminated object, empty stderr; errors use `status.account`; `run/login/logout --json` still `json_native_io`; `doctor` unchanged. |
 | `stage14_human` | Full email, each state line, partial fields, display name header, exit 0 per completed state, cancellation propagation. |
 | `stage14_extras` | v3 → v4 metadata migration; label/arguments kept on rename; `@` refused; expected-revision and atomic failure; version cache invalidation on replacement; argv override, bare `--`, stale-default refusal. |
-| `stage14_usage_render` | Exactly one call to the stage 11 LOCAL reader and no LIVE request even with LIVE enabled; each stage 11 `reason`, including `reset_since_capture` with no percentage and `Reset due`; stage 11 plan never in `account.plan`; 0% and 100%, floor rounding, reset text, narrow, non-TTY, `NO_COLOR`, ASCII, no live call. |
+| `stage14_usage_render` | Exactly one call to the stage 11 LOCAL reader and no LIVE request even with LIVE enabled; each stage 11 `reason`, including `reset_since_capture` with no percentage and `Reset due`; both windows reset → both labels with `Reset due` and no `usage: not available` line; one reset and one unusable → the reset line plus `…: not available`; stage 11 plan never in `account.plan`; 0% and 100%, floor rounding, reset text, narrow, non-TTY, `NO_COLOR`, ASCII, no live call. |
 | Mac live evidence | Per-operation identity/digest, G0 citation, path scope, exit/result and cleanup on the exact head; unresolved stage 3 dependencies listed one by one. |
-| `stage14_remote` (with stage 13) | Fake SSH and fake remote Larp: explicit-action only; remote states pass through; an unmarked `status` under `--remote-request` never spawns on any receiver; `--remote-account` and `--expected-profile-id` refused outside `--remote-request`; stage-13-only remote gives `remote_incompatible` for account mode and plain metadata `status` for `--no-account`; **version change between probe and dispatch** (upgrade: metadata request stays metadata with zero spawns; downgrade: account request refused before effects); **rename + name reuse** (snapshot rev 7 has ID 2 as `codex-45`, then ID 2 is renamed and ID 3 takes the name: stale revision → `conflict`, revision omitted but `--expected-profile-id 2` → `conflict`, both with zero spawns; a reply for ID 3 → `remote_output`); wrong discriminator, bad email form and stderr → `remote_output`; stream cap → `too_large`; 16 s child and 33 s bridge deadlines → `remote_timeout`; no account data in any failure; sentinel email absent from local and remote logs, files and diagnostics. |
+| `stage14_remote` (with stage 13) | Fake SSH and fake remote Larp: explicit-action only; remote states pass through; an unmarked `status` under `--remote-request` never spawns on any receiver; `--remote-account` and `--expected-profile-id` refused outside `--remote-request`; stage-13-only remote gives `remote_incompatible` for account mode and plain metadata `status` for `--no-account`; **version change between probe and dispatch** (upgrade: metadata request stays metadata with zero spawns; downgrade: account request refused before effects); **app → router → receiver** (the app's `--host H status NAME --expected-revision 7 --expected-profile-id 2` reaches the fake receiver as `--remote-account --expected-revision 7 --expected-profile-id 2`, with exactly one probe and one command login and no extra read); **direct CLI without ID** (only what was given is forwarded; the reply's ID is reported); **rename + name reuse** (snapshot rev 7 has ID 2 as `codex-45`, then ID 2 is renamed and ID 3 takes the name: stale revision → `conflict`, revision omitted but `--expected-profile-id 2` → `conflict`, both with zero spawns; a reply for ID 3 → `remote_output`); **revision binding** (a success with the right name and ID but revision `8` for a request pinned to `7` → `remote_output`, no account data); wrong discriminator, bad email form and stderr → `remote_output`; stream cap → `too_large`; 16 s child and 33 s bridge deadlines → `remote_timeout`; no account data in any failure; sentinel email absent from local and remote logs, files and diagnostics. |
 | Later UI acceptance | CLI contract shipped first; explicit open/refresh only; stale-result guard; blur, reveal, re-blur on close/relaunch, hide setting, accessibility; menu bar never shows an email. |
 
 ## Resolved rulings (lead, 2026-11-21; the user may still veto)

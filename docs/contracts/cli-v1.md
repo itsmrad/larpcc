@@ -160,16 +160,27 @@ other command keeps them.
 | `status NAME --no-account [--json]` | `status` | Frozen `status` data, unchanged | Never |
 
 `--no-account` is accepted only by `status`. Elsewhere it is `usage`, exit 2.
-An older CLI rejects it as `parse`, exit 2. `doctor` is unchanged. Under a
+An older CLI rejects it as `parse`, exit 2. `doctor` is unchanged.
+
+`--expected-profile-id ID` is a new public global option before the child
+`--`, accepted only by `status` in this amendment (elsewhere `usage`, exit 2;
+an older CLI rejects it as `parse`). ID is a canonical nonzero decimal u64,
+and an invalid value is `usage` without echo. Under the registry lock, after
+the `--expected-revision` check and before any guard, probe or spawn, NAME
+must resolve to ID, or the command fails `conflict`, exit 1, with no effects.
+GUI account-status requests MUST send both preconditions from the displayed
+snapshot. Human callers may omit either. It adds no response field. Under a
 stage 13 `--host` route (implemented with stage 13), the remote Larp runs its
 own account status and the forwarded envelope is the same `status.account`
 shape with no host field. Under `--remote-request`, an unmarked `status` is
 always metadata-only. Account mode requires the internal `--remote-account`
-flag, plus `--expected-profile-id ID` and `--expected-revision` from the
-caller's metadata snapshot when available. Both internal flags are valid only
-with `--remote-request`, and the receiver checks them before any effect. The
-router validates the reply like any forwarded read and also requires the sent
-profile ID and name. A remote without stage 14 support rejects the unknown
+flag, valid only with `--remote-request` and checked by the receiver before
+any effect. The local router forwards exactly the `--expected-revision` and
+`--expected-profile-id` its caller gave, with no extra SSH read. Before
+display, the router validates the reply like any forwarded read and also
+requires the requested name, the sent profile ID (if sent) and a success
+`revision` equal to the sent `--expected-revision` (if sent). Any mismatch
+is `remote_output` with no account data. A remote without stage 14 support rejects the unknown
 flag, which yields `remote_incompatible`. Deadlines are 16 s per SSH child
 and 33 s for the app bridge, as in stage 13. No separate example is
 needed because the shape is identical. See
