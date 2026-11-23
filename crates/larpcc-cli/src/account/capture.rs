@@ -227,7 +227,7 @@ mod os {
         pipe: &mut (impl Read + AsRawHandle),
         bytes: &mut [u8],
     ) -> io::Result<usize> {
-        use std::ptr::{null, null_mut};
+        use std::ptr::null_mut;
         let mut available = 0;
         // SAFETY: the handle is the owned read end, and available is writable.
         let ok = unsafe {

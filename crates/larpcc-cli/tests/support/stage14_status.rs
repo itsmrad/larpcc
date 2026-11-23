@@ -159,6 +159,30 @@ fn stage14_admission_closed_and_digest_mismatch_do_not_execute() {
 }
 
 #[test]
+fn stage14_admission_requires_a_bound_enabled_safe_home() {
+    let f = StatusFixture::new();
+    f.fixture
+        .profile(&["add", "claude-work", "--provider", "claude"], 0);
+    let unbound = f.command(true, &["cc", "status", "claude-work", "--json"]);
+    let result = envelope(&exec(unbound, 0));
+    assert_eq!(result["data"]["account"]["state"], "unavailable");
+    assert!(result["data"]["provider_version"].is_null());
+
+    f.fixture.profile(&["surface", "codex-45", "cli", "off"], 0);
+    assert_eq!(f.json(&[], 0)["data"]["account"]["state"], "unavailable");
+    f.fixture.profile(&["surface", "codex-45", "cli", "on"], 0);
+
+    let mut ambient = f.command(true, &["cc", "status", "codex-45", "--json"]);
+    ambient.env("CODEX_HOME", f.fixture.temp.path().join("codex"));
+    assert_eq!(envelope(&exec(ambient, 1))["command"], "status.account");
+
+    let home = f.fixture.root.join("profiles/1/cli");
+    fs::rename(home, f.fixture.temp.path().join("displaced")).unwrap();
+    assert_eq!(f.json(&[], 0)["data"]["account"]["state"], "unavailable");
+    assert!(!f.marker.exists());
+}
+
+#[test]
 fn stage14_admission_cannot_publish_a_stale_snapshot() {
     use std::{
         process::Stdio,
