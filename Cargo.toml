@@ -13,3 +13,7 @@ publish = false
 opt-level = "s"
 lto = "thin"
 strip = true
+
+# Alias launchers are hashed whole (tens of MiB in debug builds); keep tests bounded.
+[profile.dev.package.sha2]
+opt-level = 3

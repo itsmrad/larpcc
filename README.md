@@ -73,6 +73,42 @@ and reads accept `--expected-revision` under the same registry lock before name
 resolution. A stale revision refuses without effects. JSON contains metadata and
 switches, never package contents.
 
+Aliases are recognizable commands that launch one profile:
+
+```sh
+larp cc alias add codex-45 claude-work   # CLI run of profile claude-work
+larp cc alias add work-app codex-45 --desktop
+larp cc alias add claude claude-work --shadow
+larp cc alias list
+larp cc alias remove codex-45
+```
+
+An alias is a copy of the running, trusted `larp` executable at
+`<data directory>/bin/NAME` (`NAME.exe` on Windows) plus an adjacent
+`NAME.larp-alias.json` receipt that pins the absolute data root, the profile ID,
+the surface and the identities and SHA-256 of the launcher and its source.
+Windows alias creation currently refuses because the loaded image cannot be verified.
+The registry keeps an independent receipt digest. Any valid profile name works
+for either provider; `claude` and `codex` require `--shadow`. Nothing is ever
+overwritten: an existing file at the alias path, or (without `--shadow`) a
+same-named command on `PATH`, refuses. Larp CC prints guidance but never edits
+`PATH` or shell files; add the `bin` folder to `PATH` yourself.
+
+An alias-named launcher uses its receipt to select the root. A copy named and
+invoked as `larp` uses the ambient root and ordinary closed admission, ignores
+adjacent receipts, and parses the `cc` grammar. Renaming is a user action and
+provides no privilege boundary.
+Alias arguments (including a literal `--json`) are forwarded to `run`, so the
+stage-3 qualification refusal applies unchanged; a desktop alias forwards to
+`app open` and takes no arguments. Renaming the profile keeps the mapping;
+`profile forget` refuses while aliases reference it. Moved, copied or modified
+launchers, forged receipts and a newer `larp` (reported `incompatible`; remove and
+re-add) refuse. Add and remove use the registry lock and the shared
+`share-journal.json` (kind `alias`): an interrupted add rolls back, an interrupted
+remove completes, and an `alias` command without an expected revision can retry
+recovery. Drift leaves the journal pending. Remove deletes only artifacts proven
+by digest and identity. See [manual alias recovery](docs/stages/05-aliases.md#manual-alias-recovery).
+
 Use `provider bind … --replace` to change a binding. An identical binding is a no-op, even if the executable has subsequently disappeared. Provider list revalidates paths and reports `ok`, `unbound` or `invalid: …`; `ok` means path validation only. Binding never runs an executable or probes its version. Paths and diagnostics escape terminal controls and the specified Unicode format controls.
 
 Names contain 1–32 lowercase ASCII letters, digits, hyphens or underscores, starting with a letter. `larp` and Windows device names are reserved on all platforms. Providers are exactly `claude` and `codex`. Profile list sorts by name and reports each home as `ok`, `missing` or `unsafe`. Unsafe or missing homes remain diagnosable and can be renamed or forgotten without reading their contents. `forget` requires `--yes` and never deletes a home.

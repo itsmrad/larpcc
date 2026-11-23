@@ -585,6 +585,102 @@ fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> io::Result<bool> {
     )
 }
 
+// Capture the module path's file at startup and keep it pinned for provider rejection.
+static STARTUP_IMAGE: std::sync::OnceLock<Result<CheckedObject, Error>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn pin_startup_image() {
+    let _ = STARTUP_IMAGE.get_or_init(|| {
+        let path = std::env::current_exe().map_err(|_| Error::NamespaceUnverified)?;
+        let file = open(
+            &path,
+            FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )?
+        .ok_or(Error::NamespaceUnverified)?;
+        let mut id: FILE_ID_INFO = unsafe { zeroed() };
+        // SAFETY: live file and writable FILE_ID_INFO output.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileIdInfo,
+                (&mut id as *mut FILE_ID_INFO).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(Error::NamespaceUnverified);
+        }
+        Ok(CheckedObject {
+            file,
+            identity: FileIdentity::Windows {
+                volume: id.VolumeSerialNumber,
+                id: id.FileId.Identifier,
+            },
+        })
+    });
+}
+
+pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
+    pin_startup_image();
+    match STARTUP_IMAGE.get() {
+        Some(Ok(object)) => Ok(object.identity.clone()),
+        _ => Err(Error::NamespaceUnverified),
+    }
+}
+
+pub(crate) fn alias_open_at(
+    _parent: &CheckedObject,
+    path: &Path,
+    kind: ObjectKind,
+    create: bool,
+) -> Result<Option<CheckedObject>, Error> {
+    // The retained ancestors deny delete sharing, including the checked parent.
+    if create {
+        return create_file(path).map(Some).map_err(|error| match error {
+            Error::Io { source, .. } if source.kind() == io::ErrorKind::AlreadyExists => {
+                Error::Conflict
+            }
+            error => error,
+        });
+    }
+    if kind == ObjectKind::Directory {
+        return inspect(path, kind);
+    }
+    let Some(file) = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    else {
+        return Ok(None);
+    };
+    verify(file, path, kind, Policy::Managed).map(Some)
+}
+
+pub(crate) fn alias_unlink_at(
+    _bin: &CheckedObject,
+    path: &Path,
+    expected: &FileIdentity,
+) -> Result<(), Error> {
+    remove_skill_leaf(path, expected, ObjectKind::File)
+}
+
+pub(crate) fn alias_publish_at(_bin: &CheckedObject, from: &Path, to: &Path) -> Result<(), Error> {
+    let from = wide(from)?;
+    let to = wide(to)?;
+    // SAFETY: both paths are NUL-terminated and their common parent stays pinned.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+        return Err(
+            if io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists {
+                Error::Conflict
+            } else {
+                Error::AliasInvalid
+            },
+        );
+    }
+    Ok(())
+}
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
     let (target, checked) = executable_checked(path, root)?;
     Ok((target, checked.identity))
@@ -652,36 +748,7 @@ fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObjec
     if n < 2 || magic[..2] != *b"MZ" {
         return Err(unsafe_path(path, "is not a supported native executable"));
     }
-    let own = std::env::current_exe().map_err(|source| Error::Io {
-        action: "locate current executable",
-        path: path.into(),
-        source,
-    })?;
-    let own = open(
-        &own,
-        READ_CONTROL | FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-    )?
-    .ok_or_else(|| unsafe_path(path, "filesystem identity cannot be verified"))?;
-    // SAFETY: plain output structure and live handle, full 128-bit file identity query.
-    let mut id: FILE_ID_INFO = unsafe { zeroed() };
-    if unsafe {
-        GetFileInformationByHandleEx(
-            own.as_raw_handle(),
-            FileIdInfo,
-            (&mut id as *mut FILE_ID_INFO).cast(),
-            size_of::<FILE_ID_INFO>() as u32,
-        )
-    } == 0
-    {
-        return Err(unsafe_path(path, "filesystem identity cannot be verified"));
-    }
-    if checked.identity
-        == (FileIdentity::Windows {
-            volume: id.VolumeSerialNumber,
-            id: id.FileId.Identifier,
-        })
-    {
+    if checked.identity == running_identity(path)? {
         return Err(unsafe_path(path, "is Larp CC itself"));
     }
     Ok((target, checked))

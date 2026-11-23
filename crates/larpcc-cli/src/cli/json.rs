@@ -62,6 +62,17 @@ fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
             1,
         ),
         Error::SkillNotFound => ("not_found", "Skill was not found.", 1),
+        Error::AliasNotFound => ("not_found", "Alias was not found.", 1),
+        Error::AliasInvalid => (
+            "drift",
+            "Alias launcher, receipt or mapping cannot be verified.",
+            1,
+        ),
+        Error::AliasImageUnverified => (
+            "unsafe_path",
+            "Cannot verify the loaded Larp image for alias creation.",
+            1,
+        ),
         Error::Conflict | Error::NameTaken { .. } => {
             ("conflict", "Registry revision or references conflict.", 1)
         }
@@ -108,6 +119,7 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         } => "app.bind",
         CcAction::App { .. } => "app.open",
         CcAction::Skills { command } => command.action().command(),
+        CcAction::Alias { command } => command.command(),
         CcAction::Run { .. } => "run",
         CcAction::Login { .. } => "login",
         CcAction::Logout { .. } => "logout",
@@ -144,6 +156,11 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
     ) {
         return json_error(command, "usage", "This operation requires --yes.", 2);
     }
+    if let CcAction::Alias { command } = &action
+        && let Some(message) = command.usage()
+    {
+        return json_error(command.command(), "usage", message, 2);
+    }
     if matches!(action, CcAction::App { .. })
         && let Err(e) = crate::desktop::preflight()
     {
@@ -157,6 +174,7 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         CcAction::App {command:AppCommand::Bind {provider,path,recorded_version,replace}} => r.bind_desktop(provider,path,recorded_version,replace).map(|changed| json!({"changed":changed,"profile_id":null,"name":null,"warnings":[]})),
         CcAction::App {command:AppCommand::Open {name}} => r.open_desktop(&name,true).map(|receipt| json!({"profile_id":receipt.profile_id.to_string(),"provider":receipt.provider,"surface":receipt.surface,"outcome":receipt.outcome,"native_auth":receipt.native_auth})),
         CcAction::Skills {command} => r.skills(command.into_action()),
+        CcAction::Alias {command} => command.execute(&r),
         CcAction::Status {name} => r.metadata_json(command,Some(&name)),
         CcAction::Provider {command:ProviderAction::List} => r.metadata_json(command,None),
         CcAction::Provider {command:ProviderAction::Bind {provider,executable,replace}} => r.bind(provider,executable,replace).map(|outcome| json!({"changed":outcome != crate::registry::BindOutcome::Unchanged,"profile_id":null,"name":null,"warnings":[]})),

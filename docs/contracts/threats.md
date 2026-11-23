@@ -31,6 +31,25 @@ Stale GUI intent: require `--expected-revision` on GUI mutation/open requests,
 checked under the resolution lock before effects. Name reuse after rename must
 fail with conflict; internal post-resolution revalidation alone is insufficient.
 
+## Remote
+
+These controls apply to [Stage 13 SSH requests](../stages/13-remote-hosts.md).
+The user must control and trust the SSH server. An authenticated but
+compromised server can fabricate valid metadata or mutate its own state.
+
+| Threat | Required control and discriminating acceptance |
+|---|---|
+| Malicious or compromised server output | Enforce schema, semantics, command/exit matching, stream caps, deadlines and empty stderr. Replace arbitrary messages with fixed local text. Treat display fields as inert, machine-scoped metadata. Feed forged identifiers, ANSI/control strings, wrong commands and schema-valid misleading paths; none selects a local target, starts a process, or reaches a second host automatically. |
+| DEST or remote argument injection | Parse a strict destination grammar, split user/host/port into separate argv, and invoke OpenSSH directly. Use one fixed SSH remote command and a POSIX script with every data word quoted. Verify spaces and apostrophes round trip and shell metacharacters stay data. |
+| User-owned SSH config and hooks | Config mode delegates trust, routing and authentication to OpenSSH, including ProxyJump, ProxyCommand, LocalCommand and configured multiplexing. Fixed options neutralize the user's LocalForward, RemoteForward and RequestTTY for Larp calls. Treat the user's SSH config and hooks as trusted local code. Direct mode skips the config and disables connection sharing and forwarding. Both use fixed BatchMode, `-a -x` and no raw user-supplied SSH options. |
+| SSH authentication material | Only OpenSSH accesses local agents, identity files and host-key files. Direct mode passes the socket identifier unchanged and permits a validated typed identity path. Larp never opens either, logs identity paths or sends them to the remote shell. |
+| App subprocess environment | Only host-routed invocations add the app's SSH_AUTH_SOCK unchanged to the minimal bridge environment. No shell fallback, extra inherited variables or PATH expansion. Verify with captured synthetic child environments. |
+| MITM, first contact or changed host key | Direct mode requires StrictHostKeyChecking=yes and prior trust. Config mode uses the user's existing SSH trust policy. Verify direct-mode refusal without changed trust state, and preserve config-mode options without adding a weaker fallback. Never expose raw diagnostics. |
+| Data exfiltration via MCP copy or sync | Require an explicit source, target, digest and approval. Validate the actual command, arguments or URL and reference names before transfer and again on the destination. No credential values, keychain lookups, endpoint requests or server execution. Untrusted output never chooses a routing destination. |
+| Credential-shaped skill files or filesystem escape | Scope transfers to a catalog-owned Stage 06 package and managed receiver staging. Validate path allowlists and limits before reading or accepting file data, reject credential-shaped names, links and special files, and verify the approved digest before commit. Truncated, oversized and malformed frames leave no committed entry. User approval covers the content of accepted files. No arbitrary-path transfer or Larp binary installation. |
+| Stale routing, stale registry or lost receipt | Check host and target revisions independently. Never fall back or retry on conflict. After uncertain mutation outcome, refresh explicitly to reconcile. Mixed sync results preserve confirmed successes and expose unattempted destinations/entries. |
+| Remote usage or native launch bypass | Gate forwarded requests on both sides. Refuse LIVE before token access and closed native operations before SSH; prove zero provider requests and zero native child creation with fakes. |
+
 ## Account summary
 
 These controls apply to [Stage 14 account status](../stages/14-account-summary.md).
