@@ -24,9 +24,26 @@ larp cc profile surface work desktop on
 larp cc profile list --json
 larp cc profile rename work job --expected-revision 3
 larp cc profile forget personal --yes
+larp cc profile delete personal --yes
+larp cc profile recover personal --yes
+larp cc profile migrate
 larp cc provider bind claude /absolute/path/to/native-executable
 larp cc provider list
 ```
+
+Close all sessions using the profile before confirming delete or recover,
+including sessions started outside Larp. On Linux and macOS, delete permanently
+removes the managed profile directory and owned aliases, clears sharing
+references and retires the profile ID. If interrupted, resume with
+`profile recover NAME --yes`. Pending cleanup blocks registry consumers.
+Windows refuses profile-tree deletion and recovery until confined removal is
+available. `--logout` requires native qualification. Keychain items, remote
+grants and Electron Safe Storage may remain after deleting a directory.
+
+`profile migrate` upgrades registries with empty legacy homes on Linux and
+macOS. Keep older Larp binaries and native sessions stopped while migrating.
+Windows refuses legacy profile-tree moves. See the stage 04 contract for
+[migration recovery](docs/stages/04-layout-and-delete.md#v2-migration-transaction).
 
 Explicit skill packages can be shared with all active CLI profiles:
 
