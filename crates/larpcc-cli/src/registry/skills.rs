@@ -1097,6 +1097,154 @@ pub(super) fn has_profile_references(
         }))
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProfileCleanup {
+    index: Option<Index>,
+    manifest: Option<Manifest>,
+}
+
+impl ProfileCleanup {
+    fn metadata(root: &Path) -> Result<Self, Error> {
+        Ok(Self {
+            index: read_bytes(root, INDEX, store::LIMIT)?
+                .as_deref()
+                .map(decode)
+                .transpose()?,
+            manifest: read_bytes(root, MANIFEST, store::LIMIT)?
+                .as_deref()
+                .map(decode)
+                .transpose()?,
+        })
+    }
+
+    fn owns_references(&self, id: ProfileId) -> bool {
+        self.index
+            .iter()
+            .flat_map(|i| &i.skills)
+            .any(|s| s.disabled.contains(&id))
+            || self
+                .manifest
+                .iter()
+                .flat_map(|m| &m.entries)
+                .any(|o| o.profile == Some(id))
+    }
+
+    fn validate(&self, root: &Path, data: &store::Data) -> Result<(), Error> {
+        validate(
+            root,
+            self.index.as_ref().unwrap_or(&Index::default()),
+            self.manifest.as_ref().unwrap_or(&Manifest::default()),
+            data,
+        )
+    }
+}
+
+pub(super) fn prepare_profile_cleanup(
+    root: &Path,
+    data: &store::Data,
+    id: ProfileId,
+) -> Result<Option<ProfileCleanup>, Error> {
+    let before = ProfileCleanup::metadata(root)?;
+    before.validate(root, data)?;
+    Ok(before.owns_references(id).then_some(before))
+}
+
+pub(super) struct PreparedProfileCleanup {
+    index: Option<Vec<u8>>,
+    manifest: Option<Vec<u8>>,
+}
+impl PreparedProfileCleanup {
+    pub(super) fn apply(self, root: &Path) -> Result<(), Error> {
+        if let Some(bytes) = self.index {
+            write_atomic(root, INDEX, &bytes)?;
+            #[cfg(test)]
+            fault("delete index")?;
+        }
+        if let Some(bytes) = self.manifest {
+            write_atomic(root, MANIFEST, &bytes)?;
+        }
+        paths::sync(root)
+    }
+    pub(super) fn verify_removed(&self) -> Result<(), Error> {
+        if self.index.is_some() || self.manifest.is_some() {
+            return Err(Error::Drift);
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn validate_profile_cleanup(
+    root: &Path,
+    data: &store::Data,
+    id: ProfileId,
+    cleanup: Option<&ProfileCleanup>,
+    resuming: bool,
+) -> Result<PreparedProfileCleanup, Error> {
+    let current = ProfileCleanup::metadata(root)?;
+    current.validate(root, data)?;
+    let Some(before) = cleanup else {
+        if current.owns_references(id) {
+            return Err(Error::RecoveryRequired);
+        }
+        return Ok(PreparedProfileCleanup {
+            index: None,
+            manifest: None,
+        });
+    };
+    before.validate(root, data)?;
+    if !before.owns_references(id) {
+        return Err(Error::RecoveryRequired);
+    }
+    let mut after_index = before.index.clone();
+    for skill in after_index.iter_mut().flat_map(|i| &mut i.skills) {
+        skill.disabled.remove(&id);
+    }
+    let mut after_manifest = before.manifest.clone();
+    if let Some(manifest) = &mut after_manifest {
+        manifest.entries.retain(|o| o.profile != Some(id));
+    }
+    if current.index != before.index && (!resuming || current.index != after_index)
+        || current.manifest != before.manifest && (!resuming || current.manifest != after_manifest)
+    {
+        return Err(Error::Drift);
+    }
+    for item in before
+        .manifest
+        .iter()
+        .flat_map(|m| &m.entries)
+        .filter(|o| o.profile == Some(id))
+    {
+        // A managed Unix profile only owns links here. Verify link metadata without reading files.
+        #[cfg(unix)]
+        if !matches!(item.artifact, Artifact::Link { .. }) {
+            return Err(Error::Drift);
+        }
+        preflight_owned(root, item)?;
+    }
+    // The confined tree walk unlinks the already verified profile-local leaves.
+    let index = if current.index == after_index {
+        None
+    } else {
+        after_index
+    };
+    let manifest = if current.manifest == after_manifest {
+        None
+    } else {
+        after_manifest
+    };
+    Ok(PreparedProfileCleanup {
+        index: index
+            .as_ref()
+            .map(|value| bounded(value, store::LIMIT))
+            .transpose()?,
+        manifest: manifest
+            .as_ref()
+            .map(|value| bounded(value, store::LIMIT))
+            .transpose()?,
+    })
+}
+
 /// Existing profile mutations call here while retaining the registry lock.
 /// The only side effects are the concrete skills plan and its registry commit.
 pub(super) fn profile_commit(
@@ -1158,7 +1306,7 @@ pub(super) fn profile_commit(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::registry::{Provider, Surface};
     fn name(s: &str) -> ProfileName {
@@ -1193,7 +1341,10 @@ mod tests {
         let r = Registry::at(temp.path().join("root")).unwrap();
         (temp, r, source)
     }
-    fn private_skills(r: &Registry, action: SkillsAction) -> Result<Value, Error> {
+    pub(in crate::registry) fn private_skills(
+        r: &Registry,
+        action: SkillsAction,
+    ) -> Result<Value, Error> {
         let homes = VendorHomes {
             configured: vec![],
             default_home: Some(r.root().parent().unwrap().join("fake-home")),

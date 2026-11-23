@@ -27,12 +27,18 @@ unsafe extern "C" {
         external: u8,
     ) -> Ref;
     fn CFRelease(value: Ref);
+    fn CFDictionaryGetValue(dictionary: Ref, key: Ref) -> Ref;
+    fn CFDataGetTypeID() -> usize;
+    fn CFDataGetLength(data: Ref) -> isize;
+    fn CFDataGetBytePtr(data: Ref) -> *const u8;
 }
 #[link(name = "Security", kind = "framework")]
 unsafe extern "C" {
     fn SecStaticCodeCreateWithPath(url: Ref, flags: u32, code: *mut Ref) -> i32;
     fn SecRequirementCreateWithString(text: Ref, flags: u32, requirement: *mut Ref) -> i32;
     fn SecStaticCodeCheckValidity(code: Ref, flags: u32, requirement: Ref) -> i32;
+    fn SecCodeCopySigningInformation(code: Ref, flags: u32, information: *mut Ref) -> i32;
+    static kSecCodeInfoUnique: Ref;
 }
 struct Owned(Ref);
 impl Owned {
@@ -117,7 +123,73 @@ fn spelling(path: &Path) -> Result<(), Error> {
     }
     Ok(())
 }
-pub(super) fn validate(path: &Path) -> Result<CheckedApp, Error> {
+fn code_directory_hash(path: &Path) -> Result<Vec<u8>, Error> {
+    let bytes = path.as_os_str().as_bytes();
+    // SAFETY: Create/Copy results are owned; the data is borrowed only while its dictionary lives.
+    unsafe {
+        let url = Owned::new(CFURLCreateFromFileSystemRepresentation(
+            std::ptr::null(),
+            bytes.as_ptr(),
+            bytes.len() as isize,
+            1,
+        ))?;
+        let mut code = std::ptr::null();
+        if SecStaticCodeCreateWithPath(url.0, 0, &mut code) != 0 {
+            return Err(Error::ArtifactInvalid);
+        }
+        let code = Owned::new(code)?;
+        let mut info = std::ptr::null();
+        if SecCodeCopySigningInformation(code.0, 1 << 1, &mut info) != 0 {
+            return Err(Error::ArtifactInvalid);
+        }
+        let info = Owned::new(info)?;
+        let hash = CFDictionaryGetValue(info.0, kSecCodeInfoUnique);
+        if hash.is_null() || CFGetTypeID(hash) != CFDataGetTypeID() {
+            return Err(Error::ArtifactInvalid);
+        }
+        let len = CFDataGetLength(hash);
+        if !(20..=32).contains(&len) {
+            return Err(Error::ArtifactInvalid);
+        }
+        let bytes = CFDataGetBytePtr(hash);
+        if bytes.is_null() {
+            return Err(Error::ArtifactInvalid);
+        }
+        Ok(std::slice::from_raw_parts(bytes, len as usize).to_vec())
+    }
+}
+fn file_key(object: &CheckedObject) -> Result<[i64; 7], Error> {
+    let m = object
+        .file
+        .metadata()
+        .map_err(|_| Error::AdmissionChanged)?;
+    Ok([
+        m.dev() as i64,
+        m.ino() as i64,
+        m.size() as i64,
+        m.mtime(),
+        m.mtime_nsec(),
+        m.ctime(),
+        m.ctime_nsec(),
+    ])
+}
+fn cache_key(
+    path: &Path,
+    executable: &CheckedObject,
+    info: &CheckedObject,
+) -> Result<SignatureCache, Error> {
+    Ok(SignatureCache {
+        version: 1,
+        executable: file_key(executable)?,
+        info: file_key(info)?,
+        cdhash: code_directory_hash(path)?,
+    })
+}
+pub(super) fn validate(
+    path: &Path,
+    cached: Option<&SignatureCache>,
+    bind: bool,
+) -> Result<(CheckedApp, Option<SignatureCache>), Error> {
     spelling(path)?;
     let exe = path.join("Contents/MacOS/ChatGPT");
     let ancestry = app_anchor(&exe)?;
@@ -125,8 +197,10 @@ pub(super) fn validate(path: &Path) -> Result<CheckedApp, Error> {
     let info = app_file(&path.join("Contents/Info.plist"))?;
     let executable_stamp = AppFileStamp::of(&executable)?;
     let info_stamp = AppFileStamp::of(&info)?;
-    // Exactly one full static validation for this bind/open admission.
-    verify_signature(path)?;
+    let key = cache_key(path, &executable, &info)?;
+    if signature_check_needed(bind, cached, &key) {
+        verify_signature(path)?;
+    }
     if !bundle_value_matches(path, b"CFBundleIdentifier", b"com.openai.codex") {
         return Err(Error::ArtifactInvalid);
     }
@@ -139,7 +213,10 @@ pub(super) fn validate(path: &Path) -> Result<CheckedApp, Error> {
         info_stamp,
     };
     app.recheck()?;
-    Ok(app)
+    if cache_key(path, &app.executable, &app.info)? != key {
+        return Err(Error::AdmissionChanged);
+    }
+    Ok((app, Some(key)))
 }
 
 pub(super) mod dispatch;

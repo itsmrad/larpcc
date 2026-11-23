@@ -325,7 +325,25 @@ enum ProfileAction {
         #[arg(long)]
         yes: bool,
     },
+    /// Permanently delete a quiescent profile and its state directory
+    Delete {
+        name: ProfileName,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        logout: bool,
+    },
+    /// Resume an interrupted profile deletion after closing its sessions
+    Recover {
+        name: ProfileName,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Migrate eligible legacy profile homes to the current layout
+    Migrate,
 }
+
+const KEYCHAIN_RETAINED: &str = "Keychain items and remote grants may remain.";
 
 use clap::builder::TypedValueParser;
 
@@ -396,7 +414,12 @@ pub fn run() -> ExitCode {
     let expected = cli.expected_revision;
     let command = match command {
         CcAction::App { command } => {
-            if let Err(e) = crate::desktop::preflight() {
+            let preflight = if matches!(&command, AppCommand::Open { .. }) {
+                crate::desktop::open_preflight()
+            } else {
+                crate::desktop::preflight()
+            };
+            if let Err(e) = preflight {
                 return operational_error(e);
             }
             return match Registry::locate().and_then(|r| {
@@ -407,9 +430,11 @@ pub fn run() -> ExitCode {
                         path,
                         recorded_version,
                         replace,
-                    } => r
-                        .bind_desktop(provider, path, recorded_version, replace)
-                        .map(|_| "Desktop binding saved.\n".to_owned()),
+                    } => {
+                        eprintln!("Checking desktop app signature; this may take a few seconds.");
+                        r.bind_desktop(provider, path, recorded_version, replace)
+                            .map(|_| "Desktop binding saved.\n".to_owned())
+                    }
                     AppCommand::Open { name } => r
                         .open_desktop(&name, false)
                         .map(|receipt| format!("Desktop {}.\n", receipt.outcome)),
@@ -492,6 +517,16 @@ pub fn run() -> ExitCode {
         }
         CcAction::Profile { command } => command,
     };
+    if matches!(
+        command,
+        ProfileAction::Delete { yes: false, .. } | ProfileAction::Recover { yes: false, .. }
+    ) {
+        let _ = writeln!(io::stderr().lock(), "error: this operation requires --yes");
+        return ExitCode::from(2);
+    }
+    if matches!(command, ProfileAction::Delete { logout: true, .. }) {
+        return operational_error(Error::QualificationPending);
+    }
     let registry = match Registry::locate() {
         Ok(registry) => registry.expecting(expected),
         Err(error) => return operational_error(error),
@@ -596,6 +631,22 @@ fn execute(command: ProfileAction, registry: &Registry) -> Result<String, Error>
             render::renamed(&name, &registry.rename(&name, new_name)?)
         }
         ProfileAction::Forget { name, .. } => render::forgotten(&registry.forget(&name)?),
+        ProfileAction::Delete { name, .. } => {
+            let id = registry.delete_profile(name.clone(), false)?;
+            let _ = writeln!(io::stderr().lock(), "warning: {KEYCHAIN_RETAINED}");
+            format!("Deleted profile {name} (ID {id}).\n")
+        }
+        ProfileAction::Recover { name, .. } => {
+            let id = registry.delete_profile(name.clone(), true)?;
+            format!("Completed deletion of profile {name} (ID {id}).\n")
+        }
+        ProfileAction::Migrate => {
+            if registry.migrate_profiles()? {
+                "Migrated profiles to the current layout.\n".into()
+            } else {
+                "Profile layout is current.\n".into()
+            }
+        }
     })
 }
 

@@ -25,6 +25,8 @@ pub(super) struct Data {
     pub aliases: Vec<super::model::Alias>,
     #[serde(default)]
     pub desktop_bindings: Vec<super::model::DesktopBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_signature_cache: Option<crate::desktop::SignatureCache>,
 }
 impl Default for Data {
     fn default() -> Self {
@@ -36,6 +38,7 @@ impl Default for Data {
             bindings: Vec::new(),
             aliases: Vec::new(),
             desktop_bindings: Vec::new(),
+            desktop_signature_cache: None,
         }
     }
 }

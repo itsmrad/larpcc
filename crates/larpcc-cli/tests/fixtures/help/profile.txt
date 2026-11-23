@@ -9,6 +9,9 @@ Commands:
   show     Show one profile
   rename   Rename a profile; its ID and state directory do not change
   forget   Remove a profile from the registry; its state directory is kept
+  delete   Permanently delete a quiescent profile and its state directory
+  recover  Resume an interrupted profile deletion after closing its sessions
+  migrate  Migrate eligible legacy profile homes to the current layout
 
 Options:
       --json                                   Emit one local metadata JSON envelope

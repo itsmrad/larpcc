@@ -213,4 +213,70 @@ for invalid in invalid_mutations:
         negative_checks += 1
     else:
         raise AssertionError('invalid identity accepted')
+# Stage 14 account summary: semantic rules, then schema and semantic negatives.
+def check_account_status(value):
+    data = value['data']
+    account = data['account']
+    for field in ('email', 'plan'):
+        text = account[field]
+        if text is not None:
+            assert all(32 <= ord(char) < 127 for char in text)
+            assert text == text.strip()
+    if account['state'] == 'unavailable':
+        assert data['provider_version'] is None
+
+account_fixtures = [x for x in fixtures if x['command'] == 'status.account' and x['ok']]
+assert {x['data']['account']['state'] for x in account_fixtures} >= {'signed_in', 'unknown', 'not_qualified'}
+for fixture in account_fixtures:
+    check_account_status(fixture)
+signed_in = next(x for x in account_fixtures if x['data']['account']['email'] is not None)
+legacy_status = next(x for x in fixtures if x['command'] == 'status' and x['ok'])
+schema_negatives = []
+for state, field, text in (('signed_out', 'email', 'user@example.com'),
+                           ('unknown', 'plan', 'Plus'),
+                           ('not_qualified', 'email', 'user@example.com'),
+                           ('signed_in', 'email', 'user example.com'),
+                           ('signed_in', 'email', 'user@@example.com'),
+                           ('signed_in', 'email', '@example.com'),
+                           ('signed_in', 'email', 'usér@example.com'),
+                           ('signed_in', 'plan', ' Plus'),
+                           ('signed_in', 'plan', 'Plus '),
+                           ('signed_in', 'plan', 'x' * 65),
+                           ('signed_in', 'state', 'verified')):
+    invalid = copy.deepcopy(signed_in)
+    invalid['data']['account'].update({'state': state, field: text})
+    schema_negatives.append(invalid)
+for mutate in (
+    lambda x: x['data']['account'].update(token='sentinel'),
+    lambda x: x['data'].update(usage={'session': None}),
+    lambda x: x['data'].update(profile=None),
+    lambda x: x['data'].update(provider_version='1.2.3 (build)'),
+    lambda x: x['data'].update(native_auth='not_observed'),
+    lambda x: x.update(revision=None),
+    lambda x: x.update(command='status'),
+):
+    invalid = copy.deepcopy(signed_in)
+    mutate(invalid)
+    schema_negatives.append(invalid)
+invalid = copy.deepcopy(legacy_status)
+invalid['data']['account'] = copy.deepcopy(signed_in['data']['account'])
+schema_negatives.append(invalid)
+for invalid in schema_negatives:
+    assert not matches(invalid, SCHEMA)
+    negative_checks += 1
+semantic_negatives = []
+for field, text in (('email', 'user@example.com\n'), ('plan', 'Plus\n')):
+    invalid = copy.deepcopy(signed_in)
+    invalid['data']['account'][field] = text
+    semantic_negatives.append(invalid)
+invalid = copy.deepcopy(signed_in)
+invalid['data']['account'].update(state='unavailable', email=None, plan=None)
+semantic_negatives.append(invalid)
+for invalid in semantic_negatives:
+    try:
+        check_account_status(invalid)
+    except AssertionError:
+        negative_checks += 1
+    else:
+        raise AssertionError('invalid account summary accepted')
 print(f'{len(fixtures)} valid envelopes; all {len(expected)} success variants; {negative_checks} negative checks passed')

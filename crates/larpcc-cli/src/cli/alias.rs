@@ -50,6 +50,14 @@ fn dispatch(
     let (receipt, digest) = Receipt::adjacent(&executable, name)?;
     receipt.running(&executable)?;
     let surface = receipt.surface();
+    if surface == Surface::Desktop {
+        if !args.is_empty() {
+            return Err(Error::ArgConflict {
+                label: "argument syntax",
+            });
+        }
+        crate::desktop::open_preflight()?;
+    }
     let registry = Registry::at(receipt.root().to_owned())?;
     let (profile, pin, _held) = registry.alias_target(receipt, digest, &executable, argv0)?;
     let registry = registry.pin_alias(pin);
@@ -59,12 +67,6 @@ fn dispatch(
             admission::invoke_pinned(registry, &profile, args, &rows)
         }
         Surface::Desktop => {
-            if !args.is_empty() {
-                return Err(Error::ArgConflict {
-                    label: "argument syntax",
-                });
-            }
-            crate::desktop::preflight()?;
             let receipt = registry.open_desktop(&profile, false)?;
             println!("Desktop {}.", receipt.outcome);
             Ok(0)

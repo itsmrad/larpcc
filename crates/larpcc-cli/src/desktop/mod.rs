@@ -5,6 +5,23 @@ use crate::{
 };
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SignatureCache {
+    version: u8,
+    executable: [i64; 7],
+    info: [i64; 7],
+    cdhash: Vec<u8>,
+}
+#[cfg(any(target_os = "macos", test))]
+fn signature_check_needed(
+    bind: bool,
+    cached: Option<&SignatureCache>,
+    current: &SignatureCache,
+) -> bool {
+    bind || cached != Some(current)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct DesktopReceipt {
     pub profile_id: ProfileId,
@@ -58,7 +75,9 @@ fn app_file(path: &Path) -> Result<CheckedObject, Error> {
     platform::inspect(path, ObjectKind::File)?.ok_or(Error::ArtifactInvalid)
 }
 // Shared fixed argument vector for the native launcher and invented-target tests.
-fn open_arguments(target: &ValidatedDesktopTarget) -> Result<Vec<std::ffi::OsString>, Error> {
+pub(crate) fn open_arguments(
+    target: &ValidatedDesktopTarget,
+) -> Result<Vec<std::ffi::OsString>, Error> {
     use std::ffi::OsString;
     let cli = launch_path(&target.snapshot.cli.path)?;
     let desktop = launch_path(&target.snapshot.desktop.path)?;
@@ -91,6 +110,20 @@ fn provider_environment_name(name: &[u8]) -> bool {
         .iter()
         .any(|prefix| name.starts_with(prefix))
 }
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn open_command(
+    args: Vec<std::ffi::OsString>,
+    names: impl IntoIterator<Item = std::ffi::OsString>,
+) -> std::process::Command {
+    let mut command = std::process::Command::new("/usr/bin/open");
+    command.args(args);
+    for name in names {
+        if provider_environment_name(name.as_encoded_bytes()) {
+            command.env_remove(name);
+        }
+    }
+    command
+}
 fn supports_open_environment(version: &[u8]) -> bool {
     let Ok(version) = std::str::from_utf8(version) else {
         return false;
@@ -113,7 +146,12 @@ fn supports_open_environment(version: &[u8]) -> bool {
 
 /// Path spelling is necessary but never sufficient evidence of stock identity.
 /// Only static code validation is performed; no vendor process is executed.
-pub(crate) fn validate_binding(provider: Provider, path: &Path) -> Result<CheckedApp, Error> {
+pub(crate) fn validate_binding(
+    provider: Provider,
+    path: &Path,
+    cached: Option<&SignatureCache>,
+    bind: bool,
+) -> Result<(CheckedApp, Option<SignatureCache>), Error> {
     if provider == Provider::Claude {
         return Err(Error::QualificationPending);
     }
@@ -126,8 +164,9 @@ pub(crate) fn validate_binding(provider: Provider, path: &Path) -> Result<Checke
     }
     #[cfg(target_os = "macos")]
     if provider == Provider::Codex {
-        return macos::validate(path);
+        return macos::validate(path, cached, bind);
     }
+    let _ = (cached, bind);
     Err(Error::ArtifactInvalid)
 }
 
@@ -300,6 +339,17 @@ pub(crate) fn preflight() -> Result<(), Error> {
         Err(Error::QualificationPending)
     }
 }
+// Reopen only after the ChatGPT ~/.codex attribution re-test is resolved.
+const CHATGPT_DISPATCH_QUALIFIED: bool = false;
+
+pub(crate) fn open_preflight() -> Result<(), Error> {
+    preflight()?;
+    if !CHATGPT_DISPATCH_QUALIFIED {
+        return Err(Error::QualificationPending);
+    }
+    Ok(())
+}
+
 pub(crate) fn activity_for(target: &ValidatedDesktopTarget) -> Activity {
     #[cfg(target_os = "macos")]
     return macos::dispatch::activity(target);
@@ -309,6 +359,23 @@ pub(crate) fn activity_for(target: &ValidatedDesktopTarget) -> Activity {
         Activity::Unknown(InspectionCode::Unavailable)
     }
 }
+
+#[cfg(target_os = "macos")]
+pub(crate) fn deletion_lock_present(directory: &CheckedDirectory) -> Result<bool, Error> {
+    let hostname = singleton::hostname().map_err(|_| Error::AuthBusy)?;
+    match singleton::read(directory, &hostname) {
+        Ok(_) => Ok(true),
+        Err(InspectionCode::Missing) => {
+            directory.recheck().map_err(|_| Error::AuthBusy)?;
+            match singleton::read(directory, &hostname) {
+                Err(InspectionCode::Missing) => Ok(false),
+                _ => Err(Error::AuthBusy),
+            }
+        }
+        Err(_) => Err(Error::AuthBusy),
+    }
+}
+
 /// CORE retains the per-ID lifecycle guard across this entire call.
 pub(crate) fn open_target(
     target: &ValidatedDesktopTarget,
@@ -344,4 +411,39 @@ pub(crate) fn binding_path_present(provider: Provider, path: &Path) -> bool {
         ]
         .iter()
         .all(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file()))
+}
+
+#[cfg(test)]
+mod qualification_tests {
+    #[test]
+    fn signature_cache_requires_exact_key_and_bind_always_checks() {
+        let key = super::SignatureCache {
+            version: 1,
+            executable: [1; 7],
+            info: [2; 7],
+            cdhash: vec![3; 20],
+        };
+        assert!(!super::signature_check_needed(false, Some(&key), &key));
+        assert!(super::signature_check_needed(true, Some(&key), &key));
+        assert!(super::signature_check_needed(false, None, &key));
+        for index in 0..7 {
+            let mut changed = key.clone();
+            changed.executable[index] += 1;
+            assert!(super::signature_check_needed(false, Some(&key), &changed));
+            let mut changed = key.clone();
+            changed.info[index] += 1;
+            assert!(super::signature_check_needed(false, Some(&key), &changed));
+        }
+        let mut changed = key.clone();
+        changed.cdhash[0] += 1;
+        assert!(super::signature_check_needed(false, Some(&key), &changed));
+    }
+    #[test]
+    fn chatgpt_dispatch_stays_closed_pending_attribution() {
+        assert!(!std::hint::black_box(super::CHATGPT_DISPATCH_QUALIFIED));
+        assert!(matches!(
+            super::open_preflight(),
+            Err(crate::registry::Error::QualificationPending)
+        ));
+    }
 }
