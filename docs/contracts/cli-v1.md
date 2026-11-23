@@ -163,9 +163,15 @@ other command keeps them.
 An older CLI rejects it as `parse`, exit 2. `doctor` is unchanged. Under a
 stage 13 `--host` route (implemented with stage 13), the remote Larp runs its
 own account status and the forwarded envelope is the same `status.account`
-shape with no host field. The local router validates it like any forwarded
-read and also requires the requested profile ID. A remote without stage 14
-support yields `remote_incompatible` for account mode. No separate example is
+shape with no host field. Under `--remote-request`, an unmarked `status` is
+always metadata-only. Account mode requires the internal `--remote-account`
+flag, plus `--expected-profile-id ID` and `--expected-revision` from the
+caller's metadata snapshot when available. Both internal flags are valid only
+with `--remote-request`, and the receiver checks them before any effect. The
+router validates the reply like any forwarded read and also requires the sent
+profile ID and name. A remote without stage 14 support rejects the unknown
+flag, which yields `remote_incompatible`. Deadlines are 16 s per SSH child
+and 33 s for the app bridge, as in stage 13. No separate example is
 needed because the shape is identical. See
 [stage 14](../stages/14-account-summary.md#remote-account-status).
 

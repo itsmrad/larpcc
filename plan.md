@@ -140,8 +140,10 @@ lead to ask the user, per the rollout order.
 - D24: real-account qualification on the user's Mac with throwaway profiles,
   the user completing every sign-in. This supersedes "Real-account tests
   remain unauthorized" for that session only, after the lead merges the plan.
-  Login is blocked for a provider whose credential store is not proven
-  per-home (gate G0). Rows land in a separate implementation PR.
+  Each native operation, including the first status call, is blocked unless
+  the exact build's credential backend, key, precedence and fallback are
+  proven per-home (gate G0). PII-capable observations run only in the user's
+  unrecorded terminal. Rows land in a separate implementation PR.
 
 ---
 
