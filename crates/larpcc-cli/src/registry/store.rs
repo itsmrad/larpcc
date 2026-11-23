@@ -73,6 +73,13 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     }
     let data: Data =
         serde_json::from_slice(bytes).map_err(|_| corrupt("invalid registry encoding".into()))?;
+    if data
+        .desktop_signature_cache
+        .as_ref()
+        .is_some_and(|cache| !cache.is_valid())
+    {
+        return Err(corrupt("invalid desktop signature cache".into()));
+    }
     if !matches!(data.version, 1..=3) || data.next_id == 0 {
         return Err(corrupt("invalid version or next_id".into()));
     }

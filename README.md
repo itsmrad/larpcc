@@ -158,11 +158,12 @@ The root must be absolute with no `..` component, and its immediate parent must 
 and `profiles/<id>/{cli,desktop}`. New roots use schema v3. CLI defaults on and
 desktop off; toggling a surface never qualifies native launch. JSON profile
 list/show include both surfaces, provider, lifecycle state, aliases and desktop
-bindings. `app bind codex /Applications/ChatGPT.app [--version LABEL]` and
-`app open PROFILE` enable verified official ChatGPT.app dispatch on macOS after
-`profile surface PROFILE desktop on`. Unrecognized app versions warn and launch;
-JSON dispatch is a local receipt with no native account assertions. Claude.app
-and desktop on other operating systems remain closed. CLI qualification rows
+bindings. On macOS, bind the verified official ChatGPT.app with
+`app bind codex /Applications/ChatGPT.app [--version LABEL]`, enable the Codex
+profile's desktop surface with `profile surface PROFILE desktop on`, then run
+`app open PROFILE`. Unrecognized app versions warn and may launch after the
+same admission checks. JSON dispatch reports the local launch or focus outcome.
+Claude.app and desktop on other operating systems remain closed. CLI qualification rows
 remain empty. Alias commands are not shipped.
 Existing v1/v2 registries remain readable without migration; mutations refuse
 `recovery_required`. Explicit migration, folder deletion and recovery are pending

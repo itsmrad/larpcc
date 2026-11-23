@@ -5,6 +5,9 @@ use crate::{
 };
 use std::path::{Path, PathBuf};
 
+const SIGNATURE_CACHE_VERSION: u8 = 1;
+const SIGNATURE_CDHASH_LENGTH: std::ops::RangeInclusive<usize> = 20..=32;
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SignatureCache {
@@ -12,6 +15,12 @@ pub(crate) struct SignatureCache {
     executable: [i64; 7],
     info: [i64; 7],
     cdhash: Vec<u8>,
+}
+impl SignatureCache {
+    pub(crate) fn is_valid(&self) -> bool {
+        self.version == SIGNATURE_CACHE_VERSION
+            && SIGNATURE_CDHASH_LENGTH.contains(&self.cdhash.len())
+    }
 }
 #[cfg(any(target_os = "macos", test))]
 fn signature_check_needed(
@@ -339,8 +348,8 @@ pub(crate) fn preflight() -> Result<(), Error> {
         Err(Error::QualificationPending)
     }
 }
-// Reopen only after the ChatGPT ~/.codex attribution re-test is resolved.
-const CHATGPT_DISPATCH_QUALIFIED: bool = false;
+// D34 cleared the ChatGPT.app attribution re-test for local dispatch.
+const CHATGPT_DISPATCH_QUALIFIED: bool = true;
 
 pub(crate) fn open_preflight() -> Result<(), Error> {
     preflight()?;
@@ -418,7 +427,7 @@ mod qualification_tests {
     #[test]
     fn signature_cache_requires_exact_key_and_bind_always_checks() {
         let key = super::SignatureCache {
-            version: 1,
+            version: super::SIGNATURE_CACHE_VERSION,
             executable: [1; 7],
             info: [2; 7],
             cdhash: vec![3; 20],
@@ -439,11 +448,8 @@ mod qualification_tests {
         assert!(super::signature_check_needed(false, Some(&key), &changed));
     }
     #[test]
-    fn chatgpt_dispatch_stays_closed_pending_attribution() {
-        assert!(!std::hint::black_box(super::CHATGPT_DISPATCH_QUALIFIED));
-        assert!(matches!(
-            super::open_preflight(),
-            Err(crate::registry::Error::QualificationPending)
-        ));
+    fn chatgpt_dispatch_preflight_allows_macos_only() {
+        assert!(std::hint::black_box(super::CHATGPT_DISPATCH_QUALIFIED));
+        assert_eq!(super::open_preflight().is_ok(), cfg!(target_os = "macos"));
     }
 }
