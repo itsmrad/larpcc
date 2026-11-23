@@ -21,6 +21,8 @@ server definitions and explicit profile-ID switch matrix under registry lock.
 Default sync_all=false, new definitions disabled. Turning on explicitly enables
 all current definitions on all active CLI profiles and makes future definitions
 and future profiles enabled; off preserves current switches but stops inheritance.
+Stage 13 catalog apply follows the destination's `sync_all` value for a new
+entry. An identical existing entry keeps its switches.
 Per-profile switches always may override; --all is one bounded transaction.
 Removal deletes switches and renders transactionally. Unsupported surface is
 refused, never silently mapped. List/matrix JSON exposes reference names only,

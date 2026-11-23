@@ -80,6 +80,31 @@ returns local launched/focused outcomes. No exact Rust signature frozen here.
 MAC waits merged v3 seed for CLI integration; SwiftUI scaffolding is independent.
 SwiftUI shells out to stable JSON; no library extraction or Tauri.
 
+## Remote
+
+Stage 13 follows the local CLI and GUI contracts. [Remote hosts over SSH](docs/stages/13-remote-hosts.md)
+freezes user-installed remote Larp, machine-scoped metadata in the app, and
+explicit MCP/skills copy and sync. D20 allows user-configured SSH aliases
+and strictly parsed direct addresses. D21 permits validated skill packages
+and MCP definitions with secret reference names to cross SSH. Larp never
+transfers its binary. D22 limits the remote OS to Linux and macOS. The menu bar may list profiles from data
+already loaded. Remote native run remains closed pending qualification.
+
+- Use LarpCC only with one person's own machines and accounts. Include this
+  notice in shipped documentation when the feature is delivered.
+- Each machine signs in through its own official clients. Never copy login
+  state, credential files, tokens, keychain items or SSH authentication
+  material across machines.
+- Contact hosts only when the user selects a machine or explicitly refreshes,
+  checks, edits, copies or syncs. App launch, restored selection, window or
+  menu-bar open, and wake never contact hosts. No background polling, schedules,
+  unattended runs or automatic account switching.
+- The user-invoked system SSH child is the only network transport used by
+  Larp for remote management. Remote Larp follows the same safety rules.
+  Stage 11 usage is LOCAL-only for remote profiles, even when a host permits
+  LIVE for local callers. A routed request never reads a usage token or
+  contacts a provider endpoint.
+
 ## Ordered slices and gates
 
 | Slice | Contract and order | Deliverable / failure boundary |
@@ -92,6 +117,7 @@ SwiftUI shells out to stable JSON; no library extraction or Tauri.
 | 08 | [JSON/doctor/injection](docs/stages/08-json-launch-doctor.md), completes CLI | frozen schema:1, version-only detection, invented-row injection; native ROWS empty |
 | 09 | [desktop](docs/stages/09-desktop.md), after CLI | MAC local dispatch interface and separate native proof; uncertain binding/focus/qualification refuses |
 | 10 | [native GUI](docs/stages/10-native-gui.md), after CLI/desktop | SwiftUI consumes CLI JSON, explicit toggles; stale/unknown schema fails safely |
+| 13 | [remote hosts](docs/stages/13-remote-hosts.md), after local CLI/GUI | SSH management and explicit catalog copy/sync; remote usage LOCAL only |
 
 Stages 05–07 can be independently implemented after the exact seed if lead
 allocates disjoint files; shared changes serialize through CORE. Contracts freeze
@@ -108,8 +134,9 @@ LARPCC_HOME and names claude-work/codex-45. Never test existing ~/.claude*,
 is local metadata; human native status is still gated pass-through. JSON never
 mixes native output with envelopes. Doctor --detect-versions permits only bounded
 version-specific output in isolated fresh homes, separately from auth qualification.
-[Threat review](docs/contracts/threats.md) covers DELETE and MCP SECRETS; import is
-OUT OF SCOPE. Native desktop/account rows remain empty until concrete reviewed
+[Threat review](docs/contracts/threats.md) covers deletion, MCP secrets and
+remote SSH management. Import remains out of scope. Native desktop/account
+rows remain empty until concrete reviewed
 qualification, regardless of successful engineering/UI checks. Packaging/release,
 signing/distribution and credentials/spending require later scoped gates; old
 stage-5 release goals are retained as future requirements, not this PR's completion.
