@@ -67,15 +67,20 @@ and the status item at once. Tahoe needs Liquid Glass, so on macOS 14 and 15
 it reads “Tahoe — Requires macOS 26” and can’t be chosen; a stored Tahoe falls
 back to Automatic there.
 
-- **Tahoe** is the macOS 26 design: the floating glass sidebar, glass cards in
-  the panel (8 pt corners, 8 pt inside the 16 pt panel corners), a quiet
-  neutral highlight and the system’s grouped forms.
+- **Tahoe** is the macOS 26 design: the floating glass sidebar and the
+  system’s grouped forms (12 pt sections, no border).
 - **Sequoia** has an edge-to-edge sidebar on the sidebar material with a
-  hairline and a search field at its top, grouped sections with 10 pt corners
-  and hairline borders on a light grey page, and a panel on the classic menu
-  material with flat rows split by hairlines and accent-highlighted menu items.
-- **Sonoma** is like Sequoia with denser sidebar rows, 8 pt sections and
-  widget-like panel tiles (10 pt corners, hairline, soft shadow).
+  hairline and a search field at its top, and grouped sections with 10 pt
+  corners and hairline borders on a light grey page.
+- **Sonoma** is like Sequoia with denser sidebar rows and 8 pt sections.
+
+The menu bar panel follows the theme’s Settings window so the two match. Its
+background is the translucent material that shows the wallpaper in that
+Settings window (the page material in Tahoe, the sidebar material in Sequoia
+and Sonoma). Its cards are drawn with the same section box as that theme’s
+forms (`sectionBox`: radius, fill, hairline), descriptions use the form’s
+size, and the footer items use that release’s menu-item height and highlight
+radius.
 
 macOS draws the window frame, title bar and toolbar controls, traffic lights,
 standard controls such as switches and pop-ups, and the menu bar itself. Those
@@ -83,13 +88,11 @@ follow the running macOS, not the theme. On macOS 14 and 15 the system already
 draws grouped forms in that release’s style, so LarpCC draws its own sections
 only when an earlier look runs on macOS 26. Each theme keeps Reduce
 Transparency (materials and glass turn opaque) and Increase Contrast (firm
-borders on cards and the selection). In dark mode the classic panels darken
-the menu material, a nearly-out percentage uses a lighter red (a deeper red in
-light mode), and a selected
-card is marked by its outline alone, so text stays at 4.5:1 or better; Tahoe
-keeps the system red and its tinted selection, exactly as before themes. Tahoe
-leaves the sidebar density to the system setting; Sequoia and Sonoma set their
-own.
+borders on cards and the selection). A nearly-out percentage uses a deeper
+red in light mode and a lighter one in dark mode (lighter still on the
+wallpaper-tinted classic panels), and a selected card is outlined, so text
+stays at 4.5:1 or better. Tahoe leaves the sidebar density to the system
+setting; Sequoia and Sonoma set their own.
 
 For screenshots, `--theme=tahoe|sequoia|sonoma` overrides the setting for one
 launch, like `--appearance`. Settings, the panel and the status item all read
@@ -127,10 +130,15 @@ date — refresh” and the pace line does too. The panel shows only its own
 feedback (a failed desktop launch reads “Couldn’t open Claude.app.”) and the
 usage error. Other notices stay in the Settings window.
 
-On macOS 26 the cards are Liquid Glass. They sit 8 pt inside the panel with
-8 pt corners, concentric with the 16 pt panel corners. Earlier macOS versions
-and Reduce Transparency use an opaque card with a hairline edge. Increase
-Contrast adds a firm border. The panel is 360 pt wide and fits its content up
+The panel is drawn like the Settings window, so the two read as one app. Its
+background is the same translucent window material as the Settings page (the
+wallpaper tints it; Reduce Transparency makes it opaque). Each card is drawn
+like a Settings form section: a faint fill with 12 pt corners, with its rows
+(name and freshness, the meters, the reset credits) split by inset
+separators. Provider names are bold section titles, rows use the Settings
+fonts, and the footer items are plain menu items with the accent highlight.
+A selected card gets an outline, never a tint. Increase Contrast adds a firm
+border. The panel is 360 pt wide and fits its content up
 to 80% of the visible height of its own screen, then the cards scroll. The
 header, notices and footer are measured, and even the first layout is held to
 that height. The window resizes as cards expand.
@@ -139,8 +147,7 @@ Use ↑/↓ to move between cards, card actions and footer rows. Return opens
 the highlighted card’s profile in Settings or activates the highlighted action.
 VoiceOver offers “Show in Settings” directly on each card. Mouse and keyboard
 share one selection. It stays when the pointer leaves a row, so Return still
-acts on it, and it clears when its row goes away. The selection draws above
-the card fill, so it shows on opaque cards too. Esc closes the panel, and the
+acts on it, and it clears when its row goes away. Esc closes the panel, and the
 next click on the item opens it again.
 ⌘R refreshes, even with the Settings window open; ⌘, opens Settings; and ⌘Q
 quits. Nothing is highlighted or expanded when the panel opens.
@@ -166,8 +173,9 @@ bar, and `--menubar-panel-accessibility` renders with Increase Contrast and
 Reduce Transparency. `--menubar-screen-height=<pt>` stands in for a short
 display (in the snapshot and in live debug runs), and `--menubar-notice=<text>`
 adds a notice, so overflow can be checked offscreen: the footer always stays
-whole, the header comes next, and the cards get what is left. Snapshots draw
-opaque cards because glass needs a live window. Release builds exclude the snapshot hook. Capture the live panel there
+whole, the header comes next, and the cards get what is left. Snapshots cannot
+draw the window material, so they use the Settings page colour sampled on
+macOS 26. Release builds exclude the snapshot hook. Capture the live panel there
 with `screencapture -x -o -l <windowID>`. Link debug builds the way
 `scripts/bundle.sh` does (`-Xlinker -platform_version …`); otherwise macOS
 draws the app in its compatibility style with small window corners.

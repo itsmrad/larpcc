@@ -18,8 +18,7 @@ struct MenuBarLabel: View {
         let profiles = store.snapshot?.profiles ?? []
         let rings = Self.rings(store, codexProfileID: codexProfileID, claudeProfileID: claudeProfileID)
         Group {
-            if mode != MenuBarMode.icon.rawValue, !rings.isEmpty,
-               let image = Self.templateImage(rings, weight: theme.tokens.statusWeight) {
+            if mode != MenuBarMode.icon.rawValue, !rings.isEmpty, let image = Self.templateImage(rings, weight: theme.tokens.statusWeight) {
                 Image(nsImage: image)
             } else {
                 Image(systemName: MenuBarSummary.symbolName(leftPercent:
@@ -95,6 +94,14 @@ private struct StatusRing: View {
 
 // MARK: - Panel
 
+/// The panel follows the theme's Settings window: profile cards are drawn like its grouped
+/// form sections (`sectionBox`), and the footer like menu items.
+private enum PanelMetrics {
+    static let inset: CGFloat = 8
+    /// Menu items sit 5 pt inside the panel.
+    static let menuInset: CGFloat = 5
+}
+
 struct MenuBarPanel: View {
     @ObservedObject var store: AppStore
     /// Offscreen render for the debug snapshot hook: no scrolling, no focus.
@@ -104,7 +111,6 @@ struct MenuBarPanel: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
     @AppStorage(UsagePreferences.consentKey) private var consented = false
     @FocusState private var hasKeyboardFocus: Bool
@@ -148,7 +154,6 @@ struct MenuBarPanel: View {
         return items + [.settings, .quit]
     }
     /// Glass needs a live window; the offscreen snapshot and Reduce Transparency use opaque cards.
-    private var glass: Bool { !isSnapshot && !reduceTransparency }
     private var tokens: ThemeTokens { theme.tokens }
     private var highlighted: Item? {
         let item = isSnapshot ? snapshotSelectedID.map(Item.profile) : selection
@@ -164,16 +169,9 @@ struct MenuBarPanel: View {
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { headerHeight = $0 }
             .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
             .clipped()
-            list.padding(.horizontal, tokens.cardInset)
-            VStack(spacing: 0) {
-                // Classic menus: the footer items follow a separator instead of sitting in a card.
-                if !tokens.footerInCard { Divider().padding(.horizontal, 7).padding(.vertical, 5) }
-                footer
-            }
-            .padding(.horizontal, tokens.cardInset)
-            .padding(.top, tokens.footerInCard ? tokens.cardInset : 0)
-            .padding(.bottom, tokens.cardInset)
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
+            list.padding(.horizontal, PanelMetrics.inset)
+            footer
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
         }
         .frame(width: 360)
         // The menu bar window keeps the size of its first layout, so it is resized
@@ -181,7 +179,15 @@ struct MenuBarPanel: View {
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { panelHeight = $0 }
         .frame(maxHeight: .infinity, alignment: .top)
-        .modifier(PanelBackground(classic: tokens.panelMaterial, isSnapshot: isSnapshot))
+        .background {
+            // The Settings page's own translucent material, so the wallpaper shows through the
+            // panel the same way (opaque with Reduce Transparency). Snapshots use a sampled colour.
+            if isSnapshot {
+                PanelSnapshotBackground(theme: theme)
+            } else {
+                MenuBarMaterial(material: tokens.panelMaterial).accessibilityHidden(true)
+            }
+        }
         .background {
             if !isSnapshot {
                 // PanelStack already holds the panel to the screen limit, except for the footer's
@@ -319,7 +325,7 @@ struct MenuBarPanel: View {
                 ScrollView { content }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(idealHeight: listHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: tokens.cardRadius, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: tokens.sectionRadius, style: .continuous))
                     .onChange(of: selection) { _, item in
                         if let item { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(item) } }
                     }
@@ -362,28 +368,25 @@ struct MenuBarPanel: View {
     /// One card per profile, grouped under provider labels.
     private var profileList: some View {
         TimelineView(.everyMinute) { context in
-            VStack(alignment: .leading, spacing: tokens.cardSpacing) {
+            VStack(alignment: .leading, spacing: PanelMetrics.inset) {
                 if groups.isEmpty {
                     Text(emptyMessage)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(tokens.cardPadding)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .panelCard(highlighted: false, glass: glass)
+                        .panelCard(highlighted: false)
                 }
                 ForEach(groups, id: \.provider) { group in
+                    // Section titles like the Settings form's ("System", "Usage").
                     Text(group.provider.title)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, tokens.cardPadding)
-                        .padding(.top, tokens.card == .flat ? 6 : 2)
-                        .padding(.bottom, tokens.card == .flat ? 0 : -2)
+                        .font(.headline)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 6)
+                        .padding(.bottom, -2)
                         .accessibilityAddTraits(.isHeader)
-                    ForEach(Array(group.profiles.enumerated()), id: \.element.id) { index, profile in
-                        // Flat cards are split by hairlines, like menu sections.
-                        if tokens.card == .flat, index > 0 {
-                            Divider().padding(.horizontal, tokens.cardPadding)
-                        }
+                    ForEach(group.profiles) { profile in
                         profileCard(profile, now: context.date)
                     }
                 }
@@ -424,7 +427,7 @@ struct MenuBarPanel: View {
                 }
             }
         }
-        .panelCard(highlighted: highlighted == item, glass: glass)
+        .panelCard(highlighted: highlighted == item)
     }
 
     private func detailButton(_ item: Item, title: String, enabled: Bool) -> some View {
@@ -447,8 +450,10 @@ struct MenuBarPanel: View {
 
     // MARK: Footer
 
+    /// Plain menu items after a separator, as in any menu.
     private var footer: some View {
         VStack(spacing: 0) {
+            Divider().padding(.horizontal, 10).padding(.top, PanelMetrics.inset).padding(.bottom, 5)
             menuRow(.refresh, title: store.usageLoading ? "Updating Usage…" : "Refresh", shortcut: "⌘R",
                     enabled: canRefresh)
             menuRow(.settings, title: "LarpCC Settings…", shortcut: "⌘,")
@@ -456,32 +461,29 @@ struct MenuBarPanel: View {
             menuRow(.quit, title: "Quit LarpCC", shortcut: "⌘Q")
                 .keyboardShortcut("q", modifiers: .command)
         }
-        .padding(tokens.footerInCard ? 4 : 0)
-        .modifier(FooterCard(inCard: tokens.footerInCard, glass: glass))
+        .padding([.horizontal, .bottom], PanelMetrics.menuInset)
     }
 
     private func menuRow(_ item: Item, title: String, shortcut: String, enabled: Bool = true) -> some View {
+        // The system menu highlight: the accent colour with light text.
         let selected = highlighted == item
-        // Classic menus highlight with the accent colour; Tahoe with a quiet fill.
-        let accent = tokens.accentMenuHighlight && selected
+        let text = Color(nsColor: .alternateSelectedControlTextColor)
         return Button { activate(item) } label: {
             HStack {
                 Text(title)
                 Spacer()
                 Text(shortcut)
-                    .foregroundStyle(accent ? AnyShapeStyle(Color(nsColor: .alternateSelectedControlTextColor))
-                                            : AnyShapeStyle(.secondary))
+                    .foregroundStyle(selected ? AnyShapeStyle(text) : AnyShapeStyle(.secondary))
                     .accessibilityHidden(true)
             }
             .font(.system(size: 13))
-            .foregroundStyle(accent ? Color(nsColor: .alternateSelectedControlTextColor) : .primary)
-            .padding(.horizontal, tokens.footerInCard ? 8 : 9)
-            .frame(height: tokens.footerInCard ? 26 : 24)
+            .foregroundStyle(selected ? text : .primary)
+            .padding(.horizontal, 9)
+            .frame(height: tokens.menuRowHeight)
             .opacity(enabled ? 1 : 0.45)
             .background {
                 RoundedRectangle(cornerRadius: tokens.menuRowRadius, style: .continuous)
-                    .fill(accent ? Color(nsColor: .selectedContentBackgroundColor)
-                                 : Color.primary.opacity(selected ? 0.08 : 0))
+                    .fill(selected ? Color(nsColor: .selectedContentBackgroundColor) : .clear)
             }
             .contentShape(Rectangle())
         }
@@ -596,93 +598,61 @@ private struct MenuBarWindowSizer: NSViewRepresentable {
 // MARK: - Cards
 
 private extension View {
-    /// A profile card in the theme's style. Tahoe: a floating Liquid Glass card, concentric with
-    /// the panel (opaque with a hairline without glass). Sequoia: a flat row. Sonoma: a widget tile.
-    func panelCard(highlighted: Bool, glass: Bool) -> some View {
-        modifier(PanelCard(highlighted: highlighted, glass: glass))
+    /// A profile card drawn like the theme's Settings form section (`sectionBox`).
+    /// The selection is an outline, as Settings groups never tint.
+    func panelCard(highlighted: Bool) -> some View {
+        modifier(PanelCard(highlighted: highlighted))
     }
 }
 
 private struct PanelCard: ViewModifier {
     let highlighted: Bool
-    let glass: Bool
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.theme) private var theme
 
     func body(content: Content) -> some View {
-        let tokens = theme.tokens
-        let shape = RoundedRectangle(cornerRadius: tokens.cardRadius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: theme.tokens.sectionRadius, style: .continuous)
         let strong = contrast == .increased
-        let boxed = tokens.card != .flat
-        // Tahoe tints a selected card; the classic cards mark it with the outline alone, so text
-        // on the darker classic backing keeps its contrast.
-        let classic = tokens.card != .glass
-        let card = content
-            .background {
-                ZStack {
-                    switch tokens.card {
-                    case .glass: shape.fill(cardLift)
-                    case .widget: shape.fill(widgetFill).shadow(color: .black.opacity(0.12), radius: 2, y: 1)
-                    case .flat: EmptyView()
-                    }
-                    // The selection sits above the fill, so it also shows on opaque cards.
-                    if highlighted && !classic { shape.fill(Color.primary.opacity(0.08)) }
-                }
-            }
+        content
+            .sectionBox(theme.tokens)
             .overlay {
                 if highlighted {
-                    shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : classic ? 0.45 : 0.3),
-                                       lineWidth: strong ? 2 : 1)
-                } else if strong && boxed {
+                    shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : 0.35), lineWidth: strong ? 2 : 1)
+                } else if strong {
                     shape.strokeBorder(Color.primary.opacity(0.5), lineWidth: 1)
                 }
             }
-        if #available(macOS 26, *), glass, tokens.card == .glass {
-            card.glassEffect(.regular, in: shape)
-        } else {
-            card.overlay(shape.strokeBorder(Color.primary.opacity(boxed ? 0.1 : 0), lineWidth: 0.5))
-        }
     }
 }
 
-/// Tahoe: the opaque panel background, applied exactly as before themes existed. Classic: the
-/// menu material darkened in dark mode (a colour sampled from it in offscreen snapshots).
-private struct PanelBackground: ViewModifier {
-    let classic: Bool
-    let isSnapshot: Bool
+/// Rows inside a card, split by separators inset like the Settings form's.
+private struct CardRow<Content: View>: View {
+    @ViewBuilder let content: () -> Content
 
-    func body(content: Content) -> some View {
-        if !classic {
-            content.background(panelBackground)
-        } else if isSnapshot {
-            content.background(menuMaterialStandIn.overlay(classicBacking))
-        } else {
-            content.background(MenuBarMaterial().overlay(classicBacking).accessibilityHidden(true))
-        }
+    var body: some View {
+        content()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// Tahoe keeps its footer items in a card of their own; classic menus list them plainly.
-private struct FooterCard: ViewModifier {
-    let inCard: Bool
-    let glass: Bool
-
-    func body(content: Content) -> some View {
-        if inCard { content.panelCard(highlighted: false, glass: glass) } else { content }
-    }
+private struct CardSeparator: View {
+    var body: some View { Divider().padding(.horizontal, 10) }
 }
 
-/// The classic menu material behind the Sequoia and Sonoma panels.
 private struct MenuBarMaterial: NSViewRepresentable {
+    let material: NSVisualEffectView.Material
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = .menu
+        view.material = material
         view.blendingMode = .behindWindow
         view.state = .active
         return view
     }
 
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) { nsView.material = material }
 }
 
 private func isDark(_ appearance: NSAppearance) -> Bool {
@@ -691,39 +661,23 @@ private func isDark(_ appearance: NSAppearance) -> Bool {
     return match == .darkAqua || match == .accessibilityHighContrastDarkAqua
 }
 
-/// Behind the cards: the dark window background, or a soft grey in light mode
-/// (the light window background is nearly white and would swallow the cards).
-private let panelBackground = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? .windowBackgroundColor : NSColor(white: 0.925, alpha: 1)
-})
+/// Offscreen snapshots cannot draw the material; they use its colour sampled over a desktop
+/// on macOS 26: the Settings page (Tahoe) or the sidebar (Sequoia, Sonoma).
+private struct PanelSnapshotBackground: View {
+    let theme: Theme
 
-/// Cards sit a step lighter than the panel in both appearances, like the Settings sidebar.
-private let cardLift = Color(nsColor: NSColor(name: nil) { appearance in
-    NSColor.white.withAlphaComponent(isDark(appearance) ? 0.08 : 0.8)
-})
-
-/// The menu material as sampled on macOS 26 (light and dark), for offscreen snapshots only.
-private let menuMaterialStandIn = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor(srgbRed: 0.353, green: 0.365, blue: 0.369, alpha: 1)
-                       : NSColor(srgbRed: 0.886, green: 0.89, blue: 0.898, alpha: 1)
-})
-
-/// Darkens the classic menu material in dark mode so secondary text keeps 4.5:1 or better.
-private let classicBacking = Color(nsColor: NSColor(name: nil) { appearance in
-    NSColor.black.withAlphaComponent(isDark(appearance) ? 0.5 : 0)
-})
-
-/// Classic themes only: a deeper red in light mode and a lighter one in dark mode, so a
-/// nearly-out percentage reads at 4.5:1 or better on the classic menu backgrounds.
-private let criticalRed = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1)
-                       : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
-})
-
-/// Sonoma widget tiles on the menu material.
-private let widgetFill = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor.white.withAlphaComponent(0.05) : NSColor.white.withAlphaComponent(0.6)
-})
+    var body: some View {
+        let tahoe = theme == .tahoe
+        Color(nsColor: NSColor(name: nil) { appearance in
+            switch (isDark(appearance), tahoe) {
+            case (true, true): return NSColor(srgbRed: 0.106, green: 0.129, blue: 0.137, alpha: 1)
+            case (false, true): return .white
+            case (true, false): return NSColor(srgbRed: 0.157, green: 0.2, blue: 0.204, alpha: 1)
+            case (false, false): return NSColor(srgbRed: 0.882, green: 0.906, blue: 0.91, alpha: 1)
+            }
+        })
+    }
+}
 
 // MARK: - Profile card
 
@@ -739,36 +693,45 @@ private struct MenuBarProfileSummary: View {
     private var kinds: [UsageWindowKind] { UsageWindowKind.allCases.filter { $0.window(in: report) != nil } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                ProfileRing(provider: profile.provider, session: report?.fiveHour)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(profile.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+        // Rows like a Settings form section: title and description, then the meters, then credits.
+        VStack(alignment: .leading, spacing: 0) {
+            CardRow {
+                HStack(spacing: 10) {
+                    ProfileRing(provider: profile.provider, session: report?.fiveHour)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile.name).font(.system(size: 13)).lineLimit(1)
+                        Text(subtitle).font(.system(size: theme.tokens.descriptionSize)).foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                        .accessibilityHidden(true)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(expanded ? 180 : 0))
-                    .accessibilityHidden(true)
             }
             if !kinds.isEmpty {
-                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 5) {
-                    ForEach(kinds, id: \.self) { kind in
-                        if let window = kind.window(in: report) {
-                            meterRow(kind, window)
+                CardSeparator()
+                CardRow {
+                    Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
+                        ForEach(kinds, id: \.self) { kind in
+                            if let window = kind.window(in: report) {
+                                meterRow(kind, window)
+                            }
                         }
                     }
+                    .font(.system(size: 11))
                 }
-                .font(.system(size: 11))
             }
+            CardSeparator()
             // Reset credits always show, whatever else the card has.
-            Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            CardRow {
+                Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
         }
-        .padding(theme.tokens.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
@@ -831,20 +794,21 @@ private struct MenuBarProfileDetail<Actions: View>: View {
     let report: UsageReport?
     let now: Date
     @ViewBuilder let actions: () -> Actions
-    @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
+        VStack(alignment: .leading, spacing: 0) {
             if !paces.isEmpty {
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
-                    ForEach(paces, id: \.kind) { line("\($0.kind.title) pace", $0.text) }
+                CardSeparator()
+                CardRow {
+                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
+                        ForEach(paces, id: \.kind) { line("\($0.kind.title) pace", $0.text) }
+                    }
+                    .font(.system(size: 11))
                 }
-                .font(.system(size: 11))
             }
-            HStack(spacing: 6) { actions() }
+            CardSeparator()
+            CardRow { HStack(spacing: 6) { actions() } }
         }
-        .padding([.horizontal, .bottom], theme.tokens.cardPadding)
     }
 
     /// Pace as of the sample's capture time.
@@ -869,7 +833,6 @@ private struct MenuBarProfileDetail<Actions: View>: View {
 private struct ProfileRing: View {
     let provider: Provider
     let session: UsageWindow?
-    @Environment(\.theme) private var theme
 
     var body: some View {
         let left = session?.leftPercent ?? 0
@@ -880,7 +843,7 @@ private struct ProfileRing: View {
                 Circle()
                     .inset(by: 1)
                     .trim(from: 0, to: left / 100)
-                    .stroke(UsageLevel(leftPercent: left).tint(in: theme) ?? Color.primary.opacity(0.7),
+                    .stroke(UsageLevel(leftPercent: left).tint ?? Color.primary.opacity(0.7),
                             style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
             }
@@ -904,14 +867,13 @@ private struct ResetLabelStyle: LabelStyle {
 private struct UsageMeter: View {
     let leftPercent: Double
     let level: UsageLevel
-    @Environment(\.theme) private var theme
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.12))
                 Capsule()
-                    .fill(level.tint(in: theme) ?? Color.primary.opacity(0.7))
+                    .fill(level.tint ?? Color.primary.opacity(0.7))
                     .frame(width: max(leftPercent > 0 ? 4 : 0, proxy.size.width * leftPercent / 100))
             }
         }
@@ -923,18 +885,19 @@ private struct UsageMeter: View {
 
 private extension UsageLevel {
     /// Calm by default; colour only when a limit is running low. For the meter and ring.
-    /// Tahoe uses the menu bar's own reds; the classic themes one red tuned to their backing.
-    func tint(in theme: Theme) -> Color? {
+    var tint: Color? {
         switch self {
         case .normal: return nil
         case .low: return .orange
-        case .critical: return theme == .tahoe ? criticalGraphicRed : criticalRed
+        case .critical: return criticalGraphicRed
         }
     }
 
-    /// For the percentage text, which needs more contrast than the meter and ring.
+    /// For the percentage text, which needs more contrast than the meter and ring. The classic
+    /// themes sit on the wallpaper-tinted sidebar vibrancy, so their dark red is lighter still.
     func textTint(in theme: Theme) -> Color? {
-        self == .critical && theme == .tahoe ? criticalTextRed : tint(in: theme)
+        guard self == .critical else { return tint }
+        return theme == .tahoe ? criticalTextRed : classicCriticalTextRed
     }
 }
 
@@ -942,7 +905,12 @@ private extension UsageLevel {
 /// cards, so text uses a deeper red (4.5:1 or better) and the meter and ring a slightly
 /// deeper one (3:1 or better, also on a selected card).
 private let criticalTextRed = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
+    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1)
+                       : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
+})
+private let classicCriticalTextRed = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.59, blue: 0.57, alpha: 1)
+                       : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
 })
 private let criticalGraphicRed = Color(nsColor: NSColor(name: nil) { appearance in
     isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.843, green: 0, blue: 0.082, alpha: 1)

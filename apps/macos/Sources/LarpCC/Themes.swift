@@ -4,33 +4,23 @@ import LarpModel
 
 // MARK: - Tokens
 
-/// How profile cards are drawn in the menu bar panel.
-enum PanelCardStyle {
-    /// Liquid Glass cards floating on the panel (Tahoe).
-    case glass
-    /// No box: rows on the menu material, split by hairlines (Sequoia).
-    case flat
-    /// Filled rounded tiles with a soft shadow (Sonoma).
-    case widget
-}
-
 /// The few values that differ between themes. Views read these instead of branching on the theme.
+/// The menu bar panel uses the same values as that theme's Settings window, so the two match.
 struct ThemeTokens {
+    // Shared by the Settings forms and the panel cards
+    /// Grouped section corner radius, fill (primary at this opacity) and hairline border.
+    let sectionRadius: CGFloat
+    let sectionFill: Double
+    let sectionBorder: Bool
+    /// Row description size (secondary text under a row title).
+    let descriptionSize: CGFloat
+
     // Menu bar panel
-    /// Opaque panel with glass cards (Tahoe), or the classic translucent menu material.
-    let panelMaterial: Bool
-    let card: PanelCardStyle
-    /// Cards' inset from the panel edge and their corner radius (concentric with the
-    /// 16 pt panel window on macOS 26: radius + inset = 16 for the card styles that box).
-    let cardInset: CGFloat
-    let cardRadius: CGFloat
-    let cardPadding: CGFloat
-    let cardSpacing: CGFloat
-    /// Footer rows in their own card (Tahoe), or as plain menu items after a separator.
-    let footerInCard: Bool
-    /// Menu-item highlight: the accent colour (classic menus) or a neutral fill.
-    let accentMenuHighlight: Bool
+    /// The translucent material behind the panel: the Settings page's (Tahoe) or the
+    /// sidebar's (Sequoia, Sonoma), matching what shows the wallpaper in that theme's Settings.
+    let panelMaterial: NSVisualEffectView.Material
     let menuRowRadius: CGFloat
+    let menuRowHeight: CGFloat
     /// Status item percentage weight.
     let statusWeight: Font.Weight
 
@@ -41,28 +31,29 @@ struct ThemeTokens {
     let sidebarRowSize: SidebarRowSize?
     /// Page icon tile corner radius as a fraction of its size.
     let iconTileRadius: CGFloat
-    /// Grouped form sections drawn by LarpCC (radius), or nil for the system's own.
-    let formSectionRadius: CGFloat?
+    /// LarpCC draws the grouped form sections itself (earlier looks on macOS 26), or leaves
+    /// them to the system.
+    let drawsFormSections: Bool
 }
 
 extension Theme {
     var tokens: ThemeTokens {
         switch self {
         case .tahoe:
-            return ThemeTokens(panelMaterial: false, card: .glass, cardInset: 8, cardRadius: 8, cardPadding: 12,
-                               cardSpacing: 8, footerInCard: true, accentMenuHighlight: false, menuRowRadius: 4,
+            return ThemeTokens(sectionRadius: 12, sectionFill: 0.03, sectionBorder: false, descriptionSize: 11,
+                               panelMaterial: .windowBackground, menuRowRadius: 6, menuRowHeight: 24,
                                statusWeight: .medium, floatingSidebar: true, sidebarRowSize: nil,
-                               iconTileRadius: 0.26, formSectionRadius: nil)
+                               iconTileRadius: 0.26, drawsFormSections: false)
         case .sequoia:
-            return ThemeTokens(panelMaterial: true, card: .flat, cardInset: 5, cardRadius: 6, cardPadding: 10,
-                               cardSpacing: 0, footerInCard: false, accentMenuHighlight: true, menuRowRadius: 5,
+            return ThemeTokens(sectionRadius: 10, sectionFill: 0.035, sectionBorder: true, descriptionSize: 12,
+                               panelMaterial: .sidebar, menuRowRadius: 5, menuRowHeight: 22,
                                statusWeight: .regular, floatingSidebar: false, sidebarRowSize: .medium,
-                               iconTileRadius: 0.24, formSectionRadius: 10)
+                               iconTileRadius: 0.24, drawsFormSections: true)
         case .sonoma:
-            return ThemeTokens(panelMaterial: true, card: .widget, cardInset: 6, cardRadius: 10, cardPadding: 10,
-                               cardSpacing: 6, footerInCard: false, accentMenuHighlight: true, menuRowRadius: 4,
+            return ThemeTokens(sectionRadius: 8, sectionFill: 0.035, sectionBorder: true, descriptionSize: 12,
+                               panelMaterial: .sidebar, menuRowRadius: 4, menuRowHeight: 22,
                                statusWeight: .regular, floatingSidebar: false, sidebarRowSize: .small,
-                               iconTileRadius: 0.22, formSectionRadius: 8)
+                               iconTileRadius: 0.22, drawsFormSections: true)
         }
     }
 }
@@ -113,6 +104,20 @@ extension View {
 // MARK: - Forms
 
 extension View {
+    /// A grouped section box in the theme's style: shared by the Settings forms and the menu
+    /// bar panel's cards, so a profile card looks like a Settings group.
+    func sectionBox(_ tokens: ThemeTokens) -> some View {
+        let shape = RoundedRectangle(cornerRadius: tokens.sectionRadius, style: .continuous)
+        return background(shape.fill(Color.primary.opacity(tokens.sectionFill)))
+            .overlay {
+                if tokens.sectionBorder {
+                    shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                }
+            }
+    }
+}
+
+extension View {
     /// Grouped forms in the theme's style. macOS draws grouped forms in the look of the running
     /// release, so LarpCC only draws its own sections when an earlier look runs on macOS 26.
     func themedFormStyle() -> some View { modifier(ThemedFormStyle()) }
@@ -122,8 +127,8 @@ private struct ThemedFormStyle: ViewModifier {
     @Environment(\.theme) private var theme
 
     func body(content: Content) -> some View {
-        if #available(macOS 26, *), let radius = theme.tokens.formSectionRadius {
-            content.formStyle(ClassicFormStyle(radius: radius))
+        if #available(macOS 26, *), theme.tokens.drawsFormSections {
+            content.formStyle(ClassicFormStyle(tokens: theme.tokens))
         } else {
             content.formStyle(.grouped)
         }
@@ -134,10 +139,9 @@ private struct ThemedFormStyle: ViewModifier {
 /// hairline-bordered rounded box, and inset separators between rows.
 @available(macOS 15, *)
 private struct ClassicFormStyle: FormStyle {
-    let radius: CGFloat
+    let tokens: ThemeTokens
 
     func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 ForEach(sections: configuration.content) { section in
@@ -156,8 +160,7 @@ private struct ClassicFormStyle: FormStyle {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        .background(shape.fill(Color.primary.opacity(0.035)))
-                        .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+                        .sectionBox(tokens)
                         if !section.footer.isEmpty {
                             VStack(alignment: .leading, spacing: 4) { section.footer }
                                 .font(.callout)
