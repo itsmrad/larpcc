@@ -83,7 +83,10 @@ follow the running macOS, not the theme. On macOS 14 and 15 the system already
 draws grouped forms in that release’s style, so LarpCC draws its own sections
 only when an earlier look runs on macOS 26. Each theme keeps Reduce
 Transparency (materials and glass turn opaque) and Increase Contrast (firm
-borders on cards and the selection).
+borders on cards and the selection). In dark mode the classic panels darken
+the menu material and a nearly-out percentage uses a lighter red, so text
+stays at 4.5:1 or better. Tahoe leaves the sidebar density to the system
+setting; Sequoia and Sonoma set their own.
 
 For screenshots, `--theme=tahoe|sequoia|sonoma` overrides the setting for one
 launch, like `--appearance`.

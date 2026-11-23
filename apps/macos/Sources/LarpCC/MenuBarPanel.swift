@@ -175,9 +175,10 @@ struct MenuBarPanel: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background {
             if tokens.panelMaterial && !isSnapshot {
-                MenuBarMaterial().accessibilityHidden(true)
+                MenuBarMaterial().overlay(classicBacking).accessibilityHidden(true)
             } else {
-                tokens.panelMaterial ? Color(nsColor: .windowBackgroundColor) : panelBackground
+                // The offscreen snapshot cannot draw the menu material; it uses a colour sampled from it.
+                tokens.panelMaterial ? AnyView(menuMaterialStandIn.overlay(classicBacking)) : AnyView(panelBackground)
             }
         }
         .background {
@@ -663,9 +664,26 @@ private let cardLift = Color(nsColor: NSColor(name: nil) { appearance in
     NSColor.white.withAlphaComponent(isDark(appearance) ? 0.08 : 0.8)
 })
 
+/// The menu material as sampled on macOS 26 (light and dark), for offscreen snapshots only.
+private let menuMaterialStandIn = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? NSColor(srgbRed: 0.353, green: 0.365, blue: 0.369, alpha: 1)
+                       : NSColor(srgbRed: 0.886, green: 0.89, blue: 0.898, alpha: 1)
+})
+
+/// Darkens the classic menu material in dark mode so secondary text keeps 4.5:1 or better.
+private let classicBacking = Color(nsColor: NSColor(name: nil) { appearance in
+    NSColor.black.withAlphaComponent(isDark(appearance) ? 0.5 : 0)
+})
+
+/// The system red in light mode; a lighter red in dark mode, so a nearly-out percentage
+/// reads at 4.5:1 or better on dark cards.
+private let criticalRed = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1) : .systemRed
+})
+
 /// Sonoma widget tiles on the menu material.
 private let widgetFill = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor.white.withAlphaComponent(0.07) : NSColor.white.withAlphaComponent(0.6)
+    isDark(appearance) ? NSColor.white.withAlphaComponent(0.05) : NSColor.white.withAlphaComponent(0.6)
 })
 
 // MARK: - Profile card
@@ -868,7 +886,7 @@ private extension UsageLevel {
         switch self {
         case .normal: return nil
         case .low: return .orange
-        case .critical: return .red
+        case .critical: return criticalRed
         }
     }
 }

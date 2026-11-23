@@ -185,7 +185,7 @@ struct SettingsView: View {
             }
         }
         .listStyle(.sidebar)
-        .environment(\.sidebarRowSize, theme.tokens.sidebarRowSize)
+        .modifier(SidebarDensity(size: theme.tokens.sidebarRowSize))
         .modifier(SidebarSearch(text: $search, inSidebarSplit: theme.tokens.floatingSidebar))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 6) {
@@ -450,3 +450,12 @@ private struct SidebarWidthSpacer: ToolbarContent {
 private let classicPageBackground = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .windowBackgroundColor : NSColor(white: 0.925, alpha: 1)
 })
+
+/// Sets the sidebar density only when the theme asks for one.
+private struct SidebarDensity: ViewModifier {
+    let size: SidebarRowSize?
+
+    func body(content: Content) -> some View {
+        if let size { content.environment(\.sidebarRowSize, size) } else { content }
+    }
+}

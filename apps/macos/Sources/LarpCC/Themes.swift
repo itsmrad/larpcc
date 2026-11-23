@@ -37,7 +37,8 @@ struct ThemeTokens {
     // Settings window
     /// The floating, inset glass sidebar of macOS 26, or an edge-to-edge material sidebar.
     let floatingSidebar: Bool
-    let sidebarRowSize: SidebarRowSize
+    /// Sidebar density for the classic sidebar; nil leaves the user's system setting alone.
+    let sidebarRowSize: SidebarRowSize?
     /// Page icon tile corner radius as a fraction of its size.
     let iconTileRadius: CGFloat
     /// Grouped form sections drawn by LarpCC (radius), or nil for the system's own.
@@ -50,7 +51,7 @@ extension Theme {
         case .tahoe:
             return ThemeTokens(panelMaterial: false, card: .glass, cardInset: 8, cardRadius: 8, cardPadding: 12,
                                cardSpacing: 8, footerInCard: true, accentMenuHighlight: false, menuRowRadius: 4,
-                               statusWeight: .medium, floatingSidebar: true, sidebarRowSize: .medium,
+                               statusWeight: .medium, floatingSidebar: true, sidebarRowSize: nil,
                                iconTileRadius: 0.26, formSectionRadius: nil)
         case .sequoia:
             return ThemeTokens(panelMaterial: true, card: .flat, cardInset: 5, cardRadius: 6, cardPadding: 10,
@@ -208,9 +209,12 @@ private struct ClassicRowStyle: LabeledContentStyle {
 private struct ClassicToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            FormRowLabel(label: configuration.label)
+            FormRowLabel(label: configuration.label).accessibilityHidden(true)
             Spacer(minLength: 12)
-            Toggle("", isOn: configuration.$isOn).labelsHidden().toggleStyle(.switch)
+            // The real switch keeps the label for VoiceOver; the drawn label is for the eye only.
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .labelsHidden()
+                .toggleStyle(.switch)
         }
     }
 }
