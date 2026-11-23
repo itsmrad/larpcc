@@ -455,6 +455,7 @@ fn stage07_secrets_command_paths_refuse_credential_shapes_before_writes() {
         concat!("-----BEGIN ", "INVENTED KEY", "-----"),
         concat!("InventedSecretValue", "9xQ7"),
         concat!("AbCdEfGhIj", "KlMnOpQrSt", "=="),
+        concat!("AbCdEfGhIj12", "+", "KlMnOpQrSt34"),
         concat!("x,", "ghp_", "invented0123456789abcdef"),
         concat!("run ", "ghp_", "invented0123456789abcdef"),
         concat!("u@", "sk-ant-", "api03-invented"),

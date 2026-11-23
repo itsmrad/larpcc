@@ -40,11 +40,12 @@ field allowlist; initial --arg values are exactly `--stdio` or `--transport=stdi
 refuse until a reviewed adapter amendment. Commands are validated absolute local
 file paths, checked component by component on add, catalog load and journal
 replay. The [credential shape list](../contracts/threats.md) covers known API
-token prefixes, Bearer markers and JWTs at component or punctuation boundaries,
-including backslashes in Unix paths. Fixed-width AWS and Google key shapes
-are checked even inside a word. Mixed-case runs of 20 or more ASCII
-alphanumeric characters are refused when they contain a digit or end in
-base64 padding. Hyphens, underscores and dots separate runs, preserving
+token prefixes, Bearer markers and JWTs at the start of a component or after
+a character outside Unicode alphanumerics, including backslashes in Unix
+paths. Fixed-width AWS and Google key shapes are checked anywhere in any
+path component. The mixed-case rule considers runs of ASCII letters, digits,
+and `+`. It refuses runs of 20 or more characters with both letter cases and
+a digit or trailing base64 padding. Hyphens, underscores and dots separate runs, preserving
 package names, GUIDs and hash paths. On add, ambiguous values refuse
 `secret_literal` without echo. Invalid persisted definitions require recovery.
 Initial URL permits https origin and exactly `/mcp` or `/sse` path only, no

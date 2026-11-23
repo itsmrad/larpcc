@@ -36,14 +36,14 @@ journal replay. Case-insensitive markers are `sk-` (including `sk-ant-`), `sk_`,
 `ghp_`, `gho_`, `ghs_`, `ghu_`, `ghr_`, `github_pat_`, `glpat-`,
 `xoxa-`, `xoxb-`, `xoxp-`, `xoxr-`, `xoxs-`, `-----begin`, and the
 standalone word `Bearer`. These markers and JWTs are checked at the start
-of a component and after any non-alphanumeric character, including a
+of a component and after any character outside Unicode alphanumerics, including a
 backslash in a Unix filename. JWTs start with `eyJ` and have three
 dot-separated base64url segments of at least eight characters each.
-Fixed-width key shapes are also refused within a filename, including when
+Fixed-width key shapes are also refused within any path component, including when
 embedded in a word. These are uppercase `AKIA` or `ASIA` followed by 16
 uppercase letters or digits, and `AIza` followed by 35 base64url characters.
-The mixed-case check considers individual ASCII alphanumeric runs, split
-at characters such as hyphens, underscores and dots. It refuses a run of at
+The mixed-case check considers runs of ASCII letters, digits and `+`, split
+at all other characters, including hyphens, underscores and dots. It refuses a run of at
 least 20 characters that contains both letter cases and a digit. A mixed-case
 run of the same length followed by base64 padding (`=`) is also refused.
 Standard 8-4-4-4-12 hex GUIDs and lowercase hex and Nix base32 hashes can be used

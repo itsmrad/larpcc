@@ -353,7 +353,7 @@ fn credential_component(part: &str) -> bool {
     {
         return true;
     }
-    // Fixed-width keys can be embedded in a filename without a delimiter.
+    // Fixed-width keys can be embedded in a path component without a delimiter.
     let bytes = part.as_bytes();
     if bytes.windows(20).any(|key| {
         matches!(&key[..4], b"AKIA" | b"ASIA")
@@ -368,14 +368,14 @@ fn credential_component(part: &str) -> bool {
     }) {
         return true;
     }
-    part.split_inclusive(|c: char| !c.is_ascii_alphanumeric())
-        .any(|segment| {
-            let body = segment.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
-            body.len() >= 20
-                && body.bytes().any(|b| b.is_ascii_lowercase())
-                && body.bytes().any(|b| b.is_ascii_uppercase())
-                && (body.bytes().any(|b| b.is_ascii_digit()) || segment.ends_with('='))
-        })
+    let separator = |c: char| !(c.is_ascii_alphanumeric() || c == '+');
+    part.split_inclusive(separator).any(|segment| {
+        let body = segment.trim_end_matches(separator);
+        body.len() >= 20
+            && body.bytes().any(|b| b.is_ascii_lowercase())
+            && body.bytes().any(|b| b.is_ascii_uppercase())
+            && (body.bytes().any(|b| b.is_ascii_digit()) || segment.ends_with('='))
+    })
 }
 
 fn command_syntax(command: &str) -> Result<(), InputError> {
