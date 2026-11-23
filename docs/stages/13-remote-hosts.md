@@ -222,13 +222,18 @@ separate.
 |---|---:|---:|---:|---:|---:|
 | Read or compatibility probe | 5 s | 4 s | 2 s | 11 s | 28 s (17 s for probe-only `host check`) |
 | Mutation | 54 s | 4 s | 2 s | 60 s | 77 s |
-| Skills import or catalog export | 54 s | 4 s | 2 s | 60 s | 77 s per leg, 148 s for a two-remote-leg copy |
+| Skills import or catalog export | 54 s | 4 s | 2 s | 60 s | 87 s local → remote, 92 s remote → local, 148 s remote → remote |
 | Remote account status (`status --host`, Stage 14) | 10 s | 4 s | 2 s | 16 s | 33 s |
 
 The app-bridge deadline includes up to 2 s for local `ssh -V`, one
 compatibility probe per remote leg, up to 2 s for failure cleanup, and 2 s
 for bridge overhead and envelope encoding. A two-remote-leg copy allows
-for two probes and two transfers. Stop on first failure, with cleanup
+for two probes and two transfers. A local → remote copy adds 10 s to
+the 77 s single-leg allowance to read, validate and hash the local source
+before dispatch. A remote → local copy adds 15 s to stage and commit
+locally after export. The CLI refuses before dispatch if source preparation
+exceeds its budget. For a local destination it refuses before commit if
+staging exhausts the local allowance. Stop on first failure, with cleanup
 once. Cache the local version check by verified executable identity and
 invalidate it on replacement. Stage 14 ([PR #21](https://github.com/itsmrad/larpcc/pull/21))
 uses the same 10 s operation, 16 s child and 33 s app-bridge numbers for
@@ -317,6 +322,15 @@ entry. Stop changes on that target on conflict or unknown outcome. Continue
 independent targets and report each result, including unattempted entries.
 Cancel stops remaining dispatches and makes an interrupted mutation's
 outcome unknown. No cross-host rollback or background sync.
+
+For a local destination, the bridge deadline bounds the wait for the
+receipt. Once the destination commit starts, the CLI completes or rolls
+it back atomically under the existing journal rules, even if the app
+stops waiting. The bridge must not terminate a copy that may be committing
+locally. On timeout without a verified receipt, the app reports
+“Outcome unknown. Refresh.” On explicit refresh, read the current
+destination revision and entry state. Use that revision for any newly
+confirmed action, with no automatic retry.
 
 New entries have sharing off and follow destination-local Stage 06 skill
 defaults or Stage 07 MCP `sync_all`. Identical entries are no-ops that
@@ -470,7 +484,9 @@ executables and outside sentinels. Use temporary roots and clean all artifacts.
 | `stage13_transport` | Missing client, host-key refusal and BatchMode prompt refusal with no fallback, alias mode overrides configured forwardings and PTY, Windows PE/version admission rejects scripts, aliases, current-directory lookup and MSYS/Cygwin clients, banner and post-quantum warning on stderr rejected and redacted, caps on both streams, deadlines/cancel/reap, no raw output or secret sentinels in errors, unknown mutation outcome |
 | `stage13_protocol` | Missing/old/incompatible Larp, dash fixture with a non-executable absolute file and a directory both exit 44, unsupported OS including MSYS/Cygwin exit 45, escaped paths, reserved router error codes, malformed/framed/trailing/unknown schema and wrong command or exit, compatible version, receiver allowlist, closed native admission and remote LIVE refusal before effects |
 | `stage13_revision` | Same profile IDs/names on different machines, re-add race and stale target conflict before effects, one-shot mutation on disconnect, no fallback or retry |
-| `stage13_catalog` | Destination inheritance including MCP sync_all=true and skill future-profile defaults, isolated share revision/no-op and older writer invalidation, opt-in explicit sync, real skill bytes and MCP definition under explicit approval, reference names only, unavailable target command/reference and no credential values, same-name conflict and same-definition no-op, independent success amid partial failure |
+| `stage13_catalog` | Destination inheritance including MCP sync_all=true and skill future-profile defaults, isolated share revision/no-op and older writer invalidation, opt-in explicit sync, real skill bytes and MCP definition under explicit approval, same-name conflict and same-definition no-op, independent success amid partial failure |
+| `stage13_mcp_references` | A valid, supported env reference succeeds when the variable is unset on the destination. Prove no env-presence check or value read. Separate cases refuse an unavailable command and an unsupported reference kind. |
+| `stage13_copy_deadlines` | Slow local source preparation refuses before dispatch. Slow local destination staging refuses before commit. A bridge timeout during local commit preserves the transaction and requires explicit refresh by revision. |
 | `stage13_skill_transfer` | Frame round-trip through fixed script/readiness, no payload before READY, TTY refused, truncated/trailing stream, wrong digest, invalid/duplicate manifest fields, oversize, credential-shaped filename, missing root SKILL.md, non-ASCII path, case-fold collision, symlink entry and traversal all refuse before commit. Early refusal after a broken pipe retains the valid error. Crash cleanup preserves active stages and outside sentinels. |
 | App fixture suite | Decode new and old envelopes, add/remove/check states, revision/routing isolation, previewed copy and sync outcomes, no remote LIVE action, host-only SSH_AUTH_SOCK propagation, menu uses loaded data and does not poll, launch with N hosts and restore/wake/window/menu open spawn zero SSH processes |
 
