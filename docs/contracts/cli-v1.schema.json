@@ -473,6 +473,116 @@
       ],
       "additionalProperties": false
     },
+    "account_email": {
+      "type": "string",
+      "pattern": "^[!-?A-~]{1,64}@[!-?A-~]{1,253}$"
+    },
+    "account_plan": {
+      "type": "string",
+      "pattern": "^[!-~](?:[ -~]{0,62}[!-~])?$"
+    },
+    "account": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "signed_in"
+            },
+            "email": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/account_email"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "plan": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/account_plan"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "email",
+            "plan"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "signed_out",
+                "unknown",
+                "not_qualified",
+                "unavailable"
+              ]
+            },
+            "email": {
+              "type": "null"
+            },
+            "plan": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "state",
+            "email",
+            "plan"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "account_status": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/profile"
+        },
+        "provider_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._+-]{1,128}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "account": {
+          "$ref": "#/$defs/account"
+        },
+        "usage": {
+          "type": "null"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/diagnostic"
+          }
+        }
+      },
+      "required": [
+        "profile",
+        "provider_version",
+        "account",
+        "usage",
+        "diagnostics"
+      ],
+      "additionalProperties": false
+    },
     "error": {
       "type": "object",
       "properties": {
@@ -1049,6 +1159,35 @@
         },
         "data": {
           "$ref": "#/$defs/status"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "status.account"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "$ref": "#/$defs/account_status"
         }
       },
       "required": [
@@ -2401,6 +2540,7 @@
             "skills.list",
             "skills.matrix",
             "status",
+            "status.account",
             "doctor",
             "app.open",
             "help",
