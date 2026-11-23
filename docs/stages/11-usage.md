@@ -99,9 +99,11 @@ Per-profile LIVE failures (expired token, timeout, unknown shape) are reported
 as row reasons inside an `ok:true` envelope, exit 0. Only whole-command
 failures (`live_disabled`, `conflict`, registry errors) are error envelopes.
 
-The cli-v1 rule "no timestamps or nondeterministic keys" is amended for
-`usage` only: it carries `generated_at`, `captured_at`, `resets_at` and
-`runs_out_at`. `settings.usage` and all receipts stay timestamp-free.
+The cli-v1 rule "no timestamps or nondeterministic keys" is amended for usage
+rows only: standalone `usage` carries `generated_at` (exclusive to it) plus each
+row's `captured_at`, `resets_at` and `runs_out_at`, and `status.account.usage`
+carries the same row timestamps (`captured_at`, `resets_at`, `runs_out_at`) but
+no `generated_at`. `settings.usage` and all receipts stay timestamp-free.
 
 ### Account status (stage 14)
 

@@ -84,7 +84,8 @@ surface (`cli`,`desktop`), diagnostics by code then message. Matrix columns
 match profile name ordering; every row has exactly one boolean per column.
 Rows include disabled entries. No timestamps, PIDs or nondeterministic keys, except
 the stage 11 `usage` envelope's `generated_at`/`captured_at`/`resets_at`/`runs_out_at`
-and the same row fields inside `status.account.usage`.
+and the row fields `captured_at`/`resets_at`/`runs_out_at` inside `status.account.usage`
+(`generated_at` belongs only to standalone `usage`).
 Secret references sort by kind then name. Schema constraints are structural;
 unique names/IDs, valid cross references, u64 range and matrix dimensions are
 semantic validation requirements. Serialized envelope maximum is 1 MiB;
