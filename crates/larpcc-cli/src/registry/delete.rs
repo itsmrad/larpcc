@@ -1,5 +1,6 @@
 use super::{
-    Error, Profile, ProfileId, ProfileName, ProfileState, Registry, alias, paths, skills, store,
+    Error, Profile, ProfileId, ProfileName, ProfileState, Registry, alias, mcp, paths, skills,
+    store,
 };
 use crate::{
     launch::admission::acquire_auth_guard,
@@ -57,7 +58,8 @@ struct Deletion {
 struct ReferenceCleanup {
     aliases: Option<alias::ProfileCleanup>,
     skills: Option<skills::ProfileCleanup>,
-    // MCP profile cleanup will be recorded here and applied in the same phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp: Option<mcp::ProfileCleanup>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,6 +315,7 @@ impl Registry {
                 let aliases = alias::prepare_profile_cleanup(root, &data, id)?;
                 let skills = skills::prepare_profile_cleanup(root, &data, id)?;
                 skills::validate_profile_cleanup(root, &data, id, skills.as_ref(), false)?;
+                let mcp = mcp::prepare_profile_cleanup(root, &data, id)?;
                 let revision = data.revision;
                 mark(&mut data, id)?;
                 let tombstone = fingerprint(&store::serialize(&data)?);
@@ -333,7 +336,11 @@ impl Registry {
                         after,
                         profiles: profiles.identity()?,
                         home,
-                        references: ReferenceCleanup { aliases, skills },
+                        references: ReferenceCleanup {
+                            aliases,
+                            skills,
+                            mcp,
+                        },
                         step: DeleteStep::Prepared,
                     }),
                 };
@@ -380,6 +387,12 @@ fn apply(
         {
             return Err(Error::Drift);
         }
+        if let Some(cleanup) = &tx.references.mcp {
+            cleanup.verify_removed(root, id)?;
+        }
+        if mcp::has_profile_references(root, &data, id)? {
+            return Err(Error::Drift);
+        }
         paths::sync(root)?;
         finish(root)?;
         return Ok(revision);
@@ -422,6 +435,7 @@ fn apply(
         alias::validate_profile_cleanup(root, &data, id, tx.references.aliases.as_ref(), resuming)?;
     let skills =
         skills::validate_profile_cleanup(root, &data, id, tx.references.skills.as_ref(), resuming)?;
+    mcp::validate_profile_cleanup(root, &data, id, tx.references.mcp.as_ref(), resuming)?;
     retire(&mut data, id)?;
     let bytes = store::serialize(&data)?;
     if fingerprint(&bytes) != after {
@@ -441,6 +455,11 @@ fn apply(
         fault("delete aliases")?;
         skills.apply(root)?;
         fault("delete skills")?;
+        if let Some(cleanup) = &tx.references.mcp {
+            mcp::apply_profile_cleanup(root, cleanup)?;
+            fault("delete mcp")?;
+            cleanup.verify_removed(root, id)?;
+        }
         tx.step = DeleteStep::ReferencesRemoved;
         write(root, journal)?;
         fault("delete references")?;
@@ -449,6 +468,9 @@ fn apply(
             aliases.verify_removed()?;
         }
         skills.verify_removed()?;
+        if let Some(cleanup) = &tx.references.mcp {
+            cleanup.verify_removed(root, id)?;
+        }
     }
     let Journal::Delete {
         transaction: tx, ..
@@ -461,6 +483,15 @@ fn apply(
         tx.step = DeleteStep::FolderRemoved;
         write(root, journal)?;
         fault("delete folder")?;
+    }
+    let Journal::Delete {
+        transaction: tx, ..
+    } = journal
+    else {
+        return Err(Error::RecoveryRequired);
+    };
+    if let Some(cleanup) = &tx.references.mcp {
+        cleanup.verify_removed(root, id)?;
     }
     persist(root, &bytes)?;
     fault("delete registry")?;
@@ -532,7 +563,7 @@ fn quiet(root: &Path, data: &store::Data, profile: &Profile, partial: bool) -> R
 #[cfg(test)]
 thread_local! { static FAULT: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) }; }
 
-fn fault(_step: &str) -> Result<(), Error> {
+pub(super) fn fault(_step: &str) -> Result<(), Error> {
     #[cfg(test)]
     if FAULT.get() == Some(_step) {
         return Err(Error::RecoveryRequired);

@@ -125,7 +125,11 @@ publish `state:deleting` before removing anything. All reads may show tombstone;
 launch/toggles/rename/forget refuse it. Delete/recover resumes idempotently.
 First remove verified owned aliases/launchers and sharing references, then
 remove the folder, then remove identity metadata and journal; next_id never
-moves backward. Journal is the recovery source for multi-file catalog/manifest
+moves backward. The delete journal records the MCP cleanup alongside aliases
+and skills. Recovery verifies the recorded render ownership and metadata,
+removes the profile's switches and render, and advances the MCP catalog
+revision once. A profile without MCP entries leaves the MCP catalog untouched.
+Journal is the recovery source for multi-file catalog/manifest
 cleanup; readers refuse affected state until committed. Never advertise an
 atomic multi-file rename. Every journal step has fsync+idempotent resume semantics.
 Drift before tombstone fails unchanged; drift afterwards leaves tombstone and

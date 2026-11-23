@@ -1297,80 +1297,175 @@ pub(super) fn profile_apply(
 /// caller's own journal can replay it after a crash, under the same lock.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code, reason = "typed seam for the stage 04 delete owner")]
 pub(super) struct ProfileCleanup {
     profile_id: ProfileId,
-    owned: Option<Owned>,
     before_catalog: Catalog,
     catalog: Catalog,
     before_manifest: Manifest,
     manifest: Manifest,
 }
-#[allow(dead_code, reason = "typed seam for the stage 04 delete owner")]
 pub(super) fn prepare_profile_cleanup(
     root: &Path,
     data: &store::Data,
     id: ProfileId,
-) -> Result<ProfileCleanup, Error> {
+) -> Result<Option<ProfileCleanup>, Error> {
     let (before_catalog, before_manifest) = load(root, data)?;
-    let owned = before_manifest.find(id).cloned();
-    if let Some(o) = &owned {
-        verify_owned(root, o, false)?;
+    if let Some(o) = before_manifest.find(id)
+        && !verify_owned(root, o, false)?
+    {
+        return Err(Error::Drift);
     }
+    let cleanup = cleanup_plan(before_catalog, before_manifest, id)?;
+    if let Some(cleanup) = &cleanup {
+        cleanup.check_metadata(root, false)?;
+        bounded(&cleanup.catalog, model::MAX_CATALOG_BYTES)?;
+        bounded(&cleanup.manifest, store::LIMIT)?;
+    }
+    Ok(cleanup)
+}
+
+fn cleanup_plan(
+    before_catalog: Catalog,
+    before_manifest: Manifest,
+    id: ProfileId,
+) -> Result<Option<ProfileCleanup>, Error> {
     let mut catalog = before_catalog.clone();
     for s in &mut catalog.servers {
         s.switches.retain(|w| w.profile_id != id);
     }
     let mut manifest = before_manifest.clone();
     manifest.entries.retain(|o| o.profile_id != id);
-    Ok(ProfileCleanup {
+    if before_catalog == catalog && before_manifest == manifest {
+        return Ok(None);
+    }
+    catalog.revision = catalog.revision.checked_add(1).ok_or(Error::Exhausted)?;
+    Ok(Some(ProfileCleanup {
         profile_id: id,
-        owned,
         before_catalog,
         catalog,
         before_manifest,
         manifest,
-    })
+    }))
 }
-#[allow(dead_code, reason = "typed seam for the stage 04 delete owner")]
-pub(super) fn apply_profile_cleanup(root: &Path, cleanup: &ProfileCleanup) -> Result<(), Error> {
-    for (name, before, after, limit) in [
-        (
-            CATALOG,
-            bounded(&cleanup.before_catalog, model::MAX_CATALOG_BYTES)?,
-            bounded(&cleanup.catalog, model::MAX_CATALOG_BYTES)?,
-            model::MAX_CATALOG_BYTES,
-        ),
-        (
-            MANIFEST,
-            bounded(&cleanup.before_manifest, store::LIMIT)?,
-            bounded(&cleanup.manifest, store::LIMIT)?,
-            store::LIMIT,
-        ),
-    ] {
-        if let Some((bytes, _)) = read_file(&root.join(name), limit)?
-            && bytes != before
-            && bytes != after
-        {
-            return Err(Error::Drift);
-        }
-    }
-    if let Some(owned) = &cleanup.owned {
-        let mut manifest = Manifest {
-            version: 1,
-            entries: vec![owned.clone()],
+
+pub(super) fn validate_profile_cleanup(
+    root: &Path,
+    data: &store::Data,
+    id: ProfileId,
+    cleanup: Option<&ProfileCleanup>,
+    resuming: bool,
+) -> Result<(), Error> {
+    let Some(cleanup) = cleanup else {
+        let (catalog, manifest) = load(root, data)?;
+        return if cleanup_plan(catalog, manifest, id)?.is_none() {
+            Ok(())
+        } else {
+            Err(Error::Drift)
         };
+    };
+    validate(&cleanup.before_catalog, &cleanup.before_manifest, data)?;
+    if cleanup_plan(
+        cleanup.before_catalog.clone(),
+        cleanup.before_manifest.clone(),
+        id,
+    )?
+    .as_ref()
+        != Some(cleanup)
+    {
+        return Err(Error::RecoveryRequired);
+    }
+    cleanup.check_metadata(root, resuming)?;
+    if let Some(owned) = cleanup.before_manifest.find(id)
+        && !verify_owned(root, owned, false)?
+        && !resuming
+    {
+        return Err(Error::Drift);
+    }
+    Ok(())
+}
+
+fn cleanup_metadata<T: Serialize>(
+    root: &Path,
+    name: &str,
+    limit: usize,
+    before: Option<&T>,
+    after: Option<&T>,
+) -> Result<bool, Error> {
+    let (current, _) = read_file(&root.join(name), limit)?.ok_or(Error::Drift)?;
+    if let Some(after) = after
+        && current == bounded(after, limit)?
+    {
+        return Ok(true);
+    }
+    if let Some(before) = before
+        && current == bounded(before, limit)?
+    {
+        return Ok(false);
+    }
+    Err(Error::Drift)
+}
+
+impl ProfileCleanup {
+    fn check_metadata(&self, root: &Path, resuming: bool) -> Result<(bool, bool), Error> {
+        let manifest = cleanup_metadata(
+            root,
+            MANIFEST,
+            store::LIMIT,
+            Some(&self.before_manifest),
+            resuming.then_some(&self.manifest),
+        )?;
+        let catalog = cleanup_metadata(
+            root,
+            CATALOG,
+            model::MAX_CATALOG_BYTES,
+            Some(&self.before_catalog),
+            resuming.then_some(&self.catalog),
+        )?;
+        Ok((manifest, catalog))
+    }
+
+    pub(super) fn verify_removed(&self, root: &Path, id: ProfileId) -> Result<(), Error> {
+        if self.profile_id != id {
+            return Err(Error::RecoveryRequired);
+        }
+        cleanup_metadata(root, MANIFEST, store::LIMIT, None, Some(&self.manifest))?;
+        cleanup_metadata(
+            root,
+            CATALOG,
+            model::MAX_CATALOG_BYTES,
+            None,
+            Some(&self.catalog),
+        )?;
+        if self.before_manifest.find(id).is_some() {
+            let directory = render_dir(root, id);
+            let _ancestors = platform::anchor(&directory)?;
+            if platform::inspect(&directory, ObjectKind::Directory)?.is_some() {
+                return Err(Error::Drift);
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn apply_profile_cleanup(root: &Path, cleanup: &ProfileCleanup) -> Result<(), Error> {
+    let (manifest_done, catalog_done) = cleanup.check_metadata(root, true)?;
+    if let Some(owned) = cleanup.before_manifest.find(cleanup.profile_id) {
+        let mut manifest = cleanup.before_manifest.clone();
         remove_render(root, &mut manifest, owned.profile_id, owned.provider)?;
+        super::delete::fault("delete mcp render")?;
     }
-    if cleanup.before_manifest == cleanup.manifest && cleanup.before_catalog == cleanup.catalog {
-        return Ok(());
+    if !manifest_done {
+        write_atomic(root, MANIFEST, &bounded(&cleanup.manifest, store::LIMIT)?)?;
+        super::delete::fault("delete mcp manifest")?;
     }
-    write_atomic(root, MANIFEST, &bounded(&cleanup.manifest, store::LIMIT)?)?;
-    write_atomic(
-        root,
-        CATALOG,
-        &bounded(&cleanup.catalog, model::MAX_CATALOG_BYTES)?,
-    )
+    if !catalog_done {
+        write_atomic(
+            root,
+            CATALOG,
+            &bounded(&cleanup.catalog, model::MAX_CATALOG_BYTES)?,
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2138,7 +2233,9 @@ mod tests {
         f.switch("files", None, true).unwrap();
         let data = store::load(f.root()).unwrap();
         let catalog = fs::read(f.root().join(CATALOG)).unwrap();
-        let cleanup = prepare_profile_cleanup(f.root(), &data, ProfileId::new(1)).unwrap();
+        let cleanup = prepare_profile_cleanup(f.root(), &data, ProfileId::new(1))
+            .unwrap()
+            .unwrap();
         assert_eq!(fs::read(f.root().join(CATALOG)).unwrap(), catalog);
         assert!(f.render(1, Provider::Claude).is_file());
         // Persistable for the delete owner's journal, then replayable.

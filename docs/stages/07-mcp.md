@@ -80,6 +80,12 @@ A combined profile update stores MCP intent in the skills journal and atomically
 hands off to the MCP journal after skills commits. If interrupted, finish the
 current journal owner with `skills sync` or `mcp sync` as appropriate. Stale
 revision or drift refuses and leaves any existing journal pending.
+Profile deletion records MCP cleanup in the delete journal before publishing
+the tombstone. It verifies and removes the owned render and all switches for
+the deleted profile, then advances the catalog revision once before the
+profile folder is removed. Use `profile recover` to finish an interrupted
+delete. Drift leaves the delete pending. `profile forget` still refuses
+profiles with MCP references.
 Revalidate at launch, no stale renders, no implicit repair on list/doctor/launch.
 See [threats](../contracts/threats.md); preserve stage-3 config/admission refusals
 until exact renderer+args+secret-reference amendment independently reviewed.
