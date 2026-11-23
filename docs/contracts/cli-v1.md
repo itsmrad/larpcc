@@ -246,7 +246,12 @@ checks the host revision locally before SSH and never forwards it. Human
 callers may omit any of them. It adds no response field. Remote metadata
 status forwards `--expected-profile-id` without the account marker to a
 stage 14 receiver, which enforces it. A stage 13-only receiver fails closed
-with `remote_incompatible`; the ID is never dropped. Under a
+with `remote_incompatible`; the ID is never dropped. For a request carrying
+`--remote-account` or `--expected-profile-id`, a validated remote `parse` or
+`usage` error maps to local `remote_incompatible`, exit 1; malformed or
+stderr-bearing replies stay `remote_output`. The expected success
+discriminator follows the request mode: `status` for metadata,
+`status.account` for account. Under a
 stage 13 `--host` route (implemented with stage 13), the remote Larp runs its
 own account status and the forwarded envelope is the same `status.account`
 shape with no host field. Under `--remote-request`, an unmarked `status` is
