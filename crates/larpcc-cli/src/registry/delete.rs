@@ -28,7 +28,7 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 enum Journal {
     Delete {
         version: u8,
-        transaction: Deletion,
+        transaction: Box<Deletion>,
     },
     Migrate {
         version: u8,
@@ -265,7 +265,7 @@ impl Registry {
                 }
                 let j = Journal::Delete {
                     version: 1,
-                    transaction: Deletion {
+                    transaction: Box::new(Deletion {
                         id,
                         name: name.clone(),
                         revision,
@@ -276,7 +276,7 @@ impl Registry {
                         home,
                         references: ReferenceCleanup { aliases, skills },
                         step: DeleteStep::Prepared,
-                    },
+                    }),
                 };
                 write(root, &j)?;
                 fault("delete journal")?;
