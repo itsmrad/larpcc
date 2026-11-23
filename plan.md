@@ -169,8 +169,10 @@ lead to ask the user, per the rollout order.
   remain unauthorized" for that session only, after the lead merges the plan.
   Each native operation, including the first status call, is blocked unless
   the exact build's credential backend, key, precedence and fallback are
-  proven per-home (gate G0). No login runs before logout (or an approved
-  cleanup path) is proven too. PII-capable observations run only in the user's
+  proven per-home (gate G0). No login runs until G0 proves status and login
+  plus one sign-out path (logout or an approved cleanup path). That path runs
+  at teardown and after any stop, before the profile or temporary root is
+  deleted. PII-capable observations run only in the user's
   unrecorded terminal. Rows land in a separate implementation PR.
 
 ---

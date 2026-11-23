@@ -239,8 +239,14 @@ an older CLI rejects it as `parse`). ID is a canonical nonzero decimal u64,
 and an invalid value is `usage` without echo. Under the registry lock, after
 the `--expected-revision` check and before any guard, probe or spawn, NAME
 must resolve to ID, or the command fails `conflict`, exit 1, with no effects.
-GUI account-status requests MUST send both preconditions from the displayed
-snapshot. Human callers may omit either. It adds no response field. Under a
+It applies to public `status` in both modes, local and `--host`. GUI
+account-status requests MUST send both preconditions from the displayed
+snapshot, plus stage 13's `--expected-host-revision` when routed. The router
+checks the host revision locally before SSH and never forwards it. Human
+callers may omit any of them. It adds no response field. Remote metadata
+status forwards `--expected-profile-id` without the account marker to a
+stage 14 receiver, which enforces it. A stage 13-only receiver fails closed
+with `remote_incompatible`; the ID is never dropped. Under a
 stage 13 `--host` route (implemented with stage 13), the remote Larp runs its
 own account status and the forwarded envelope is the same `status.account`
 shape with no host field. Under `--remote-request`, an unmarked `status` is
