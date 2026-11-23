@@ -60,6 +60,9 @@ jobs:
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
         env:
           LARPCC_STAGE_FILTER: stage06_
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
+        env:
+          LARPCC_STAGE_FILTER: stage08_
       - if: runner.os == 'Windows'
         run: |
           cargo +stable test --bin larp --locked platform::windows::tests::w01_w03_existing_security_refuses_without_changing_contents_or_acl -- --exact --nocapture 2>&1 | Tee-Object -Variable cleanupEvidence

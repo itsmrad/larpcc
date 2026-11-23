@@ -1,5 +1,7 @@
 use crate::registry::{Error, Provider};
 use std::path::{Component, Path};
+pub(crate) mod evidence;
+pub(crate) mod version;
 pub fn lexical(path: &Path) -> Result<(), &'static str> {
     let value = path.to_str().ok_or("must be Unicode")?;
     if value.contains('\0') {

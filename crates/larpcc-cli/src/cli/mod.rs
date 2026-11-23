@@ -1,4 +1,5 @@
 mod alias;
+mod doctor;
 mod json;
 mod render;
 #[allow(unused_imports, reason = "the synthetic driver has its own entrypoint")]
@@ -117,6 +118,14 @@ enum CcAction {
     Alias {
         #[command(subcommand)]
         command: AliasCommand,
+    },
+    /// Report local metadata; --detect-versions runs a reviewed version-only probe
+    Doctor {
+        /// Profile name (all bindings when omitted)
+        profile: Option<ProfileName>,
+        /// Run the bounded version-only probe for each bound CLI executable
+        #[arg(long)]
+        detect_versions: bool,
     },
 }
 
@@ -275,6 +284,11 @@ enum ProviderAction {
     },
     #[command(about = "List provider bindings")]
     List,
+    #[command(about = "Print identity and SHA-256 of the bound executable (runs nothing)")]
+    Evidence {
+        #[arg(value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
+        provider: Provider,
+    },
 }
 
 #[derive(Subcommand)]
@@ -454,6 +468,10 @@ pub fn run() -> ExitCode {
         CcAction::Logout { name, yes } => return operation(Operation::Logout, name, vec![], yes),
         CcAction::Provider { command } => {
             return match Registry::locate().and_then(|r| match command {
+                ProviderAction::Evidence { provider } => {
+                    crate::provider::evidence::collect(&r.expecting(expected), provider)
+                        .map(|e| e.human())
+                }
                 ProviderAction::List => r.expecting(expected).bindings().map(render::bindings),
                 ProviderAction::Bind {
                     provider,
@@ -485,6 +503,21 @@ pub fn run() -> ExitCode {
             }) {
                 Ok(output) => write_output(
                     output.as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
+        CcAction::Doctor {
+            profile,
+            detect_versions,
+        } => {
+            return match Registry::locate().and_then(|r| {
+                doctor::data(&r.expecting(expected), profile.as_ref(), detect_versions)
+            }) {
+                Ok(data) => write_output(
+                    doctor::human(&data, detect_versions).as_bytes(),
                     &mut io::stdout().lock(),
                     &mut io::stderr().lock(),
                 ),

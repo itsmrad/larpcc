@@ -108,6 +108,42 @@ Do not freeze an exact Rust signature here. MAC consumes the merged v3 seed;
 CORE owns shared CLI/main/registry/platform/Cargo registration. Binding path
 and recorded version are included in profile list/show through desktop_binding.
 
+## Doctor and provider evidence (stage 08 minimal)
+
+`doctor [PROFILE] [--detect-versions]` uses the `status` shape under the
+`doctor` discriminator. With PROFILE, `detected_versions` holds that profile's
+provider CLI binding (as `status`). Without it, `profile` is null and
+`detected_versions` holds every provider/surface binding in the order above.
+`--detect-versions` probes only `cli` bindings in state `ok`, through the
+reviewed version descriptor table, which ships empty. Desktop
+`detected_version` stays null. A null result carries one diagnostic per
+provider, with fixed text and no native output:
+`version_unapproved` ("No reviewed version probe matches the PROVIDER
+executable.") when no descriptor matches provider, OS, architecture and digest,
+and `version_probe_failed` ("The PROVIDER version probe returned no accepted
+version.") for any rejected probe or an unsupported platform. A probe cleanup
+or reap failure is an operational error, exit 1. Human doctor prints the same
+data. Its detected version reads `not probed` without the flag and `unknown`
+for a null probe result.
+
+`provider evidence PROVIDER [--json]` (`provider.evidence`) exports the stage 14
+Phase 2 step 1 record for the bound native executable. It runs nothing, reads
+only the bound executable through the trusted-path, owner/ACL/identity and
+512 MiB bounded-hash checks, never reads profile homes or account data, and
+writes nothing. Data: `provider`, `path` (stored binding), `resolved_path`,
+`identity` (`{kind:"unix",dev,ino}` or `{kind:"windows",volume,file_id}`),
+`owner_uid` and `mode` (four octal digits; both null on Windows), `size`,
+`sha256` (lower-case hex), `cdhash` (macOS code-directory hash of a signed
+binary, otherwise null), `os` and `arch`. All integers are decimal strings, and
+`revision` is non-null. An unbound provider is `not_found` ("Provider is not
+bound."). An untrusted path, or an executable that changes while it is
+checked, is `unsafe_path`. Human output prints one `Label: value` line per
+field (`Provider`, `Path`, `Resolved path`, `Identity`, `Owner UID`, `Mode`,
+`Size`, `SHA-256`, `Code directory hash`, `Platform`), using `unavailable` for
+null, then the fixed line `Nothing was executed and no profile or account data
+was read.` Digests are printed, never persisted. The Mac app has no support for
+this command yet, and its decoder fails closed on it.
+
 ## Command map and examples
 
 Space-separated command paths map to dotted `command` values. Existing profile

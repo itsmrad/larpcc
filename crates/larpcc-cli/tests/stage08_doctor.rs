@@ -270,6 +270,45 @@ fn stage08_doctor_human_output() {
 }
 
 #[test]
+fn stage08_doctor_crash_leftover_never_wedges_registry_operations() {
+    let (f, fake, digest) = setup();
+    // A probe interrupted before its finally: an inert, unregistered tree under probes/.
+    let leftover = f.root.join("probes").join("1-0-0");
+    let home = leftover.join("profiles").join("codex-45").join("home");
+    for dir in [
+        f.root.join("probes"),
+        leftover.clone(),
+        leftover.join("profiles"),
+        home.parent().unwrap().to_owned(),
+        home.clone(),
+    ] {
+        create_directory(&dir);
+    }
+    create_file(&home.join("state"), b"synthetic leftover\n");
+    f.profile(&["list"], 0);
+    f.profile(&["add", "claude-work", "--provider", "claude"], 0);
+    f.profile(&["show", "claude-work"], 0);
+    f.profile(&["delete", "claude-work", "--yes"], 0);
+    f.profile(&["migrate"], 0);
+    f.run(&["cc", "provider", "list"], 0);
+    let value = doctor_json(
+        &f,
+        &descriptor(&digest, "ok"),
+        &["codex-45", "--detect-versions"],
+        0,
+    );
+    assert_eq!(cli_binding(&value)["detected_version"], "1.2.3");
+    assert!(record(&fake, "ok").is_some());
+    // The new probe removed only its own tree; the leftover stays inert.
+    let names: Vec<_> = fs::read_dir(f.root.join("probes"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["1-0-0"]);
+    assert!(home.join("state").exists());
+}
+
+#[test]
 fn stage08_doctor_expected_revision_is_checked_before_probe() {
     let (f, fake, digest) = setup();
     let value = doctor_json(

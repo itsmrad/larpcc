@@ -327,6 +327,11 @@ impl CheckedApp {
 }
 #[cfg(target_os = "macos")]
 mod macos;
+/// Static code-directory hash of a signed Mach-O (provider evidence); never validates or runs it.
+#[cfg(target_os = "macos")]
+pub(crate) fn code_directory_hash(path: &Path) -> Result<Vec<u8>, Error> {
+    macos::code_directory_hash(path)
+}
 
 #[cfg(unix)]
 mod singleton;

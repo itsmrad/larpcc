@@ -54,6 +54,9 @@ enum Action {
 fn main() -> std::process::ExitCode {
     #[cfg(windows)]
     platform::pin_startup_image();
+    if let Some(spec) = std::env::var_os("LARPCC_SYNTHETIC_VERSION_DESCRIPTORS") {
+        provider::version::synthetic_descriptors(invented_descriptors(&spec.to_string_lossy()));
+    }
     let mut args = std::env::args_os();
     let runner = format!("larpcc-synthetic{}", std::env::consts::EXE_SUFFIX);
     if args
@@ -238,6 +241,31 @@ fn stage3() -> std::process::ExitCode {
             }
         }
     }
+}
+
+// Stage 08 invented descriptors: `provider|sha256|argv|prefix|suffix`, `;`-separated.
+// Leaked once per test process; the shipped table stays empty.
+fn invented_descriptors(spec: &str) -> Vec<provider::version::VersionDescriptor> {
+    let leak = |s: &str| -> &'static str { Box::leak(s.to_owned().into_boxed_str()) };
+    spec.split(';')
+        .map(|entry| {
+            let fields: Vec<_> = entry.split('|').collect();
+            assert_eq!(fields.len(), 5, "invented descriptor fields");
+            let provider: registry::Provider = fields[0].parse().unwrap();
+            let argv: &'static [&'static str] = Box::leak(vec![leak(fields[2])].into_boxed_slice());
+            provider::version::VersionDescriptor {
+                provider,
+                os: std::env::consts::OS,
+                arch: std::env::consts::ARCH,
+                sha256: invented_digest(fields[1]).expect("invented digest"),
+                argv,
+                home_env: provider::version::home_env(provider),
+                prefix: leak(fields[3]),
+                suffix: leak(fields[4]),
+                evidence: "synthetic fixture only",
+            }
+        })
+        .collect()
 }
 
 fn invented_digest(value: &str) -> Option<[u8; 32]> {

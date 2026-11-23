@@ -123,7 +123,7 @@ fn spelling(path: &Path) -> Result<(), Error> {
     }
     Ok(())
 }
-fn code_directory_hash(path: &Path) -> Result<Vec<u8>, Error> {
+pub(super) fn code_directory_hash(path: &Path) -> Result<Vec<u8>, Error> {
     let bytes = path.as_os_str().as_bytes();
     // SAFETY: Create/Copy results are owned; the data is borrowed only while its dictionary lives.
     unsafe {
