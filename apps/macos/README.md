@@ -58,68 +58,84 @@ decoding; the workflow checks its bytes against the merged source contract.
 
 ## Menu bar
 
-The item is on by default under General › Menu Bar. It shows the session
-percentage left for Codex and Claude as up to two stacked template lines. Each
-provider defaults to the most constrained enabled profile with session data.
-Pick a profile per provider in Settings, or choose “Icon only”. The item uses a
-gauge when neither provider has a session percentage to show.
+The item is on by default under General › Menu Bar. For Codex and Claude it
+shows a ring of the session (5-hour) usage left, with the provider mark inside
+and the percentage beside it. Each provider defaults to the most constrained
+enabled profile with session data. Pick a profile per provider in Settings, or
+choose “Icon only”. The item uses a gauge when neither provider has a session
+percentage to show.
 
-The native menu panel opens to the last selected tab. Overview lists enabled
-profiles by the tightest limit. Codex and Claude filter that list and appear
-when they have enabled profiles. Each section shows session and weekly usage
-when available, with the percentage left, reset countdown, an even-pace tick
-and a projection based on average usage so far. Limit reset credits always
-appear and use the same wording as the profile page. The desktop action in the
-footer follows the highlighted profile and requires an enabled desktop surface
-and a real CLI configuration.
+The panel lists enabled profiles as cards, grouped by provider, tightest limit
+first. Each card shows a ring of the session left, the profile name, when the
+usage was saved and its source, and one line per usage window. Each line has
+the percentage left, a bar and the reset countdown. Orange and red appear only
+below 25% and 10%. A profile without saved usage reads “No usage saved yet”.
+Click a card or press Return to show the pace, the limit reset credits, “Open
+Claude.app” or “Open ChatGPT.app” (needs an enabled desktop surface and a real
+CLI configuration) and “Show in Settings”, which opens that profile’s page.
 
-Use ↑/↓ to move between sections and footer actions. Use ←/→ or Tab to switch
-tabs. Return opens Settings for a profile section or activates a footer row.
-Esc closes the panel. The footer reads “Refresh ⌘R” in both Local and Live
-modes. ⌘R refreshes, ⌘, opens Settings, and ⌘Q quits.
+On macOS 26 the cards are Liquid Glass. They sit 8 pt inside the panel with
+8 pt corners, concentric with the 16 pt panel corners. Earlier macOS versions
+and Reduce Transparency use an opaque card with a hairline edge. Increase
+Contrast adds a firm border. The panel is 360 pt wide and fits its content up
+to 80% of the screen, then scrolls. The window resizes as cards expand.
+
+Use ↑/↓ to move between cards, card actions and footer rows, and Return to
+activate. Esc closes the panel, and the next click on the item opens it again.
+⌘R refreshes, even with the Settings window open; ⌘, opens Settings; and ⌘Q
+quits. Nothing is highlighted or expanded when the panel opens.
 
 In **Local** mode, opening the panel re-reads saved usage. In **Live** mode,
 only Refresh or the existing opt-in interval reads usage. The panel uses
 `TimelineView(.everyMinute)` to redraw countdowns, update ages and pace
-indicators from loaded data. “Hide Dock icon when the window is closed”
+from loaded data. “Hide Dock icon when the window is closed”
 switches to a menu-bar-only app while Settings is closed and needs the menu
 bar item to be shown.
 
 In debug builds, render a sample panel at 2x and exit:
 
 ```sh
-swift run LarpCC --menubar-panel-snapshot=/abs/path.png --menubar-panel-tab=overview --appearance=dark
+swift run LarpCC --menubar-panel-snapshot=/abs/path.png --appearance=dark \
+  --menubar-panel-expanded=1 --menubar-status-snapshot=/abs/status.png
 ```
 
-The snapshot accepts `overview`, `codex` or `claude` and `light` or `dark`.
-Release builds exclude the snapshot hook. Capture the live panel there with
-`screencapture -x -l <windowID>`.
+`--menubar-panel-expanded=<profile id>` opens one card,
+`--menubar-status-snapshot` also writes the status item on a light and a dark
+bar, and `--menubar-panel-accessibility` renders with Increase Contrast and
+Reduce Transparency. Snapshots draw opaque cards because glass needs a live
+window. Release builds exclude the snapshot hook. Capture the live panel there
+with `screencapture -x -o -l <windowID>`. Link debug builds the way
+`scripts/bundle.sh` does (`-Xlinker -platform_version …`); otherwise macOS
+draws the app in its compatibility style with small window corners.
 
 ### Native Mac checklist
 
-- **A. Status item** Confirm Codex above Claude in sample mode, then verify the
-  per-provider pickers, one-provider layout and Icon only. Check the item against
-  both light and dark menu bars.
-- **B. Panel** Check all four sample profiles in Overview and the filtered
-  provider tabs. Confirm reserve, deficit, on-pace, all three reset-credit
-  states, and the profile with no saved usage. Check the full-width hover
-  highlight, disabled sample desktop action, and overflow on a small screen.
-  Confirm the footer reads “Refresh ⌘R” in both Local and Live modes.
+- **A. Status item** Confirm the Codex ring before the Claude ring in sample
+  mode, then verify the per-provider pickers, one-provider layout and Icon
+  only. Check the item against both light and dark menu bars.
+- **B. Panel** Check all four sample cards. Confirm the colour only on low
+  limits, the card with no saved usage, and that the bars line up across
+  cards. Expand each card. Confirm reserve, deficit and on-pace, all three
+  reset-credit states, the disabled sample desktop action, and that the window
+  grows and shrinks with the card. Check overflow on a small screen.
 - **C. Refresh** Reopen in Local mode and check the update age. Use ⌘R to
-  re-read usage.
-- **D. Keyboard and VoiceOver** Move through sections and footer rows, switch
-  tabs, activate with Return, and dismiss with Esc. Check one spoken summary
-  per profile and the selected state on tabs.
+  re-read usage, including with the Settings window open and LarpCC
+  frontmost. The panel must stay open.
+- **D. Keyboard and VoiceOver** Move through cards, card actions and footer
+  rows, expand with Return, and dismiss with Esc. A single click on the item
+  must reopen the panel after Esc. Check one spoken summary per card.
 - **E. Settings** Close Settings, confirm the item stays, then reopen Settings
-  with the footer action or ⌘,.
+  with the footer action, ⌘, or a card’s “Show in Settings”.
 - **F. Dock** Enable Dock hiding in Settings and verify the icon disappears on
   close and returns on reopen. Restore the original setting afterwards.
 - **G. Visibility** Turn off “Show in menu bar” and verify the Dock icon remains.
   Restore the original setting afterwards.
 - **H. Profile usage** Confirm the reset wording on the profile pages and
   smoke-test opening and cancelling the New Profile sheet with ⌘N.
-- **I. Appearance** Capture Overview, a provider tab and the status item in both
-  light and dark. Check text and bar contrast, including on the highlight.
+- **I. Appearance** Capture the panel (collapsed and with one card open) and
+  the status item in light and dark. Compare the panel corner with the
+  previous release. Check Increase Contrast and Reduce Transparency with the
+  accessibility snapshot or the system settings.
 
 From this directory:
 

@@ -80,14 +80,27 @@ private struct StatusRing: View {
     }
 }
 
+
 // MARK: - Panel
+
+/// The panel window's corner radius on macOS 26 (measured from the menu bar window),
+/// and the inset of the cards inside it. Cards are concentric: radius − inset.
+private enum PanelMetrics {
+    static let radius: CGFloat = 16
+    static let inset: CGFloat = 8
+    static let cardRadius = radius - inset
+    /// Footer rows sit 4 pt inside their card.
+    static let rowRadius = cardRadius - 4
+}
 
 struct MenuBarPanel: View {
     @ObservedObject var store: AppStore
-    /// Offscreen render for the debug snapshot hook: no material, no scrolling, no focus.
+    /// Offscreen render for the debug snapshot hook: no scrolling, no focus.
     var isSnapshot = false
     var snapshotExpandedID: String? = nil
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
     @AppStorage(UsagePreferences.consentKey) private var consented = false
     @FocusState private var hasKeyboardFocus: Bool
@@ -124,6 +137,8 @@ struct MenuBarPanel: View {
         if canRefresh { items.append(.refresh) }
         return items + [.settings, .quit]
     }
+    /// Glass needs a live window; the offscreen snapshot and Reduce Transparency use opaque cards.
+    private var glass: Bool { !isSnapshot && !reduceTransparency }
     private var highlighted: Item? {
         let candidate = hoveredItem ?? keyboardItem
         return candidate.flatMap { items.contains($0) ? $0 : nil }
@@ -133,11 +148,11 @@ struct MenuBarPanel: View {
         VStack(spacing: 0) {
             header
             notices
-            VStack(spacing: 8) {
+            VStack(spacing: PanelMetrics.inset) {
                 list
                 footer
             }
-            .padding([.horizontal, .bottom], 8)
+            .padding([.horizontal, .bottom], PanelMetrics.inset)
         }
         .frame(width: 360)
         // The menu bar window keeps the size of its first layout, so it is resized
@@ -145,13 +160,17 @@ struct MenuBarPanel: View {
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { panelHeight = $0 }
         .frame(maxHeight: .infinity, alignment: .top)
+        .background(panelBackground)
         .background {
-            if isSnapshot {
-                Color(nsColor: .windowBackgroundColor)
-            } else {
-                MenuBarMaterial().accessibilityHidden(true)
-                MenuBarWindowSizer(height: panelHeight)
-            }
+            if !isSnapshot { MenuBarWindowSizer(height: panelHeight) }
+        }
+        .background {
+            // ⌘R always lands here, even while Refresh is disabled, so it never
+            // falls through to the Settings window's own ⌘R.
+            Button("Refresh") { activate(.refresh) }
+                .keyboardShortcut("r", modifiers: .command)
+                .opacity(0)
+                .accessibilityHidden(true)
         }
         .focusable(!isSnapshot)
         .focused($hasKeyboardFocus)
@@ -195,8 +214,8 @@ struct MenuBarPanel: View {
             }
         }
         .font(.system(size: 13))
-        .padding(.horizontal, 18)
-        .padding(.top, 13)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
         .padding(.bottom, 10)
         .accessibilityElement(children: .combine)
     }
@@ -232,7 +251,7 @@ struct MenuBarPanel: View {
             }
         }
         .font(.system(size: 11))
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 20)
         .padding(.bottom, 10)
     }
 
@@ -252,6 +271,7 @@ struct MenuBarPanel: View {
                 ScrollView { content }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(height: maxListHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous))
                     .onChange(of: keyboardItem) { _, item in
                         if let item { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(item) } }
                     }
@@ -262,53 +282,37 @@ struct MenuBarPanel: View {
     private var maxListHeight: CGFloat {
         let pointerScreen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
         let screen = NSApp.keyWindow?.screen ?? pointerScreen ?? NSScreen.main
-        // 80% of the screen, less the header and the three footer rows.
-        return max(160, (screen?.visibleFrame.height ?? 800) * 0.8 - 150)
+        // 80% of the screen, less the header and the footer card.
+        return max(160, (screen?.visibleFrame.height ?? 800) * 0.8 - 160)
     }
 
-    /// One floating section per provider.
+    /// One card per profile, grouped under provider labels.
     private var profileList: some View {
         TimelineView(.everyMinute) { context in
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: PanelMetrics.inset) {
                 if groups.isEmpty {
                     Text(emptyMessage)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 11)
+                        .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .panelSection()
+                        .panelCard(highlighted: false, glass: glass)
                 }
                 ForEach(groups, id: \.provider) { group in
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(group.provider.title)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.top, 7)
-                            .padding(.bottom, 1)
-                            .accessibilityAddTraits(.isHeader)
-                        ForEach(Array(group.profiles.enumerated()), id: \.element.id) { index, profile in
-                            if index > 0 {
-                                Divider()
-                                    .padding(.leading, 50)
-                                    .padding(.trailing, 10)
-                                    .opacity(isLifted(profile) || isLifted(group.profiles[index - 1]) ? 0 : 1)
-                            }
-                            profileRow(profile, now: context.date)
-                        }
+                    Text(group.provider.title)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 2)
+                        .padding(.bottom, -2)
+                        .accessibilityAddTraits(.isHeader)
+                    ForEach(group.profiles) { profile in
+                        profileCard(profile, now: context.date)
                     }
-                    .padding(4)
-                    .panelSection()
                 }
             }
             .font(.system(size: 13))
         }
-    }
-
-    /// Hovered, keyboard-highlighted or expanded rows draw their own fill, so the dividers around them hide.
-    private func isLifted(_ profile: Profile) -> Bool {
-        highlighted == .profile(profile.id) || expanded == profile.id
     }
 
     private var emptyMessage: String {
@@ -317,20 +321,21 @@ struct MenuBarPanel: View {
         return "No profiles are switched on. Turn one on in Settings."
     }
 
-    private func profileRow(_ profile: Profile, now: Date) -> some View {
+    private func profileCard(_ profile: Profile, now: Date) -> some View {
         let item = Item.profile(profile.id)
         let isExpanded = expanded == profile.id
         let report = store.usage[profile.id]
         return VStack(alignment: .leading, spacing: 0) {
             Button { activate(item) } label: {
-                MenuBarProfileSummary(profile: profile, report: report, source: source, now: now)
+                MenuBarProfileSummary(profile: profile, report: report, source: source, now: now,
+                                      expanded: isExpanded)
             }
             .buttonStyle(.plain)
             .onHover { hover(item, entered: $0) }
             .accessibilityHint(isExpanded ? "Hides details" : "Shows details")
             .id(item)
             if isExpanded {
-                MenuBarProfileDetail(profile: profile, report: report, source: source, now: now) {
+                MenuBarProfileDetail(report: report, now: now) {
                     if profile.desktopEnabled {
                         detailButton(.openDesktop(profile.id), title: "Open \(profile.provider.desktopApp)",
                                      enabled: canOpenDesktop(profile))
@@ -339,17 +344,15 @@ struct MenuBarPanel: View {
                 }
             }
         }
-        .background {
-            PanelRowShape().fill(Color.primary.opacity(highlighted == item ? 0.08 : isExpanded ? 0.05 : 0))
-        }
+        .panelCard(highlighted: highlighted == item, glass: glass)
     }
 
     private func detailButton(_ item: Item, title: String, enabled: Bool) -> some View {
         Button { activate(item) } label: {
             Text(title)
                 .font(.system(size: 12))
-                .padding(.horizontal, 10)
-                .frame(height: 22)
+                .padding(.horizontal, 11)
+                .frame(height: 24)
                 .background {
                     Capsule().fill(Color.primary.opacity(highlighted == item ? 0.16 : 0.08))
                 }
@@ -368,14 +371,13 @@ struct MenuBarPanel: View {
         VStack(spacing: 0) {
             menuRow(.refresh, title: store.usageLoading ? "Updating Usage…" : "Refresh", shortcut: "⌘R",
                     enabled: canRefresh)
-                .keyboardShortcut("r", modifiers: .command)
             menuRow(.settings, title: "LarpCC Settings…", shortcut: "⌘,")
                 .keyboardShortcut(",", modifiers: .command)
             menuRow(.quit, title: "Quit LarpCC", shortcut: "⌘Q")
                 .keyboardShortcut("q", modifiers: .command)
         }
         .padding(4)
-        .panelSection()
+        .panelCard(highlighted: false, glass: glass)
     }
 
     private func menuRow(_ item: Item, title: String, shortcut: String, enabled: Bool = true) -> some View {
@@ -386,11 +388,12 @@ struct MenuBarPanel: View {
                 Text(shortcut).foregroundStyle(.secondary).accessibilityHidden(true)
             }
             .font(.system(size: 13))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
             .frame(height: 26)
             .opacity(enabled ? 1 : 0.45)
             .background {
-                PanelRowShape().fill(Color.primary.opacity(highlighted == item ? 0.08 : 0))
+                RoundedRectangle(cornerRadius: PanelMetrics.rowRadius, style: .continuous)
+                    .fill(Color.primary.opacity(highlighted == item ? 0.08 : 0))
             }
             .contentShape(Rectangle())
         }
@@ -445,56 +448,11 @@ struct MenuBarPanel: View {
         NSApp.activate()
     }
 
+    /// Dismissing through SwiftUI keeps the menu bar item's open state in step, so the
+    /// next click on the item opens the panel again (closing the window directly did not).
     private func closePanel() {
-        if let window = NSApp.keyWindow, !MenuBarDockPolicy.isSettingsWindow(window) {
-            window.close()
-        }
-    }
-}
-
-/// The system menu material. It also gives the panel window the large macOS menu corner radius.
-private struct MenuBarMaterial: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .menu
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
-
-// MARK: - Sections
-
-private extension View {
-    /// A floating rounded section inset from the panel edge, like the Settings sidebar:
-    /// Liquid Glass with corners concentric to the panel on macOS 26, a quiet fill and hairline before.
-    @ViewBuilder func panelSection() -> some View {
-        if #available(macOS 26, *) {
-            let shape = ConcentricRectangle(corners: .concentric(minimum: .fixed(14)), isUniform: true)
-            self.background(shape.fill(sectionLift)).glassEffect(.regular, in: shape)
-        } else {
-            let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-            self.background(shape.fill(sectionLift))
-                .overlay(shape.strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
-        }
-    }
-}
-
-/// Sections sit a step lighter than the window in both appearances, like the sidebar.
-private let sectionLift = Color(nsColor: NSColor(name: nil) { appearance in
-    let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-    return NSColor.white.withAlphaComponent(dark ? 0.045 : 0.55)
-})
-
-/// Hover and selection fill for a row inside a section, concentric with it.
-private struct PanelRowShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        if #available(macOS 26, *) {
-            return ConcentricRectangle(corners: .concentric(minimum: .fixed(10)), isUniform: true).path(in: rect)
-        }
-        return RoundedRectangle(cornerRadius: 10, style: .continuous).path(in: rect)
+        guard !isSnapshot else { return }
+        dismiss()
     }
 }
 
@@ -515,46 +473,110 @@ private struct MenuBarWindowSizer: NSViewRepresentable {
     }
 }
 
-// MARK: - Profile row
+// MARK: - Cards
 
-/// The always-visible part of a row: mark, name and one meter line per usage window.
+private extension View {
+    /// A floating card inset from the panel edge, like the Settings sidebar: Liquid Glass on
+    /// macOS 26, an opaque fill with a hairline otherwise. Corners are concentric with the panel.
+    func panelCard(highlighted: Bool, glass: Bool) -> some View {
+        modifier(PanelCard(highlighted: highlighted, glass: glass))
+    }
+}
+
+private struct PanelCard: ViewModifier {
+    let highlighted: Bool
+    let glass: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
+        let card = content
+            .background(shape.fill(cardLift))
+            .background(shape.fill(Color.primary.opacity(highlighted ? 0.07 : 0)))
+            .overlay {
+                if contrast == .increased {
+                    shape.strokeBorder(Color.primary.opacity(0.5), lineWidth: 1)
+                }
+            }
+        if #available(macOS 26, *), glass {
+            card.glassEffect(.regular, in: shape)
+        } else {
+            card.overlay(shape.strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+        }
+    }
+}
+
+private func isDark(_ appearance: NSAppearance) -> Bool {
+    let match = appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua,
+                                            .accessibilityHighContrastDarkAqua])
+    return match == .darkAqua || match == .accessibilityHighContrastDarkAqua
+}
+
+/// Behind the cards: the dark window background, or a soft grey in light mode
+/// (the light window background is nearly white and would swallow the cards).
+private let panelBackground = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? .windowBackgroundColor : NSColor(white: 0.925, alpha: 1)
+})
+
+/// Cards sit a step lighter than the panel in both appearances, like the Settings sidebar.
+private let cardLift = Color(nsColor: NSColor(name: nil) { appearance in
+    NSColor.white.withAlphaComponent(isDark(appearance) ? 0.08 : 0.8)
+})
+
+// MARK: - Profile card
+
+/// The always-visible part of a card: ring, name, freshness and one meter line per usage window.
 private struct MenuBarProfileSummary: View {
     let profile: Profile
     let report: UsageReport?
     let source: UsageSource
     let now: Date
+    let expanded: Bool
 
     private var kinds: [UsageWindowKind] { UsageWindowKind.allCases.filter { $0.window(in: report) != nil } }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            ProfileRing(provider: profile.provider, session: report?.fiveHour)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(profile.name).fontWeight(.medium).lineLimit(1)
-                if kinds.isEmpty {
-                    Text(noUsageText(report: report, source: source))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                } else {
-                    Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 3) {
-                        ForEach(kinds, id: \.self) { kind in
-                            if let window = kind.window(in: report) {
-                                meterRow(kind, window)
-                            }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ProfileRing(provider: profile.provider, session: report?.fiveHour)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(profile.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
+                    .accessibilityHidden(true)
+            }
+            if !kinds.isEmpty {
+                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 5) {
+                    ForEach(kinds, id: \.self) { kind in
+                        if let window = kind.window(in: report) {
+                            meterRow(kind, window)
                         }
                     }
-                    .font(.system(size: 11))
                 }
+                .font(.system(size: 11))
             }
-            .padding(.top, kinds.isEmpty ? 0 : -1)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenSummary)
         .accessibilityAddTraits(.isButton)
+    }
+
+    private var subtitle: String {
+        guard let report else { return source == .local ? "No usage saved yet" : "Not refreshed yet" }
+        if kinds.isEmpty { return "No limits reported" }
+        let sourceTitle = report.source.title
+        guard let captured = report.capturedAt else { return sourceTitle }
+        let age = now.timeIntervalSince(captured)
+        if age < 60 { return "Updated just now · \(sourceTitle)" }
+        return "Updated \(UsageSpan.compact(age, roundingUp: false)) ago · \(sourceTitle)"
     }
 
     private func meterRow(_ kind: UsageWindowKind, _ window: UsageWindow) -> some View {
@@ -563,10 +585,10 @@ private struct MenuBarProfileSummary: View {
             Text(kind.title).foregroundStyle(.secondary)
             UsageMeter(leftPercent: window.leftPercent, level: level)
             Text("\(Int(window.leftPercent.rounded()))%")
-                .fontWeight(.medium)
+                .fontWeight(.semibold)
                 .foregroundStyle(level.tint ?? .primary)
                 .frame(width: 32, alignment: .trailing)
-            // Fixed widths keep every row's meter the same length.
+            // Fixed widths keep every card's meter the same length.
             Label(resetText(window), systemImage: "arrow.clockwise")
                 .labelStyle(ResetLabelStyle())
                 .foregroundStyle(.secondary)
@@ -582,8 +604,7 @@ private struct MenuBarProfileSummary: View {
     }
 
     private var spokenSummary: String {
-        var parts = [profile.name, profile.provider.title]
-        if kinds.isEmpty { parts.append(noUsageText(report: report, source: source)) }
+        var parts = [profile.name, profile.provider.title, subtitle]
         for kind in kinds {
             if let window = kind.window(in: report) {
                 parts.append(MenuBarSummary.spokenRow(kind: kind, window: window, now: now))
@@ -593,18 +614,16 @@ private struct MenuBarProfileSummary: View {
     }
 }
 
-/// Shown under a row after a click or Return: freshness, pace, reset credits and actions.
+/// Shown inside a card after a click or Return: pace, reset credits and actions.
 private struct MenuBarProfileDetail<Actions: View>: View {
-    let profile: Profile
     let report: UsageReport?
-    let source: UsageSource
     let now: Date
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 3) {
-                line("Updated", updatedText)
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
                 ForEach(UsageWindowKind.allCases, id: \.self) { kind in
                     if let window = kind.window(in: report), let pace = UsagePace.text(window, kind: kind, now: now) {
                         line("\(kind.title) pace", pace)
@@ -615,9 +634,7 @@ private struct MenuBarProfileDetail<Actions: View>: View {
             .font(.system(size: 11))
             HStack(spacing: 6) { actions() }
         }
-        .padding(.leading, 48)
-        .padding(.trailing, 8)
-        .padding(.bottom, 9)
+        .padding([.horizontal, .bottom], 12)
     }
 
     private func line(_ label: String, _ value: String) -> some View {
@@ -627,31 +644,9 @@ private struct MenuBarProfileDetail<Actions: View>: View {
         }
         .accessibilityElement(children: .combine)
     }
-
-    private var updatedText: String {
-        let sourceTitle = (report?.source ?? source).title
-        guard let captured = report?.capturedAt else { return sourceTitle }
-        let age = now.timeIntervalSince(captured)
-        if age < 60 { return "Just now · \(sourceTitle)" }
-        return "\(UsageSpan.compact(age, roundingUp: false)) ago · \(sourceTitle)"
-    }
 }
 
-private struct ResetLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 2) {
-            configuration.icon.font(.system(size: 8, weight: .semibold)).accessibilityHidden(true)
-            configuration.title
-        }
-    }
-}
-
-private func noUsageText(report: UsageReport?, source: UsageSource) -> String {
-    if report != nil { return "No limits reported" }
-    return source == .local ? "No usage saved yet" : "Not refreshed yet"
-}
-
-/// The row's mark inside a ring of the session left, echoing the status item.
+/// The card's mark inside a ring of the session left, echoing the status item.
 private struct ProfileRing: View {
     let provider: Provider
     let session: UsageWindow?
@@ -674,6 +669,15 @@ private struct ProfileRing: View {
         }
         .frame(width: 30, height: 30)
         .accessibilityHidden(true)
+    }
+}
+
+private struct ResetLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 2) {
+            configuration.icon.font(.system(size: 8, weight: .semibold)).accessibilityHidden(true)
+            configuration.title
+        }
     }
 }
 

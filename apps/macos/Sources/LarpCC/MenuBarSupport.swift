@@ -147,6 +147,7 @@ struct MenuBarSettingsSection: View {
 #if DEBUG
 /// `--menubar-panel-snapshot=<abs path.png>`: renders the panel with sample data at 2x and exits.
 /// `--menubar-panel-expanded=<profile id>` opens that profile's details.
+/// `--menubar-panel-accessibility` renders with Increase Contrast and Reduce Transparency.
 /// Debug builds only; sample data only. It never runs larp or reads usage from anywhere else.
 enum MenuBarSnapshot {
     private static let prefix = "--menubar-panel-snapshot="
@@ -199,11 +200,16 @@ enum MenuBarSnapshot {
         case .light?: dark = false
         default: dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         }
+        let accessible = CommandLine.arguments.contains("--menubar-panel-accessibility")
         let renderer = ImageRenderer(content: MenuBarPanel(store: store, isSnapshot: true, snapshotExpandedID: expanded)
-            .environment(\.colorScheme, dark ? .dark : .light))
+            .environment(\.colorScheme, dark ? .dark : .light)
+            .environment(\._colorSchemeContrast, accessible ? .increased : .standard)
+            .environment(\._accessibilityReduceTransparency, accessible))
         renderer.scale = 2
         var png: Data?
-        let appearance = NSAppearance(named: dark ? .darkAqua : .aqua) ?? NSAppearance.currentDrawing()
+        let name: NSAppearance.Name = accessible ? (dark ? .accessibilityHighContrastDarkAqua : .accessibilityHighContrastAqua)
+            : (dark ? .darkAqua : .aqua)
+        let appearance = NSAppearance(named: name) ?? NSAppearance.currentDrawing()
         appearance.performAsCurrentDrawingAppearance {
             if let image = renderer.cgImage {
                 png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
