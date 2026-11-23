@@ -102,11 +102,17 @@ Acquire per-ID lifecycle guard first, then registry lock; shared order applies
 to launch/auth/delete/share. Never hold registry lock across logout, prompts or
 child waits. Revalidate snapshot after any unlocked interval. Refuse visible
 Larp-managed activity (profile guard held), guard contention,
-or safety failure. On macOS also inspect only validated official Claude.app /
-ChatGPT.app identities for an exact profile `--user-data-dir` argument match;
-known activity refuses. Unknown/unverifiable inspected app identity, denied or
-incomplete inspection, malformed arguments, timeout or truncation refuses with
-safe diagnostics. Never inspect process environment, tokens or account data.
+or safety failure. On macOS enumerate current-user processes and select
+executables inside Claude.app or ChatGPT.app bundle contents before reading any
+arguments. Keep the official main-app signature requirements and verify nested
+helpers against the corresponding vendor team signature. An exact profile
+`--user-data-dir` argument match refuses deletion. Skip a process that exits or
+whose PID is reused during the scan, and skip denied path lookups that have yet
+to identify a candidate. Once identified, a live candidate with unverifiable
+identity or denied, malformed, or truncated arguments still refuses deletion.
+Failed or oversized process enumeration also refuses. If the scan reaches its
+two-second deadline, retry the whole scan once with a fresh two-second budget.
+Never inspect process environment, tokens or account data.
 
 The user must close sessions started outside Larp (including manual terminal
 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` sessions) before confirming `--yes`. This is
