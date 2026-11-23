@@ -205,6 +205,19 @@ def credits_semantic(c):
     assert (c['expires_at'] is not None) == (es == 'recorded')
 
 SOURCES = {'claude_statusline': 'claude', 'codex_session_log': 'codex'}
+# Codex PlanType allowlists at rust-v0.169.0 (stage 11): rollout records vs the LIVE backend enum.
+LOCAL_PLANS = {'free', 'go', 'plus', 'pro', 'prolite', 'promax', 'team', 'self_serve_business_prolite',
+               'self_serve_business_usage_based', 'business', 'ent26', 'enterprise_cbp_automation',
+               'enterprise_cbp_usage_based', 'enterprise', 'edu', 'edu_plus', 'edu_pro', 'sci', 'sci_plus'}
+LIVE_PLANS = LOCAL_PLANS | {'guest', 'free_workspace', 'education', 'quorum', 'k12'}
+
+def read_clock_semantic(w, generated_at):
+    # Each window's own reset instant against the read clock decides expiry.
+    if w['reason'] == 'reset_since_capture':
+        assert w['resets_at'] is not None and epoch(w['resets_at']) <= epoch(generated_at)
+        assert w['used_percent'] is None and w['pace'] is None
+    elif w['resets_at'] is not None:
+        assert epoch(w['resets_at']) > epoch(generated_at)
 
 def usage_semantic(data):
     rows = data['profiles']
@@ -231,6 +244,7 @@ def usage_semantic(data):
             assert max(seen) == epoch(p['captured_at'])  # row time = newest window observation
         for w in windows:
             window_semantic(w, p['captured_at'])
+            read_clock_semantic(w, data['generated_at'])
         if ws['extra'] is not None:
             keys = [(w['label'], w['window_seconds'] is None, w['window_seconds'] or 0) for w in ws['extra']]
             assert keys == sorted(keys) and len({w['label'] for w in ws['extra']}) == len(keys)
@@ -239,8 +253,10 @@ def usage_semantic(data):
         credits_source_semantic(p)
         if p['plan'] is not None and p['plan']['source'] == 'client_local':
             assert p['provider'] == 'codex' and src == 'codex_session_log'
+            assert p['plan']['label'] in LOCAL_PLANS
         if p['plan'] is not None and p['plan']['source'] == 'live_endpoint':
             assert p['provider'] == 'codex' and src == 'live_endpoint'
+            assert p['plan']['label'] in LIVE_PLANS
         diags = [(d['code'], d['message']) for d in p['diagnostics']]
         assert diags == sorted(diags)
 
@@ -413,6 +429,16 @@ def duplicate_extras(x):
     codex(x)['windows']['extra'][1]['label'] = codex(x)['windows']['extra'][0]['label']
 live_usage = next(x for x in fixtures if x['command'] == 'usage' and x['ok']
                   and x['data']['requested_mode'] == 'live')
+live_counts = next(x for x in fixtures if x['command'] == 'usage' and x['ok']
+                   and x['data']['requested_mode'] == 'live' and x is not live_usage)
+assert [p['reset_credits']['state'] for p in live_counts['data']['profiles']] == ['none', 'not_recorded']
+def expired_but_current(x):
+    w = codex(x)['windows']['five_hour']
+    w['resets_at'] = '2026-11-21T12:20:00Z'
+    w['pace'] = pace(w['captured_at'], w['resets_at'], w['used_percent'], w['window_seconds'])
+accepted = copy.deepcopy(live_usage)
+accepted['data']['profiles'][1]['plan'] = {'label': 'free_workspace', 'source': 'live_endpoint'}
+semantic(accepted)  # LIVE-only plan value accepted in a LIVE row
 semantic_only = [
     (usage, set_window(reason=None, used_percent=None)),
     (usage, set_window(reason='not_reported')),
@@ -452,6 +478,16 @@ semantic_only = [
     (usage, lambda x: codex(x).update(plan={'label': 'pro', 'source': 'live_endpoint'})),
     (live_usage, lambda x: x['data']['profiles'][0].update(plan={'label': 'max', 'source': 'live_endpoint'})),
     (live_usage, lambda x: x['data']['profiles'][1].update(plan={'label': 'pro', 'source': 'client_local'})),
+    # LIVE-only plan value is refused in a LOCAL row (paired LIVE acceptance below).
+    (usage, lambda x: codex(x).update(plan={'label': 'free_workspace', 'source': 'client_local'})),
+    (live_usage, lambda x: x['data']['profiles'][1].update(plan={'label': 'Pro', 'source': 'live_endpoint'})),
+    # Read clock: a window whose reset has passed cannot keep a percentage or a null reason.
+    (usage, expired_but_current),
+    (usage, lambda x: codex(x)['windows']['extra'][1].update(resets_at='2026-11-21T13:00:00Z')),
+    (usage, lambda x: codex(x)['windows']['extra'][1].update(resets_at=None)),
+    (live_counts, lambda x: x['data']['profiles'][0]['reset_credits'].update(expires_state='unsupported')),
+    (live_counts, lambda x: x['data']['profiles'][1]['reset_credits'].update(
+        expires_state='unsupported')),
     (next(x for x in fixtures if x['command'] == 'settings.usage'),
      lambda x: x['data']['profiles'][1].update(claude_statusline=True)),
     (next(x for x in fixtures if x['command'] == 'settings.usage.claude-statusline' and x['ok']),

@@ -3,12 +3,17 @@
 Normative schema: [cli-v1.schema.json](cli-v1.schema.json), JSON Schema 2020-12.
 This is a planning contract, not shipped behavior. Import is **OUT OF SCOPE**;
 fresh profiles only. No account/auth output is captured, parsed or inferred. Only explicit bounded
-version text may be parsed by doctor --detect-versions (stage 08). The only exception is
-the stage 11 usage exception (D14): usage windows, reset times and reset-credit counts
-from the allowlisted sources in [stage 11](../stages/11-usage.md). Account identity and
-auth inference stay forbidden; a plan appears only as the user-entered label, the
-client-recorded LOCAL plan (D29) or the Codex LIVE response plan (D32), never from
-credentials and never stored.
+version text may be parsed by doctor --detect-versions (stage 08). There are two bounded
+exceptions with distinct scopes:
+1. **Stage 11 usage (D14):** usage windows, reset times and reset-credit counts from the
+   allowlisted LOCAL records and the opt-in LIVE usage response in
+   [stage 11](../stages/11-usage.md). A plan appears only as the user-entered label, the
+   client-recorded LOCAL plan (D29) or the Codex LIVE response plan (D32), never from
+   credentials and never stored. No native client output is read.
+2. **Stage 14 account summary (D25/D26):** `status.account` reads only the email and
+   plan lines from an admitted official status run, through the exact row's parser
+   ([§Account summary](#account-summary)), shown and never stored.
+Outside these two, account identity and auth inference stay forbidden.
 SwiftUI later executes the installed CLI; no library extraction.
 
 ## Framing and compatibility

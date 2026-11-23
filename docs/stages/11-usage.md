@@ -138,7 +138,10 @@ The envelope shape is unchanged; the app binds it to the route it used.
   (all `usage`, `settings usage` and launch paths included) runs recovery under
   the lock **before** comparing `--expected-revision` or reading settings:
   registry = N → discard `.next` and journal (old settings stay valid at N);
-  registry = N+1 with a matching `.next` digest → finish steps 3–4; anything
+  registry = N+1 with a `.next` whose digest matches the journal → finish
+  steps 3–4; registry = N+1 with no `.next` and a **final** `usage.json` whose
+  digest matches the journal (crash after step 3, before step 4) → durably
+  retire the journal (remove it, fsync the directory) and continue; anything
   else → `recovery_required`, exit 1, nothing read. So LIVE consent or mode
   can never be visible at a revision it was not committed with. Fields:
   `mode`, `live.enabled`, `live.acknowledged_warning` (integer or null),
@@ -180,8 +183,10 @@ command. Each row:
 timestamp with whole seconds and `Z`. `captured_at` is **this window's own**
 observation time, non-null exactly when `used_percent` is. Windows in one row
 can come from different events (Codex buckets are recorded separately), so
-pace, `reset_since_capture` and the future-record check use the window's
-time, never the row's. `reason` is null **exactly** when both
+pace and the future-record check use the window's own `captured_at`, never
+the row's. Expiry is decided by the **read clock**: each window carries its
+own reset instant, and a window whose `resets_at` <= `generated_at` reports
+`reset_since_capture`, whatever the row or other windows show. `reason` is null **exactly** when both
 values are present; otherwise it says why:
 
 | reason | meaning (app text) |
@@ -190,7 +195,7 @@ values are present; otherwise it says why:
 | `not_reported` | a record exists but the client did not report this window |
 | `unsupported` | this source/provider never carries this field |
 | `unverified_version` | the record's client version is not in the verified table below |
-| `reset_since_capture` | the captured window has reset since (`generated_at >= resets_at`) |
+| `reset_since_capture` | this window's own `resets_at` <= the read clock `generated_at`. `resets_at` keeps that past instant; `used_percent`, `captured_at` and `pace` are null, so no stale percentage is shown (stage 14 renders "Reset due") |
 | `reset_time_unknown` | usage known, reset time not reported (`used_percent` kept) |
 | `capture_not_installed` | Claude capture is not wired (no qualified Larp launch, capture off, or unsupported OS) |
 | `invalid_record` | record malformed, out of range, oversized, unsafe path or from the future |
@@ -237,9 +242,13 @@ expiry), `not_recorded` or `unsupported`; for `none|not_recorded|unsupported`
 states it equals the state. "Resets remaining" = `count` plus optional expiry.
 Per source (validator-checked): every LOCAL row and every Claude row is
 `unsupported`/`unsupported` (no LOCAL source records reset credits). A Codex
-LIVE row is `available` or `none` from `available_count`, or `not_recorded`
-when no usable response was received; its `expires_state` is always
-`unsupported` (no second request, D29).
+LIVE row maps its count as follows (no second request, D29):
+
+| Codex LIVE `available_count` | `state` / `count` | `expires_state` / `expires_at` |
+|---|---|---|
+| integer >= 1 | `available` / N | `unsupported` / null (expiry needs another request) |
+| 0 | `none` / 0 | `none` / null (general rule) |
+| field absent or null in a usable response, or no usable response | `not_recorded` / null | `not_recorded` / null (general rule) |
 
 **Plan** (D29, D32). Precedence: the user-entered `plan_label`
 (`source:"user"`) always wins. Otherwise, in a LOCAL row, a plan the official
@@ -606,12 +615,12 @@ every fixture deleted in finally. No vendor binary or real account.
 |---|---|
 | `stage11_json` | every new example envelope byte-for-byte; ordering, framing, exit codes, empty stderr, `--expected-revision` conflict before reads, tombstone/unknown profile, `--local --live` usage error |
 | `stage11_pace` | loads `docs/contracts/usage-pace-vectors.json`; every vector exact; skew/reset/unknown cases |
-| `stage11_local_codex` | synthetic rollouts in both filename forms (`<thread>` and `<thread>_<rollout>`), malformed names skipped: 5h/weekly by `window_minutes` not position, buckets observed at different times keep their own window `captured_at` and pace (vector `extra_observed_two_hours_before_row`), no false `clock_skew`, a grammar-valid private sentinel `limit_name`/`limit_id` never appears in stdout/stderr/files or forwarded output (label `Other limit N`), LOCAL plan allowlist, `plan_type` → `client_local` plan unless a user label overrides, unknown plan value → null, non-codex bucket → extra, newest per bucket, unverified version, `.zst`/archived skipped, symlink/hardlink/outside-root/oversize/line-cap/file-cap refusal, partial line ignored, conversation sentinel strings never appear in stdout/stderr/files |
+| `stage11_local_codex` | synthetic rollouts in both filename forms (`<thread>` and `<thread>_<rollout>`), malformed names skipped: 5h/weekly by `window_minutes` not position, buckets observed at different times keep their own window `captured_at` and pace (vector `extra_observed_two_hours_before_row`), no false `clock_skew`, a row mixing an expired window (own reset before the read clock → `reset_since_capture`, no percentage) with current windows, a grammar-valid private sentinel `limit_name`/`limit_id` never appears in stdout/stderr/files or forwarded output (label `Other limit N`), LOCAL plan allowlist, `plan_type` → `client_local` plan unless a user label overrides, unknown plan value → null, non-codex bucket → extra, newest per bucket, unverified version, `.zst`/archived skipped, symlink/hardlink/outside-root/oversize/line-cap/file-cap refusal, partial line ignored, conversation sentinel strings never appear in stdout/stderr/files |
 | `stage11_statusline_check` | negative fixtures each yield refuse-at-enable and no-injection-at-launch: malformed JSON, JSON with comments or trailing comma, duplicate top-level keys, non-object top level, trailing bytes, oversize, symlink, FIFO/non-regular, unreadable file, unreadable parent, undeterminable launch dir, 65 parent levels; a `statusLine` only in a parent's `.claude/settings.local.json` blocks injection; missing files everywhere establishes absence |
 | `stage11_local_claude_hook` | hook argv/env checks, 256 KiB cap, absent `rate_limits` keeps last capture, hostile input (deep nesting, huge strings, wrong types, NaN), atomic replace under kill, empty stdout and stderr, sentinel input fields never written; render file content/quoting/manifest drift refusal; opt-in default off; `statusline_exists` on enable; existing profile/project/local statusLine (including in a parent directory) → no `--settings` injection; settings values never read or output; `capture_not_installed` while rows are empty |
-| `stage11_live_fake` | fake HTTPS server: success mapping for both providers, LIVE plan allowlist (e.g. `free_workspace` shown in LIVE only), `additional_rate_limits` with a sentinel `limit_name`/`metered_feature` → `Other limit N` with zero sentinel bytes in output, Codex `plan_type` → `live_endpoint` plan, user label override, unknown plan value → null, plan bytes absent from every file under LARPCC_HOME after the run, 401 → `sign_in_again`, 3xx not followed, proxy env ignored, oversize/slow/unknown shape → `live_unavailable`, exactly one request per profile, no retry/refresh, `live_disabled` before any credential read, budget |
+| `stage11_live_fake` | fake HTTPS server: success mapping for both providers, LIVE plan allowlist (e.g. `free_workspace` shown in LIVE only, refused as `client_local`), `available_count` ≥ 1 / 0 / absent → `available`+`unsupported` / `none`+`none` / `not_recorded`+`not_recorded`, `additional_rate_limits` with a sentinel `limit_name`/`metered_feature` → `Other limit N` with zero sentinel bytes in output, Codex `plan_type` → `live_endpoint` plan, user label override, unknown plan value → null, plan bytes absent from every file under LARPCC_HOME after the run, 401 → `sign_in_again`, 3xx not followed, proxy env ignored, oversize/slow/unknown shape → `live_unavailable`, exactly one request per profile, no retry/refresh, `live_disabled` before any credential read, budget |
 | `stage11_secrets` | fake tokens `fake-token-…` and fake account IDs appear in zero bytes of stdout, stderr, any file under LARPCC_HOME, child argv/env, panic output and error envelopes (including injected parser/TLS/IO failures) |
-| `stage11_settings` | journaled commit: kill between each write and step (`.next`, journal, registry bump, rename), then every reader sees settings exactly at the committed revision and a stale `--expected-revision` fails `conflict`; `needs_acknowledgement` after a warning bump: `settings usage` succeeds and reports it, `usage` rows `live_disabled` and `usage --live` fail with zero credential reads and zero requests; ack required on every enable, `live off` resets modes, mode/interval/capture/plan-label receipts, claude-statusline `--profile` required and Codex `unsupported`, label grammar refusals without echo, `changed:false`, registry revision bumps, pruning |
+| `stage11_settings` | journaled commit: kill between each write and step (`.next`, journal, registry bump, rename), including exactly after the rename and before journal removal (recovery retires the journal and reads the new settings at N+1, never `recovery_required`), then every reader sees settings exactly at the committed revision and a stale `--expected-revision` fails `conflict`; `needs_acknowledgement` after a warning bump: `settings usage` succeeds and reports it, `usage` rows `live_disabled` and `usage --live` fail with zero credential reads and zero requests; ack required on every enable, `live off` resets modes, mode/interval/capture/plan-label receipts, claude-statusline `--profile` required and Codex `unsupported`, label grammar refusals without echo, `changed:false`, registry revision bumps, pruning |
 | `stage11_closed` | default and `--local` make zero network connections (transport fake asserts unused); no background process or scheduler; hook binary has no network path; real hosts unreachable from tests; with `--remote-request`, `usage` is forced LOCAL even when LIVE is enabled, and `--live` and every usage mutation are `unsupported` before credential reads, requests or writes |
 
 ## Decided (D29, lead 2026-11-21; the user may veto)

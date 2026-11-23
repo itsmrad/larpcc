@@ -1356,6 +1356,15 @@
                   "runs_out_at": "2026-11-21T14:00:00Z",
                   "lasts_until_reset": true
                 }
+              },
+              {
+                "label": "Other limit 2 5h",
+                "used_percent": null,
+                "resets_at": "2026-11-21T11:00:00Z",
+                "captured_at": null,
+                "window_seconds": 18000,
+                "reason": "reset_since_capture",
+                "pace": null
               }
             ]
           },
@@ -1468,6 +1477,113 @@
             "state": "available",
             "count": 2,
             "expires_state": "unsupported",
+            "expires_at": null
+          },
+          "diagnostics": []
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "usage",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "requested_mode": "live",
+      "generated_at": "2026-11-21T12:00:05Z",
+      "profiles": [
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "live",
+          "source": "live_endpoint",
+          "captured_at": "2026-11-21T12:00:05Z",
+          "client_version": null,
+          "plan": {
+            "label": "free_workspace",
+            "source": "live_endpoint"
+          },
+          "windows": {
+            "five_hour": {
+              "used_percent": 30.0,
+              "resets_at": "2026-11-21T14:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 60.0,
+                "reserve_percent": 30.0,
+                "runs_out_at": "2026-11-21T14:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "weekly": {
+              "used_percent": 12.0,
+              "resets_at": "2026-11-24T12:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 604800,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 57.1,
+                "reserve_percent": 45.1,
+                "runs_out_at": "2026-11-24T12:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "extra": []
+          },
+          "reset_credits": {
+            "state": "none",
+            "count": 0,
+            "expires_state": "none",
+            "expires_at": null
+          },
+          "diagnostics": []
+        },
+        {
+          "profile_id": "3",
+          "name": "codex-46",
+          "provider": "codex",
+          "mode": "live",
+          "source": "live_endpoint",
+          "captured_at": "2026-11-21T12:00:05Z",
+          "client_version": null,
+          "plan": null,
+          "windows": {
+            "five_hour": {
+              "used_percent": 30.0,
+              "resets_at": "2026-11-21T14:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 60.0,
+                "reserve_percent": 30.0,
+                "runs_out_at": "2026-11-21T14:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "weekly": {
+              "used_percent": 12.0,
+              "resets_at": "2026-11-24T12:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 604800,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 57.1,
+                "reserve_percent": 45.1,
+                "runs_out_at": "2026-11-24T12:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "extra": []
+          },
+          "reset_credits": {
+            "state": "not_recorded",
+            "count": null,
+            "expires_state": "not_recorded",
             "expires_at": null
           },
           "diagnostics": []
