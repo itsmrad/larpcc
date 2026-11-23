@@ -70,7 +70,7 @@ first. Each card shows a ring of the session left, the profile name, when the
 usage was saved and its source, and one line per usage window. Each line has
 the percentage left, a bar and the reset countdown. Orange and red appear only
 below 25% and 10%. A profile without saved usage reads “No usage saved yet”.
-Click a card or press Return to show the pace, the limit reset credits, “Open
+Click a card or press Space to show the pace, the limit reset credits, “Open
 Claude.app” or “Open ChatGPT.app” (needs an enabled desktop surface and a real
 CLI configuration) and “Show in Settings”, which opens that profile’s page.
 
@@ -80,8 +80,10 @@ and Reduce Transparency use an opaque card with a hairline edge. Increase
 Contrast adds a firm border. The panel is 360 pt wide and fits its content up
 to 80% of the screen, then scrolls. The window resizes as cards expand.
 
-Use ↑/↓ to move between cards, card actions and footer rows, and Return to
-activate. Esc closes the panel, and the next click on the item opens it again.
+Use ↑/↓ to move between cards, card actions and footer rows. Return opens
+the highlighted card’s profile in Settings or activates the highlighted action.
+VoiceOver offers “Show in Settings” directly on each card. Esc closes the
+panel, and the next click on the item opens it again.
 ⌘R refreshes, even with the Settings window open; ⌘, opens Settings; and ⌘Q
 quits. Nothing is highlighted or expanded when the panel opens.
 
@@ -122,8 +124,10 @@ draws the app in its compatibility style with small window corners.
   re-read usage, including with the Settings window open and LarpCC
   frontmost. The panel must stay open.
 - **D. Keyboard and VoiceOver** Move through cards, card actions and footer
-  rows, expand with Return, and dismiss with Esc. A single click on the item
-  must reopen the panel after Esc. Check one spoken summary per card.
+  rows. Expand a card with Space. With a card highlighted, press Return and
+  confirm its profile opens in Settings, including when sidebar search was active.
+  Repeat using the card’s “Show in Settings” VoiceOver action and check one spoken
+  summary per card. After Esc, confirm one click reopens the panel.
 - **E. Settings** Close Settings, confirm the item stays, then reopen Settings
   with the footer action, ⌘, or a card’s “Show in Settings”.
 - **F. Dock** Enable Dock hiding in Settings and verify the icon disappears on

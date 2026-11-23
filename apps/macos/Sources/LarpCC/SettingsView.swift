@@ -118,6 +118,8 @@ struct SettingsView: View {
     private func showRequestedProfile() {
         guard let id = store.requestedProfileID else { return }
         store.requestedProfileID = nil
+        if let snapshot = store.snapshot, !snapshot.profiles.contains(where: { $0.id == id }) { return }
+        search = ""
         selection = .profile(id)
     }
 

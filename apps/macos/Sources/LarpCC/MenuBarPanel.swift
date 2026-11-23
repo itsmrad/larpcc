@@ -182,6 +182,11 @@ struct MenuBarPanel: View {
             if let highlighted { activate(highlighted) }
             return .handled
         }
+        .onKeyPress(.space, phases: .down) { _ in
+            guard case let .profile(id)? = highlighted else { return .ignored }
+            toggleDetails(for: id)
+            return .handled
+        }
         .onExitCommand(perform: closePanel)
         .onAppear {
             guard !isSnapshot else { return }
@@ -326,13 +331,16 @@ struct MenuBarPanel: View {
         let isExpanded = expanded == profile.id
         let report = store.usage[profile.id]
         return VStack(alignment: .leading, spacing: 0) {
-            Button { activate(item) } label: {
+            Button { toggleDetails(for: profile.id) } label: {
                 MenuBarProfileSummary(profile: profile, report: report, source: source, now: now,
                                       expanded: isExpanded)
             }
             .buttonStyle(.plain)
             .onHover { hover(item, entered: $0) }
             .accessibilityHint(isExpanded ? "Hides details" : "Shows details")
+            .accessibilityAction(named: Text("Show in Settings")) {
+                activate(.showProfile(profile.id))
+            }
             .id(item)
             if isExpanded {
                 MenuBarProfileDetail(report: report, now: now) {
@@ -427,17 +435,21 @@ struct MenuBarPanel: View {
     private func activate(_ item: Item) {
         hasKeyboardFocus = true
         switch item {
-        case let .profile(id):
-            expandedID = expandedID == id ? nil : id
+        case let .profile(id), let .showProfile(id):
+            openSettings(profileID: id)
         case let .openDesktop(id):
             guard let profile = profiles.first(where: { $0.id == id }), canOpenDesktop(profile) else { return }
             recoverAfterAction = true
             store.perform(.open(profileID: id, surface: .desktop))
-        case let .showProfile(id): openSettings(profileID: id)
         case .refresh: if canRefresh { store.menuBarRefresh() }
         case .settings: openSettings(profileID: nil)
         case .quit: NSApp.terminate(nil)
         }
+    }
+
+    private func toggleDetails(for id: String) {
+        hasKeyboardFocus = true
+        expandedID = expandedID == id ? nil : id
     }
 
     private func openSettings(profileID: String?) {
@@ -614,7 +626,7 @@ private struct MenuBarProfileSummary: View {
     }
 }
 
-/// Shown inside a card after a click or Return: pace, reset credits and actions.
+/// Shown inside a card after a click or Space: pace, reset credits and actions.
 private struct MenuBarProfileDetail<Actions: View>: View {
     let report: UsageReport?
     let now: Date
