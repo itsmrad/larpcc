@@ -126,6 +126,36 @@ pub fn bindings(
     result
 }
 
+pub fn alias(root: &std::path::Path, add: bool, data: &serde_json::Value) -> String {
+    let bin = crate::registry::display::path(&root.join("bin"));
+    if let Some(aliases) = data["aliases"].as_array() {
+        if aliases.is_empty() {
+            return "No aliases.\n".into();
+        }
+        let mut out = String::new();
+        for a in aliases {
+            let _ = writeln!(
+                out,
+                "{}\tprofile id {}\t{}\t{}\t{}",
+                a["name"].as_str().unwrap_or_default(),
+                a["profile_id"].as_str().unwrap_or_default(),
+                a["surface"].as_str().unwrap_or_default(),
+                a["state"].as_str().unwrap_or_default(),
+                a["path"].as_str().unwrap_or_default()
+            );
+        }
+        return out;
+    }
+    let name = data["name"].as_str().unwrap_or_default();
+    let id = data["profile_id"].as_str().unwrap_or_default();
+    if !add {
+        return format!("Removed alias {name} (profile id {id}).\n");
+    }
+    format!(
+        "Added alias {name} for profile id {id} in {bin}.\nLarp CC does not edit PATH or shell files. To use it, add {bin} to PATH yourself; it only shadows a same-named command when it precedes that command in PATH.\n"
+    )
+}
+
 pub(super) fn skills(data: &serde_json::Value) -> String {
     if let Some(rows) = data.get("skills").and_then(serde_json::Value::as_array) {
         if rows.is_empty() {

@@ -87,6 +87,19 @@ impl Fixture {
         }
         output
     }
+    /// Standard larp copied into a private trusted folder, so the running image passes the
+    /// executable trust policy that `alias add` applies to itself.
+    pub fn install_larp(&self) -> PathBuf {
+        let dir = self.temp.path().join("install");
+        if !dir.exists() {
+            create_directory(&dir);
+        }
+        let path = dir.join(format!("larp{}", std::env::consts::EXE_SUFFIX));
+        if !path.exists() {
+            copy_executable(Path::new(env!("CARGO_BIN_EXE_larp")), &path);
+        }
+        path
+    }
     pub fn profile(&self, args: &[&str], code: i32) -> Output {
         self.run(&[&["cc", "profile"][..], args].concat(), code)
     }
@@ -153,7 +166,21 @@ pub fn capture(mut command: Command) -> std::io::Result<Output> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    wait_output(command.spawn()?)
+    wait_output(spawn(&mut command)?)
+}
+/// Linux ETXTBSY: a sibling test thread's fork may briefly inherit the write handle of an
+/// executable this test just copied; retry instead of racing the child's exec.
+pub fn spawn(command: &mut Command) -> std::io::Result<std::process::Child> {
+    let mut attempts = 0;
+    loop {
+        match command.spawn() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 100 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
 }
 pub fn wait_output(mut child: std::process::Child) -> std::io::Result<Output> {
     use std::{
@@ -224,5 +251,55 @@ pub fn create_file(path: &Path, bytes: &[u8]) {
     {
         fs::write(path, bytes).unwrap();
         private(path, false);
+    }
+}
+/// Private owner-executable copy (Windows: protected private ACL, never inherited).
+pub fn copy_executable(from: &Path, to: &Path) {
+    create_file(to, &fs::read(from).unwrap());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(to, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
+/// Run and require an exit code; stdout/stderr discipline is asserted by the callers.
+pub fn exec(command: Command, code: i32) -> Output {
+    let output = capture(command).unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(code),
+        "stdout={}\nstderr={}",
+        stdout(&output),
+        stderr(&output)
+    );
+    output
+}
+/// Exactly one LF-terminated JSON envelope on stdout and an empty stderr.
+pub fn envelope(output: &Output) -> serde_json::Value {
+    assert!(output.stderr.is_empty(), "{}", stderr(output));
+    assert!(output.stdout.ends_with(b"\n"));
+    assert_eq!(output.stdout.iter().filter(|b| **b == b'\n').count(), 1);
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema"], 1);
+    value
+}
+impl Fixture {
+    /// JSON request through the privately installed standard larp.
+    pub fn larp_json(&self, args: &[&str], code: i32) -> serde_json::Value {
+        let larp = self.install_larp();
+        let value = envelope(&exec(self.command_for(&larp, args), code));
+        assert_eq!(value["ok"], code == 0);
+        value
+    }
+    pub fn launcher(&self, name: &str) -> PathBuf {
+        self.root
+            .join("bin")
+            .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+    }
+    pub fn alias_receipt(&self, name: &str) -> PathBuf {
+        self.root
+            .join("bin")
+            .join(format!("{name}.larp-alias.json"))
     }
 }

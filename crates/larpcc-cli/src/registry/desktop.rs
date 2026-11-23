@@ -46,6 +46,13 @@ impl Registry {
                 .iter()
                 .find(|p| &p.name == name)
                 .ok_or_else(|| Error::NotFound { name: name.clone() })?;
+            if let Some(pin) = &self.alias_pin {
+                if p.id != pin.profile_id() {
+                    return Err(Error::AdmissionChanged);
+                }
+                pin.check(self.root(), &data)
+                    .map_err(|_| Error::AdmissionChanged)?;
+            }
             if p.provider != Provider::Codex {
                 return Err(Error::QualificationPending);
             }
@@ -54,6 +61,10 @@ impl Registry {
         // Lifecycle guard precedes registry lock and survives all native effects.
         let guard = acquire_auth_guard(self.root(), id)?;
         let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        if let Some(pin) = &self.alias_pin {
+            pin.check(self.root(), &data)
+                .map_err(|_| Error::AdmissionChanged)?;
+        }
         if data.revision != revision {
             return Err(Error::AdmissionChanged);
         }
@@ -93,6 +104,13 @@ impl Registry {
         binding_path: &Path,
     ) -> Result<(), Error> {
         let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        if let Some(pin) = &self.alias_pin {
+            if snapshot.profile_id != pin.profile_id() {
+                return Err(Error::AdmissionChanged);
+            }
+            pin.check(self.root(), &data)
+                .map_err(|_| Error::AdmissionChanged)?;
+        }
         if snapshot.root.path != self.root() || data.revision != snapshot.revision {
             return Err(Error::AdmissionChanged);
         }
