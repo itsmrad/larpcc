@@ -1,5 +1,11 @@
+mod alias;
 mod json;
 mod render;
+#[allow(unused_imports, reason = "the synthetic driver has its own entrypoint")]
+pub use alias::gate;
+#[cfg(feature = "synthetic-launch")]
+#[allow(unused_imports, reason = "used by the nonpackaged synthetic driver")]
+pub(crate) use alias::gate_with_rows;
 use json::{execute_json, json_error, json_or_usage, json_success};
 
 use crate::launch::admission::{self, Operation};
@@ -106,6 +112,88 @@ enum CcAction {
         #[command(subcommand)]
         command: ProfileAction,
     },
+    /// Manage root-bound alias commands (no PATH or shell edits)
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    Alias {
+        #[command(subcommand)]
+        command: AliasCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AliasCommand {
+    /// Install a Larp copy in the data directory's bin folder that launches PROFILE
+    Add {
+        /// Alias command name (profile-name grammar; `larp` and device names are reserved)
+        #[arg(value_parser = ProfileName::parse_new)]
+        name: ProfileName,
+        /// Target profile; the alias follows its ID across renames
+        profile: ProfileName,
+        /// Open the profile's desktop app instead of running its CLI
+        #[arg(long)]
+        desktop: bool,
+        /// Required for the names claude and codex; never overwrites an existing file
+        #[arg(long)]
+        shadow: bool,
+    },
+    /// List aliases
+    List,
+    /// Remove an alias after verifying its launcher and receipt
+    Remove {
+        /// Alias name
+        name: ProfileName,
+    },
+}
+impl AliasCommand {
+    fn command(&self) -> &'static str {
+        match self {
+            Self::Add { .. } => "alias.add",
+            Self::List => "alias.list",
+            Self::Remove { .. } => "alias.remove",
+        }
+    }
+    // Usage refusals precede every registry effect.
+    fn usage(&self) -> Option<&'static str> {
+        match self {
+            Self::Add {
+                name,
+                shadow: false,
+                ..
+            } if crate::aliases::shadow_required(name) => {
+                Some("Aliases named claude or codex require --shadow.")
+            }
+            _ => None,
+        }
+    }
+    fn execute(self, r: &Registry) -> Result<serde_json::Value, Error> {
+        match self {
+            Self::Add {
+                name,
+                profile,
+                desktop,
+                shadow,
+            } => {
+                // An explicit shadow intends to precede a same-named command on PATH.
+                let search_path = if shadow {
+                    None
+                } else {
+                    std::env::var_os("PATH")
+                };
+                r.alias_add(
+                    name,
+                    &profile,
+                    if desktop {
+                        crate::registry::Surface::Desktop
+                    } else {
+                        crate::registry::Surface::Cli
+                    },
+                    search_path.as_deref(),
+                )
+            }
+            Self::List => r.alias_list(),
+            Self::Remove { name } => r.alias_remove(&name),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -366,6 +454,25 @@ pub fn run() -> ExitCode {
                 Err(error) => operational_error(error),
             };
         }
+        CcAction::Alias { command } => {
+            if let Some(message) = command.usage() {
+                return json_or_usage(false, command.command(), "usage", message);
+            }
+            let add = matches!(command, AliasCommand::Add { .. });
+            return match Registry::locate().and_then(|r| {
+                let r = r.expecting(expected);
+                command
+                    .execute(&r)
+                    .map(|data| render::alias(r.root(), add, &data))
+            }) {
+                Ok(output) => write_output(
+                    output.as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
         CcAction::Profile { command } => command,
     };
     let registry = match Registry::locate() {
@@ -450,7 +557,7 @@ fn execute(command: ProfileAction, registry: &Registry) -> Result<String, Error>
     })
 }
 
-fn operational_error(error: Error) -> ExitCode {
+pub(super) fn operational_error(error: Error) -> ExitCode {
     let mut stderr = io::stderr().lock();
     let _ = writeln!(
         stderr,

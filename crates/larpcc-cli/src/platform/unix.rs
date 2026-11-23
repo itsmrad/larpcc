@@ -80,6 +80,95 @@ fn open(path: &Path, kind: ObjectKind, write: bool) -> Result<File, Error> {
     );
     options.open(path).map_err(|e| io_error("open", path, e))
 }
+// Alias leaves are always addressed relative to the already checked directory.
+pub(crate) fn alias_open_at(
+    parent: &CheckedObject,
+    path: &Path,
+    kind: ObjectKind,
+    create: bool,
+) -> Result<Option<CheckedObject>, Error> {
+    use std::os::{
+        fd::{AsRawFd, FromRawFd},
+        unix::ffi::OsStrExt,
+    };
+    let name = std::ffi::CString::new(path.file_name().ok_or(Error::AliasInvalid)?.as_bytes())
+        .map_err(|_| Error::AliasInvalid)?;
+    let flags = libc::O_NOFOLLOW
+        | libc::O_CLOEXEC
+        | match (kind, create) {
+            (ObjectKind::Directory, _) => libc::O_DIRECTORY,
+            (ObjectKind::File, false) => libc::O_NONBLOCK,
+            (ObjectKind::File, true) => libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+        };
+    // SAFETY: live directory fd and NUL-terminated single component.
+    let fd = unsafe { libc::openat(parent.file.as_raw_fd(), name.as_ptr(), flags, 0o600) };
+    if fd < 0 {
+        let error = io::Error::last_os_error();
+        return match error.kind() {
+            io::ErrorKind::NotFound if !create => Ok(None),
+            io::ErrorKind::AlreadyExists if create => Err(Error::Conflict),
+            _ => Err(Error::AliasInvalid),
+        };
+    }
+    // SAFETY: successful openat returned a new owned fd.
+    let file = unsafe { File::from_raw_fd(fd) };
+    verify_opened(file, path, kind).map(Some)
+}
+
+pub(crate) fn alias_unlink_at(
+    bin: &CheckedObject,
+    path: &Path,
+    expected: &FileIdentity,
+) -> Result<(), Error> {
+    use std::os::{fd::AsRawFd, unix::ffi::OsStrExt};
+    let current = alias_open_at(bin, path, ObjectKind::File, false)?.ok_or(Error::AliasInvalid)?;
+    if &current.identity != expected {
+        return Err(Error::AliasInvalid);
+    }
+    single_link(&current.file)?;
+    let name = std::ffi::CString::new(path.file_name().ok_or(Error::AliasInvalid)?.as_bytes())
+        .map_err(|_| Error::AliasInvalid)?;
+    // SAFETY: the checked directory fd and single component stay live across unlinkat.
+    if unsafe { libc::unlinkat(bin.file.as_raw_fd(), name.as_ptr(), 0) } != 0 {
+        return Err(Error::AliasInvalid);
+    }
+    Ok(())
+}
+
+pub(crate) fn alias_publish_at(bin: &CheckedObject, from: &Path, to: &Path) -> Result<(), Error> {
+    use std::os::{fd::AsRawFd, unix::ffi::OsStrExt};
+    let leaf = |p: &Path| {
+        std::ffi::CString::new(p.file_name().ok_or(Error::AliasInvalid)?.as_bytes())
+            .map_err(|_| Error::AliasInvalid)
+    };
+    let from = leaf(from)?;
+    let to = leaf(to)?;
+    let fd = bin.file.as_raw_fd();
+    // SAFETY: live checked directory fd and two NUL-terminated single components.
+    #[cfg(target_os = "linux")]
+    let result =
+        unsafe { libc::renameat2(fd, from.as_ptr(), fd, to.as_ptr(), libc::RENAME_NOREPLACE) };
+    // SAFETY: live checked directory fd and two NUL-terminated single components.
+    #[cfg(target_os = "macos")]
+    let result =
+        unsafe { libc::renameatx_np(fd, from.as_ptr(), fd, to.as_ptr(), libc::RENAME_EXCL) };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let result = {
+        let _ = (fd, from, to);
+        -1
+    };
+    if result != 0 {
+        return Err(
+            if io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists {
+                Error::Conflict
+            } else {
+                Error::AliasInvalid
+            },
+        );
+    }
+    Ok(())
+}
+
 pub fn inspect(path: &Path, kind: ObjectKind) -> Result<Option<CheckedObject>, Error> {
     inspect_with(path, kind, || open(path, kind, false)).map_err(|error| error.diagnostic(path))
 }
@@ -277,7 +366,82 @@ pub fn create_directory(path: &Path) -> Result<CheckedObject, Error> {
     }
     result
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Own {
+    /// Provider bindings: the running Larp image is never a provider.
+    Reject,
+    /// Alias source only: exactly the running Larp image.
+    Require,
+}
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
+    executable_policy(path, root, Own::Reject)
+}
+// The running image, not whatever now occupies its path, defines self.
+#[cfg(target_os = "linux")]
+pub(crate) fn running_identity(path: &Path) -> Result<FileIdentity, Error> {
+    let current = fs::File::open("/proc/self/exe").map_err(|e| io_error("open", path, e))?;
+    Ok(identity(
+        &current
+            .metadata()
+            .map_err(|e| io_error("inspect", path, e))?,
+    ))
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
+    // XNU proc_regionwithpathinfo: region (including address and size), vnode stat, path.
+    #[repr(C)]
+    struct Region {
+        before_address: [u64; 10],
+        address: u64,
+        len: u64,
+        dev: u32,
+        mode: u16,
+        links: u16,
+        ino: u64,
+        remaining_vnode: [u64; 17],
+        path: [u8; libc::MAXPATHLEN as usize],
+    }
+    const PROC_PIDREGIONPATHINFO: libc::c_int = 8;
+    // SAFETY: dyld's image index zero is the main image; only use its address.
+    #[allow(
+        deprecated,
+        reason = "libc deprecates the binding, while the Darwin SDK still provides it"
+    )]
+    let address = unsafe { libc::_dyld_get_image_header(0) } as u64;
+    let mut region = std::mem::MaybeUninit::<Region>::zeroed();
+    let size = std::mem::size_of::<Region>() as libc::c_int;
+    // SAFETY: correctly aligned writable XNU ABI buffer for a query about this process.
+    let got = unsafe {
+        libc::proc_pidinfo(
+            libc::getpid(),
+            PROC_PIDREGIONPATHINFO,
+            address,
+            region.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if address == 0 || got != size {
+        return Err(Error::NamespaceUnverified);
+    }
+    // SAFETY: a successful exact-size query initialized the buffer, which contains only integers.
+    let region = unsafe { region.assume_init() };
+    if address < region.address
+        || address - region.address >= region.len
+        || region.ino == 0
+        || region.mode & libc::S_IFMT != libc::S_IFREG
+    {
+        return Err(Error::NamespaceUnverified);
+    }
+    Ok(FileIdentity::Unix {
+        dev: region.dev as i32 as u64,
+        ino: region.ino,
+    })
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
+    Err(Error::NamespaceUnverified)
+}
+fn executable_policy(path: &Path, root: &Path, own: Own) -> Result<(PathBuf, FileIdentity), Error> {
     let invalid = |reason: &str| unsafe_path(path, reason);
     let mut handles = Vec::new();
     let resolved = resolve(path, &mut 0, &mut handles)?;
@@ -322,16 +486,12 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
     if count != 4 || !native {
         return Err(invalid("is not a native executable"));
     }
-    let current =
-        fs::File::open(std::env::current_exe().map_err(|e| io_error("inspect", path, e))?)
-            .map_err(|e| io_error("open", path, e))?;
-    if identity(
-        &current
-            .metadata()
-            .map_err(|e| io_error("inspect", path, e))?,
-    ) == identity(&opened)
-    {
+    let own_image = running_identity(path)? == identity(&opened);
+    if own == Own::Reject && own_image {
         return Err(invalid("is Larp CC itself"));
+    }
+    if own == Own::Require && !own_image {
+        return Err(invalid("is not the running Larp CC executable"));
     }
     Ok((resolved, identity(&opened)))
 }
@@ -458,7 +618,21 @@ pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error> {
 }
 
 pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
-    let (resolved, expected) = executable(path, root)?;
+    open_artifact_policy(path, root, Own::Reject)
+}
+/// Alias source: the same trusted executable pipeline, accepting only the running Larp image.
+pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, PathBuf), Error> {
+    let path = std::env::current_exe().map_err(|e| io_error("inspect", root, e))?;
+    let path = fs::canonicalize(&path).map_err(|e| io_error("resolve", &path, e))?;
+    let (file, identity) =
+        open_artifact_policy(&path, root, Own::Require).map_err(|error| match error {
+            Error::NamespaceUnverified => Error::AliasImageUnverified,
+            error => error,
+        })?;
+    Ok((file, identity, path))
+}
+fn open_artifact_policy(path: &Path, root: &Path, own: Own) -> Result<(File, FileIdentity), Error> {
+    let (resolved, expected) = executable_policy(path, root, own)?;
     let file = open(&resolved, ObjectKind::File, false)?;
     let meta = file.metadata().map_err(|e| io_error("inspect", path, e))?;
     trusted(&resolved, &meta)?;

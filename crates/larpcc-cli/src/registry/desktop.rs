@@ -46,6 +46,13 @@ impl Registry {
                 .iter()
                 .find(|p| &p.name == name)
                 .ok_or_else(|| Error::NotFound { name: name.clone() })?;
+            if let Some(pin) = &self.alias_pin {
+                if p.id != pin.profile_id() {
+                    return Err(Error::AdmissionChanged);
+                }
+                pin.check(self.root(), &data)
+                    .map_err(|_| Error::AdmissionChanged)?;
+            }
             if p.provider != Provider::Codex {
                 return Err(Error::QualificationPending);
             }
@@ -56,6 +63,10 @@ impl Registry {
         let (mut data, _lock) = store::snapshot(self.root(), self.expected)?;
         if _lock.is_none() {
             return Err(Error::AdmissionChanged);
+        }
+        if let Some(pin) = &self.alias_pin {
+            pin.check(self.root(), &data)
+                .map_err(|_| Error::AdmissionChanged)?;
         }
         if data.revision != revision {
             return Err(Error::AdmissionChanged);
@@ -109,6 +120,13 @@ impl Registry {
         binding_path: &Path,
     ) -> Result<(), Error> {
         let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        if let Some(pin) = &self.alias_pin {
+            if snapshot.profile_id != pin.profile_id() {
+                return Err(Error::AdmissionChanged);
+            }
+            pin.check(self.root(), &data)
+                .map_err(|_| Error::AdmissionChanged)?;
+        }
         if snapshot.root.path != self.root() || data.revision != snapshot.revision {
             return Err(Error::AdmissionChanged);
         }
@@ -180,6 +198,7 @@ impl Registry {
         name: &ProfileName,
         json: bool,
     ) -> Result<desktop::DesktopReceipt, Error> {
+        desktop::open_preflight()?;
         let (snapshot, app, _guard) = self.desktop_target(name)?;
         let target = desktop::ValidatedDesktopTarget::from_checked(snapshot, app)?;
         if let desktop::Activity::Unknown(_) = desktop::activity_for(&target) {

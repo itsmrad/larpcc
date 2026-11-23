@@ -1,3 +1,5 @@
+mod alias;
+pub(crate) use alias::AliasPin;
 mod desktop;
 pub mod display;
 mod error;
@@ -21,11 +23,17 @@ use std::path::{Path, PathBuf};
 pub struct Registry {
     root: PathBuf,
     expected: Option<u64>,
+    pub(crate) alias_pin: Option<AliasPin>,
     observed: std::cell::Cell<Option<u64>>,
 }
 impl Registry {
     pub fn expecting(mut self, revision: Option<u64>) -> Self {
         self.expected = revision;
+        self
+    }
+    pub(crate) fn pin_alias(mut self, pin: AliasPin) -> Self {
+        self.expected = Some(pin.revision);
+        self.alias_pin = Some(pin);
         self
     }
     pub fn surface(
@@ -103,6 +111,15 @@ impl Registry {
             .find(|p| &p.name == name)
             .cloned()
             .ok_or_else(|| Error::NotFound { name: name.clone() })?;
+        if let Some(pin) = &self.alias_pin {
+            if profile.id != pin.profile_id() {
+                return Err(Error::AdmissionChanged);
+            }
+            held.extend(
+                pin.check(self.root(), &data)
+                    .map_err(|_| Error::AdmissionChanged)?,
+            );
+        }
         if !candidate(profile.provider) {
             return Err(Error::QualificationPending);
         }
@@ -180,6 +197,7 @@ impl Registry {
         Ok(Self {
             root: root.components().collect(),
             expected: None,
+            alias_pin: None,
             observed: std::cell::Cell::new(None),
         })
     }

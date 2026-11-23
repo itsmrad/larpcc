@@ -38,8 +38,8 @@ Open rechecks that identity and uses the cached verdict; a mismatch triggers a
 fresh full validation. Normal cached admission targets the two-second budget;
 signature revalidation after an identity change may take longer.
 
-This amendment supersedes the earlier desktop-only closed-table requirement and
-restores D4 warn-and-launch for local macOS dispatch. CLI native qualification
+This amendment superseded the earlier desktop-only closed-table requirement and
+previously restored D4 warn-and-launch for local macOS dispatch. CLI native qualification
 ROWS remain empty: no CLI provider execution or account operation is authorized.
 Before the dispatch pause above, ordinary `app open` was enabled only for unmodified `/Applications/ChatGPT.app`
 with strict, all-architecture signature validation against identifier
@@ -90,6 +90,6 @@ strings/output, safe cleanup. Native app qualification is a distinct later
 finite authorization sheet: both launch orders, simultaneous windows, identity/
 history, callbacks, refresh/logout, restart/update, keychain denial, singleton
 focus, CLI↔desktop auth effects and no global writes. Unfilled account/isolation combinations remain unqualified; local desktop
-dispatch is the explicitly authorized exception above. Signed-out test app data only as RULES authorizes, fresh throwaway
+dispatch was the explicitly authorized exception above, now paused pending attribution. Signed-out test app data only as RULES authorizes, fresh throwaway
 homes, quit and delete all fixtures. Real-account work remains unauthorized.
 Windows desktop is later proof, Linux has no claimed official desktop support.
