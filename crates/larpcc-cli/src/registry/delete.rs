@@ -415,7 +415,7 @@ fn quiet(root: &Path, data: &store::Data, profile: &Profile, partial: bool) -> R
         use crate::desktop::{
             self, Activity, CheckedDirectory, CheckedSnapshot, ValidatedDesktopTarget,
         };
-        let directory = |path| {
+        let directory = |path: std::path::PathBuf| {
             let ancestry = platform::anchor(&path)?;
             let object = platform::inspect(&path, ObjectKind::Directory)?.ok_or(Error::AuthBusy)?;
             Ok::<_, Error>(CheckedDirectory {
