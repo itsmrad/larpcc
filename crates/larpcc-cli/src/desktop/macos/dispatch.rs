@@ -324,9 +324,7 @@ fn environment_names() -> Result<Vec<std::ffi::OsString>, Error> {
             if !complete || name.is_empty() {
                 return Err(Error::AdmissionChanged);
             }
-            if crate::desktop::provider_environment_name(&name) {
-                names.push(std::ffi::OsString::from_vec(name));
-            }
+            names.push(std::ffi::OsString::from_vec(name));
         }
     }
     Err(Error::AdmissionChanged)
@@ -336,14 +334,10 @@ fn launch(
     deadline: Instant,
     revalidate: &mut impl FnMut() -> Result<(), Error>,
 ) -> Result<(), Error> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     require_open_environment()?;
     let names = environment_names()?;
-    let mut command = Command::new("/usr/bin/open");
-    command.args(crate::desktop::open_arguments(target)?);
-    for name in names {
-        command.env_remove(name);
-    }
+    let mut command = crate::desktop::open_command(crate::desktop::open_arguments(target)?, names);
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
