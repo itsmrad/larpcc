@@ -147,6 +147,7 @@ struct MenuBarSettingsSection: View {
 #if DEBUG
 /// `--menubar-panel-snapshot=<abs path.png>`: renders the panel with sample data at 2x and exits.
 /// `--menubar-panel-expanded=<profile id>` opens that profile's details.
+/// `--menubar-panel-selected=<profile id>` draws that card selected.
 /// `--menubar-panel-accessibility` renders with Increase Contrast and Reduce Transparency.
 /// Debug builds only; sample data only. It never runs larp or reads usage from anywhere else.
 enum MenuBarSnapshot {
@@ -154,12 +155,25 @@ enum MenuBarSnapshot {
     private static let expandedPrefix = "--menubar-panel-expanded="
 
     static func runIfRequested() {
+        // `--menubar-open`: clicks this app's own status item after launch, for live checks
+        // when the item sits under the camera housing and cannot be clicked.
+        if CommandLine.arguments.contains("--menubar-open") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                func button(in view: NSView?) -> NSStatusBarButton? {
+                    guard let view else { return nil }
+                    return view as? NSStatusBarButton ?? view.subviews.lazy.compactMap { button(in: $0) }.first
+                }
+                NSApp.windows.lazy.compactMap { button(in: $0.contentView) }.first?.performClick(nil)
+            }
+        }
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) }) else { return }
         let path = String(arg.dropFirst(prefix.count))
         guard path.hasPrefix("/"), path.lowercased().hasSuffix(".png") else { exit(2) }
-        let expanded = CommandLine.arguments.first { $0.hasPrefix(expandedPrefix) }
-            .map { String($0.dropFirst(expandedPrefix.count)) }
-        Task { @MainActor in exit(await render(to: path, expanded: expanded) ? 0 : 1) }
+        func value(_ prefix: String) -> String? {
+            CommandLine.arguments.first { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+        }
+        let expanded = value(expandedPrefix), selected = value("--menubar-panel-selected=")
+        Task { @MainActor in exit(await render(to: path, expanded: expanded, selected: selected) ? 0 : 1) }
     }
 
     /// `--menubar-status-snapshot=<abs path.png>`: the status item on a light and a dark bar.
@@ -184,7 +198,7 @@ enum MenuBarSnapshot {
         return (try? png.write(to: URL(fileURLWithPath: path))) != nil
     }
 
-    @MainActor private static func render(to path: String, expanded: String?) async -> Bool {
+    @MainActor private static func render(to path: String, expanded: String?, selected: String?) async -> Bool {
         let store = AppStore(client: FixtureLarpClient())
         guard store.isFixture else { return false }
         // Local usage follows the metadata refresh; Live (sample) usage is read once here.
@@ -201,7 +215,8 @@ enum MenuBarSnapshot {
         default: dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         }
         let accessible = CommandLine.arguments.contains("--menubar-panel-accessibility")
-        let renderer = ImageRenderer(content: MenuBarPanel(store: store, isSnapshot: true, snapshotExpandedID: expanded)
+        let renderer = ImageRenderer(content: MenuBarPanel(store: store, isSnapshot: true, snapshotExpandedID: expanded,
+                                                            snapshotSelectedID: selected)
             .environment(\.colorScheme, dark ? .dark : .light)
             .environment(\._colorSchemeContrast, accessible ? .increased : .standard)
             .environment(\._accessibilityReduceTransparency, accessible))

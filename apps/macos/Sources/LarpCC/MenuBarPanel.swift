@@ -69,8 +69,10 @@ private struct StatusRing: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(.black.opacity(0.28), lineWidth: 1.6)
+            // Inset by half the stroke so the ring is not clipped at the image edge.
+            Circle().inset(by: 0.8).stroke(.black.opacity(0.28), lineWidth: 1.6)
             Circle()
+                .inset(by: 0.8)
                 .trim(from: 0, to: left / 100)
                 .stroke(.black, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
                 .rotationEffect(.degrees(-90))
@@ -98,17 +100,24 @@ struct MenuBarPanel: View {
     /// Offscreen render for the debug snapshot hook: no scrolling, no focus.
     var isSnapshot = false
     var snapshotExpandedID: String? = nil
+    var snapshotSelectedID: String? = nil
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
     @AppStorage(UsagePreferences.consentKey) private var consented = false
     @FocusState private var hasKeyboardFocus: Bool
-    @State private var keyboardItem: Item?
-    @State private var hoveredItem: Item?
+    /// One selection for mouse and keyboard. Leaving a row keeps it, so Return still acts on it.
+    @State private var selection: Item?
     @State private var expandedID: String?
     @State private var listHeight: CGFloat = 0
+    @State private var headerHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
     @State private var panelHeight: CGFloat = 0
+    /// The visible height of the screen the panel window is on, once the window exists.
+    @State private var screenHeight: CGFloat?
+    /// The panel's own fixed feedback. Shared notices (`store.message`) stay in Settings.
+    @State private var launchFeedback: String?
     @State private var recoverAfterAction = false
 
     private enum Item: Hashable {
@@ -140,17 +149,20 @@ struct MenuBarPanel: View {
     /// Glass needs a live window; the offscreen snapshot and Reduce Transparency use opaque cards.
     private var glass: Bool { !isSnapshot && !reduceTransparency }
     private var highlighted: Item? {
-        let candidate = hoveredItem ?? keyboardItem
-        return candidate.flatMap { items.contains($0) ? $0 : nil }
+        let item = isSnapshot ? snapshotSelectedID.map(Item.profile) : selection
+        return item.flatMap { items.contains($0) ? $0 : nil }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            notices
+            VStack(spacing: 0) {
+                header
+                notices
+            }
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { headerHeight = $0 }
             VStack(spacing: PanelMetrics.inset) {
                 list
-                footer
+                footer.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
             }
             .padding([.horizontal, .bottom], PanelMetrics.inset)
         }
@@ -162,7 +174,9 @@ struct MenuBarPanel: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background(panelBackground)
         .background {
-            if !isSnapshot { MenuBarWindowSizer(height: panelHeight) }
+            if !isSnapshot {
+                MenuBarWindowSizer(height: min(panelHeight, maxPanelHeight)) { if screenHeight != $0 { screenHeight = $0 } }
+            }
         }
         .background {
             // ⌘R always lands here, even while Refresh is disabled, so it never
@@ -190,12 +204,19 @@ struct MenuBarPanel: View {
         .onExitCommand(perform: closePanel)
         .onAppear {
             guard !isSnapshot else { return }
-            // Like a menu, every opening starts with nothing highlighted or expanded.
-            hoveredItem = nil
-            keyboardItem = nil
+            // Like a menu, every opening starts with nothing selected or expanded.
+            selection = nil
             expandedID = nil
+            launchFeedback = nil
             hasKeyboardFocus = true
             store.menuBarPanelOpened()
+        }
+        // A selection or an open card whose row has gone (list emptied, profile switched off) is dropped.
+        .onChange(of: items) { _, items in
+            if let selection, !items.contains(selection) { self.selection = nil }
+        }
+        .onChange(of: profiles.map(\.id)) { _, ids in
+            if let expandedID, !ids.contains(expandedID) { self.expandedID = nil }
         }
         .onChange(of: store.busy) { _, busy in
             guard !busy, recoverAfterAction else { return }
@@ -238,8 +259,8 @@ struct MenuBarPanel: View {
         if let error = store.usageError {
             notice(error, symbol: "exclamationmark.triangle.fill")
         }
-        if let message = store.message, !isSnapshot {
-            notice(message, symbol: "info.circle", dismiss: { store.message = nil })
+        if let launchFeedback, !isSnapshot {
+            notice(launchFeedback, symbol: "exclamationmark.triangle.fill", dismiss: { self.launchFeedback = nil })
         }
     }
 
@@ -262,33 +283,47 @@ struct MenuBarPanel: View {
 
     // MARK: Profiles
 
-    /// Fits its content; scrolls only past ~80% of the screen. The list is laid out
-    /// at its natural height first, so it can never collapse to a sliver.
+    /// Fits its content; scrolls only past 80% of the screen. The list is laid out at its
+    /// natural height (never a sliver), and even the first layout is clipped to the limit.
     @ViewBuilder
     private var list: some View {
         let content = profileList
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { listHeight = $0 }
-        if isSnapshot || listHeight <= maxListHeight {
+        if isSnapshot {
             content
+        } else if listHeight <= maxListHeight {
+            content.frame(maxHeight: maxListHeight, alignment: .top).clipped()
         } else {
             ScrollViewReader { proxy in
                 ScrollView { content }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(height: maxListHeight)
                     .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous))
-                    .onChange(of: keyboardItem) { _, item in
+                    .onChange(of: selection) { _, item in
                         if let item { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(item) } }
                     }
             }
         }
     }
 
-    private var maxListHeight: CGFloat {
+    /// 80% of the visible height of the panel's screen: the window's own screen once it
+    /// exists, before that the screen under the pointer that opened it.
+    private var maxPanelHeight: CGFloat {
+        #if DEBUG
+        // `--menubar-screen-height=<pt>` stands in for a short display when checking overflow.
+        if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--menubar-screen-height=") }),
+           let value = Double(arg.dropFirst("--menubar-screen-height=".count)) {
+            return value * 0.8
+        }
+        #endif
         let pointerScreen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-        let screen = NSApp.keyWindow?.screen ?? pointerScreen ?? NSScreen.main
-        // 80% of the screen, less the header and the footer card.
-        return max(160, (screen?.visibleFrame.height ?? 800) * 0.8 - 160)
+        return (screenHeight ?? pointerScreen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 800) * 0.8
+    }
+
+    /// What is left for the cards once the measured header, notices and footer are placed.
+    private var maxListHeight: CGFloat {
+        max(120, maxPanelHeight - headerHeight - footerHeight - 2 * PanelMetrics.inset)
     }
 
     /// One card per profile, grouped under provider labels.
@@ -413,22 +448,14 @@ struct MenuBarPanel: View {
     // MARK: Actions
 
     private func hover(_ item: Item, entered: Bool) {
-        guard !isSnapshot else { return }
-        if entered {
-            guard items.contains(item) else { return }
-            hoveredItem = item
-            keyboardItem = item
-        } else if hoveredItem == item {
-            hoveredItem = nil
-            keyboardItem = nil
-        }
+        guard !isSnapshot, entered, items.contains(item) else { return }
+        selection = item
     }
 
     private func moveHighlight(by step: Int) -> KeyPress.Result {
         let items = items
         let index = highlighted.flatMap { items.firstIndex(of: $0) } ?? (step > 0 ? -1 : items.count)
-        hoveredItem = nil
-        keyboardItem = items[min(max(index + step, 0), items.count - 1)]
+        selection = items[min(max(index + step, 0), items.count - 1)]
         return .handled
     }
 
@@ -440,7 +467,10 @@ struct MenuBarPanel: View {
         case let .openDesktop(id):
             guard let profile = profiles.first(where: { $0.id == id }), canOpenDesktop(profile) else { return }
             recoverAfterAction = true
-            store.perform(.open(profileID: id, surface: .desktop))
+            launchFeedback = nil
+            store.perform(.open(profileID: id, surface: .desktop)) { error in
+                if error != nil { launchFeedback = "Couldn’t open \(profile.provider.desktopApp)." }
+            }
         case .refresh: if canRefresh { store.menuBarRefresh() }
         case .settings: openSettings(profileID: nil)
         case .quit: NSApp.terminate(nil)
@@ -470,13 +500,17 @@ struct MenuBarPanel: View {
 
 private struct MenuBarWindowSizer: NSViewRepresentable {
     let height: CGFloat
+    /// Reports the visible height of the window's own screen.
+    let onScreen: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> NSView { NSView() }
 
     func updateNSView(_ view: NSView, context: Context) {
-        let height = height
+        let height = height, onScreen = onScreen
         DispatchQueue.main.async {
-            guard height > 0, let window = view.window, abs(window.frame.height - height) > 0.5 else { return }
+            guard let window = view.window else { return }
+            if let screen = window.screen { onScreen(screen.visibleFrame.height) }
+            guard height > 0, abs(window.frame.height - height) > 0.5 else { return }
             var frame = window.frame
             frame.origin.y += frame.height - height
             frame.size.height = height
@@ -502,11 +536,19 @@ private struct PanelCard: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
+        let strong = contrast == .increased
         let card = content
-            .background(shape.fill(cardLift))
-            .background(shape.fill(Color.primary.opacity(highlighted ? 0.07 : 0)))
+            .background {
+                ZStack {
+                    shape.fill(cardLift)
+                    // The selection sits above the fill, so it also shows on opaque cards.
+                    if highlighted { shape.fill(Color.primary.opacity(0.08)) }
+                }
+            }
             .overlay {
-                if contrast == .increased {
+                if highlighted {
+                    shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : 0.3), lineWidth: strong ? 2 : 1)
+                } else if strong {
                     shape.strokeBorder(Color.primary.opacity(0.5), lineWidth: 1)
                 }
             }
@@ -572,6 +614,10 @@ private struct MenuBarProfileSummary: View {
                 }
                 .font(.system(size: 11))
             }
+            // Reset credits always show, whatever else the card has.
+            Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -585,6 +631,9 @@ private struct MenuBarProfileSummary: View {
         guard let report else { return source == .local ? "No usage saved yet" : "Not refreshed yet" }
         if kinds.isEmpty { return "No limits reported" }
         let sourceTitle = report.source.title
+        if kinds.contains(where: { kind in kind.window(in: report).map { UsagePace.isOutOfDate($0, now: now) } ?? false }) {
+            return "\(UsagePace.outOfDate) · \(sourceTitle)"
+        }
         guard let captured = report.capturedAt else { return sourceTitle }
         let age = now.timeIntervalSince(captured)
         if age < 60 { return "Updated just now · \(sourceTitle)" }
@@ -601,7 +650,7 @@ private struct MenuBarProfileSummary: View {
                 .foregroundStyle(level.tint ?? .primary)
                 .frame(width: 32, alignment: .trailing)
             // Fixed widths keep every card's meter the same length.
-            Label(resetText(window), systemImage: "arrow.clockwise")
+            Label(resetText(window), systemImage: "clock")
                 .labelStyle(ResetLabelStyle())
                 .foregroundStyle(.secondary)
                 .frame(width: 58, alignment: .trailing)
@@ -609,24 +658,26 @@ private struct MenuBarProfileSummary: View {
         .monospacedDigit()
     }
 
+    /// Time to reset; a dash when unknown or already past (the subtitle then says the data is out of date).
     private func resetText(_ window: UsageWindow) -> String {
-        guard let resetsAt = window.resetsAt else { return "—" }
-        let left = resetsAt.timeIntervalSince(now)
-        return left > 0 ? UsageSpan.compact(left) : "now"
+        guard let left = window.resetsAt?.timeIntervalSince(now), left > 0 else { return "—" }
+        return UsageSpan.compact(left)
     }
 
     private var spokenSummary: String {
         var parts = [profile.name, profile.provider.title, subtitle]
         for kind in kinds {
             if let window = kind.window(in: report) {
-                parts.append(MenuBarSummary.spokenRow(kind: kind, window: window, now: now))
+                parts.append(MenuBarSummary.spokenRow(kind: kind, window: window,
+                                                      capturedAt: report?.capturedAt, now: now))
             }
         }
+        parts.append(ResetAvailability.text(credits: report?.resetCredits))
         return parts.joined(separator: ", ")
     }
 }
 
-/// Shown inside a card after a click or Space: pace, reset credits and actions.
+/// Shown inside a card after a click or Space: pace and actions.
 private struct MenuBarProfileDetail<Actions: View>: View {
     let report: UsageReport?
     let now: Date
@@ -635,18 +686,24 @@ private struct MenuBarProfileDetail<Actions: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
-                ForEach(UsageWindowKind.allCases, id: \.self) { kind in
-                    if let window = kind.window(in: report), let pace = UsagePace.text(window, kind: kind, now: now) {
-                        line("\(kind.title) pace", pace)
-                    }
+            if !paces.isEmpty {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
+                    ForEach(paces, id: \.kind) { line("\($0.kind.title) pace", $0.text) }
                 }
-                line("Limit resets", ResetAvailability.text(credits: report?.resetCredits))
+                .font(.system(size: 11))
             }
-            .font(.system(size: 11))
             HStack(spacing: 6) { actions() }
         }
         .padding([.horizontal, .bottom], 12)
+    }
+
+    /// Pace as of the sample's capture time.
+    private var paces: [(kind: UsageWindowKind, text: String)] {
+        UsageWindowKind.allCases.compactMap { kind in
+            kind.window(in: report)
+                .flatMap { UsagePace.text($0, kind: kind, capturedAt: report?.capturedAt, now: now) }
+                .map { (kind, $0) }
+        }
     }
 
     private func line(_ label: String, _ value: String) -> some View {

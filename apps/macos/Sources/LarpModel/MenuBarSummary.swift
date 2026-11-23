@@ -73,13 +73,8 @@ public enum UsageSpan {
     }
 }
 
-/// "Resets in 2h 13m" / "Resetting now" / "Reset time unknown".
+/// "resets in 2 hours 13 minutes" / "resetting now" / "reset time unknown", for VoiceOver.
 public enum ResetCountdown {
-    public static func text(resetsAt: Date?, now: Date) -> String {
-        guard let resetsAt else { return "Reset time unknown" }
-        let left = resetsAt.timeIntervalSince(now)
-        return left > 0 ? "Resets in \(UsageSpan.compact(left))" : "Resetting now"
-    }
     public static func spoken(resetsAt: Date?, now: Date) -> String {
         guard let resetsAt else { return "reset time unknown" }
         let left = resetsAt.timeIntervalSince(now)
@@ -91,16 +86,20 @@ public enum ResetCountdown {
 public enum UsagePace {
     /// Percentage points of slack on either side of even pace.
     public static let margin = 5.0
+    public static let outOfDate = "Out of date — refresh"
 
-    /// Percent left on an even pace, or nil when the reset time is unknown.
-    public static func expectedLeftPercent(resetsAt: Date?, length: TimeInterval, now: Date) -> Double? {
-        guard let resetsAt, length > 0 else { return nil }
-        return min(100, max(0, resetsAt.timeIntervalSince(now) / length * 100))
+    /// True once the window's reset time has passed: the saved numbers describe a window that has ended.
+    public static func isOutOfDate(_ window: UsageWindow, now: Date) -> Bool {
+        window.resetsAt.map { $0 <= now } ?? false
     }
 
-    /// Compares quota left with time left and projects exhaustion at the current average rate.
-    public static func text(_ window: UsageWindow, kind: UsageWindowKind, now: Date, spoken: Bool = false) -> String? {
-        guard let remaining = window.resetsAt?.timeIntervalSince(now),
+    /// Compares quota left with time left and projects exhaustion at the average rate, as of the
+    /// moment the sample was taken (`capturedAt`), so an older sample never drifts. After the reset
+    /// time has passed the estimate is out of date.
+    public static func text(_ window: UsageWindow, kind: UsageWindowKind, capturedAt: Date?, now: Date,
+                            spoken: Bool = false) -> String? {
+        if isOutOfDate(window, now: now) { return spoken ? "out of date, refresh" : outOfDate }
+        guard let remaining = window.resetsAt?.timeIntervalSince(capturedAt ?? now),
               remaining > 0, remaining < kind.length else { return nil }
         let elapsed = kind.length - remaining
         let left = window.leftPercent
@@ -177,11 +176,15 @@ public enum MenuBarSummary {
 
     /// VoiceOver text for one window row, e.g.
     /// "5-hour window, 62 percent left, resets in 2 hours 13 minutes, low".
-    public static func spokenRow(kind: UsageWindowKind, window: UsageWindow, now: Date) -> String {
-        var parts = ["\(kind.title) window", "\(Int(window.leftPercent.rounded())) percent left",
-                     ResetCountdown.spoken(resetsAt: window.resetsAt, now: now)]
+    public static func spokenRow(kind: UsageWindowKind, window: UsageWindow, capturedAt: Date?, now: Date) -> String {
+        var parts = ["\(kind.title) window", "\(Int(window.leftPercent.rounded())) percent left"]
+        if !UsagePace.isOutOfDate(window, now: now) {
+            parts.append(ResetCountdown.spoken(resetsAt: window.resetsAt, now: now))
+        }
         if let word = UsageLevel(leftPercent: window.leftPercent).word { parts.append(word.lowercased()) }
-        if let pace = UsagePace.text(window, kind: kind, now: now, spoken: true) { parts.append(pace) }
+        if let pace = UsagePace.text(window, kind: kind, capturedAt: capturedAt, now: now, spoken: true) {
+            parts.append(pace)
+        }
         return parts.joined(separator: ", ")
     }
 }

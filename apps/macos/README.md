@@ -70,20 +70,34 @@ first. Each card shows a ring of the session left, the profile name, when the
 usage was saved and its source, and one line per usage window. Each line has
 the percentage left, a bar and the reset countdown. Orange and red appear only
 below 25% and 10%. A profile without saved usage reads “No usage saved yet”.
-Click a card or press Space to show the pace, the limit reset credits, “Open
-Claude.app” or “Open ChatGPT.app” (needs an enabled desktop surface and a real
-CLI configuration) and “Show in Settings”, which opens that profile’s page.
+Every card always shows the limit reset credits (“2 resets available”, “No
+resets available” or “Reset info not available”), and VoiceOver reads them.
+Click a card or press Space to show the pace, “Open Claude.app” or “Open
+ChatGPT.app” (needs an enabled desktop surface and a real CLI configuration)
+and “Show in Settings”, which opens that profile’s page once metadata is
+loaded and drops the request if the profile is gone.
+
+Pace is worked out at the moment the usage was saved, so an older sample
+never drifts. Once a window’s reset time has passed, the card says “Out of
+date — refresh” and the pace line does too. The panel shows only its own
+feedback (a failed desktop launch reads “Couldn’t open Claude.app.”) and the
+usage error. Other notices stay in the Settings window.
 
 On macOS 26 the cards are Liquid Glass. They sit 8 pt inside the panel with
 8 pt corners, concentric with the 16 pt panel corners. Earlier macOS versions
 and Reduce Transparency use an opaque card with a hairline edge. Increase
 Contrast adds a firm border. The panel is 360 pt wide and fits its content up
-to 80% of the screen, then scrolls. The window resizes as cards expand.
+to 80% of the visible height of its own screen, then the cards scroll. The
+header, notices and footer are measured, and even the first layout is held to
+that height. The window resizes as cards expand.
 
 Use ↑/↓ to move between cards, card actions and footer rows. Return opens
 the highlighted card’s profile in Settings or activates the highlighted action.
-VoiceOver offers “Show in Settings” directly on each card. Esc closes the
-panel, and the next click on the item opens it again.
+VoiceOver offers “Show in Settings” directly on each card. Mouse and keyboard
+share one selection. It stays when the pointer leaves a row, so Return still
+acts on it, and it clears when its row goes away. The selection draws above
+the card fill, so it shows on opaque cards too. Esc closes the panel, and the
+next click on the item opens it again.
 ⌘R refreshes, even with the Settings window open; ⌘, opens Settings; and ⌘Q
 quits. Nothing is highlighted or expanded when the panel opens.
 
@@ -102,9 +116,12 @@ swift run LarpCC --menubar-panel-snapshot=/abs/path.png --appearance=dark \
 ```
 
 `--menubar-panel-expanded=<profile id>` opens one card,
+`--menubar-panel-selected=<profile id>` draws one card selected,
 `--menubar-status-snapshot` also writes the status item on a light and a dark
 bar, and `--menubar-panel-accessibility` renders with Increase Contrast and
-Reduce Transparency. Snapshots draw opaque cards because glass needs a live
+Reduce Transparency. For live debug runs, `--menubar-open` opens the panel
+after launch (useful when the item sits under the camera housing) and
+`--menubar-screen-height=<pt>` stands in for a short display. Snapshots draw opaque cards because glass needs a live
 window. Release builds exclude the snapshot hook. Capture the live panel there
 with `screencapture -x -o -l <windowID>`. Link debug builds the way
 `scripts/bundle.sh` does (`-Xlinker -platform_version …`); otherwise macOS
@@ -116,18 +133,21 @@ draws the app in its compatibility style with small window corners.
   mode, then verify the per-provider pickers, one-provider layout and Icon
   only. Check the item against both light and dark menu bars.
 - **B. Panel** Check all four sample cards. Confirm the colour only on low
-  limits, the card with no saved usage, and that the bars line up across
-  cards. Expand each card. Confirm reserve, deficit and on-pace, all three
-  reset-credit states, the disabled sample desktop action, and that the window
-  grows and shrinks with the card. Check overflow on a small screen.
+  limits, the card with no saved usage, all three reset-credit states on the
+  collapsed cards, and that the bars line up across cards. Expand each card.
+  Confirm reserve, deficit and on-pace, the disabled sample desktop action,
+  and that the window grows and shrinks with the card. Check overflow with
+  `--menubar-screen-height=500` and on a small screen.
 - **C. Refresh** Reopen in Local mode and check the update age. Use ⌘R to
   re-read usage, including with the Settings window open and LarpCC
   frontmost. The panel must stay open.
 - **D. Keyboard and VoiceOver** Move through cards, card actions and footer
   rows. Expand a card with Space. With a card highlighted, press Return and
   confirm its profile opens in Settings, including when sidebar search was active.
-  Repeat using the card’s “Show in Settings” VoiceOver action and check one spoken
-  summary per card. After Esc, confirm one click reopens the panel.
+  Hover a card, move into the gutter and press Return: the hovered card’s
+  profile opens. Repeat using the card’s “Show in Settings” VoiceOver action and
+  check one spoken summary per card, including its reset credits. After Esc,
+  confirm one click reopens the panel.
 - **E. Settings** Close Settings, confirm the item stays, then reopen Settings
   with the footer action, ⌘, or a card’s “Show in Settings”.
 - **F. Dock** Enable Dock hiding in Settings and verify the icon disappears on

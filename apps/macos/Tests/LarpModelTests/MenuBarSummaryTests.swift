@@ -86,23 +86,16 @@ final class MenuBarSummaryTests: XCTestCase {
         XCTAssertEqual(ResetAvailability.text(credits: usage["4"]?.resetCredits), "Reset info not available", "no report")
     }
 
-    func testPaceMath() {
-        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
-        let five = UsageWindowKind.fiveHour
-        XCTAssertEqual(five.length, 18_000)
+    func testWindowLengths() {
+        XCTAssertEqual(UsageWindowKind.fiveHour.length, 18_000)
         XCTAssertEqual(UsageWindowKind.weekly.length, 604_800)
-        let half = now.addingTimeInterval(2.5 * 3600)
-        XCTAssertEqual(UsagePace.expectedLeftPercent(resetsAt: half, length: five.length, now: now)!, 50, accuracy: 0.001)
-        XCTAssertNil(UsagePace.expectedLeftPercent(resetsAt: nil, length: five.length, now: now))
-        XCTAssertEqual(UsagePace.expectedLeftPercent(resetsAt: now.addingTimeInterval(-60), length: five.length, now: now), 0)
-        XCTAssertEqual(UsagePace.expectedLeftPercent(resetsAt: now.addingTimeInterval(9 * 3600), length: five.length, now: now), 100)
     }
 
     func testPaceWordingAndThresholds() {
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
         let half = now.addingTimeInterval(2.5 * 3600)
         func pace(_ used: Double, resetsAt: Date?) -> String? {
-            UsagePace.text(UsageWindow(usedPercent: used, resetsAt: resetsAt), kind: .fiveHour, now: now)
+            UsagePace.text(UsageWindow(usedPercent: used, resetsAt: resetsAt), kind: .fiveHour, capturedAt: nil, now: now)
         }
         XCTAssertEqual(pace(30, resetsAt: half), "20% in reserve · Lasts until reset")
         XCTAssertEqual(pace(60, resetsAt: half), "10% in deficit · Runs out in 1h 40m")
@@ -112,9 +105,27 @@ final class MenuBarSummaryTests: XCTestCase {
         XCTAssertEqual(pace(0, resetsAt: half), "50% in reserve · Lasts until reset")
         XCTAssertEqual(pace(100, resetsAt: half), "50% in deficit · Runs out in 0m")
         XCTAssertNil(pace(99, resetsAt: nil))
-        XCTAssertNil(pace(99, resetsAt: now))
+        XCTAssertEqual(pace(99, resetsAt: now), UsagePace.outOfDate)
         XCTAssertNil(pace(1, resetsAt: now.addingTimeInterval(18_000)))
         XCTAssertNil(pace(1, resetsAt: now.addingTimeInterval(19_000)))
+    }
+
+    func testPaceIsTakenAtCaptureTimeAndExpires() {
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let captured = now.addingTimeInterval(-3600)
+        let window = UsageWindow(usedPercent: 30, resetsAt: captured.addingTimeInterval(2.5 * 3600))
+        // At capture, 50% of the window was left and 70% of the quota: unchanged an hour later.
+        XCTAssertEqual(UsagePace.text(window, kind: .fiveHour, capturedAt: captured, now: now),
+                       "20% in reserve · Lasts until reset")
+        XCTAssertEqual(UsagePace.text(window, kind: .fiveHour, capturedAt: captured, now: now.addingTimeInterval(1800)),
+                       "20% in reserve · Lasts until reset")
+        // Once the reset time passes, the sample no longer describes the window.
+        let ended = now.addingTimeInterval(2 * 3600)
+        XCTAssertTrue(UsagePace.isOutOfDate(window, now: ended))
+        XCTAssertEqual(UsagePace.text(window, kind: .fiveHour, capturedAt: captured, now: ended), "Out of date — refresh")
+        XCTAssertEqual(MenuBarSummary.spokenRow(kind: .fiveHour, window: window, capturedAt: captured, now: ended),
+                       "5-hour window, 70 percent left, out of date, refresh")
+        XCTAssertFalse(UsagePace.isOutOfDate(UsageWindow(usedPercent: 30, resetsAt: nil), now: ended))
     }
 
     func testFixtureShowsEachPaceState() async throws {
@@ -122,7 +133,7 @@ final class MenuBarSummaryTests: XCTestCase {
         let now = Date()
         let rows = usage.values.flatMap { report in
             UsageWindowKind.allCases.compactMap { kind in
-                kind.window(in: report).flatMap { UsagePace.text($0, kind: kind, now: now) }
+                kind.window(in: report).flatMap { UsagePace.text($0, kind: kind, capturedAt: report.capturedAt, now: now) }
             }
         }
         XCTAssertTrue(rows.contains { $0.contains("in reserve · Lasts until reset") })
@@ -132,10 +143,7 @@ final class MenuBarSummaryTests: XCTestCase {
 
     func testResetCountdownAndSpans() {
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
-        XCTAssertEqual(ResetCountdown.text(resetsAt: nil, now: now), "Reset time unknown")
-        XCTAssertEqual(ResetCountdown.text(resetsAt: now, now: now), "Resetting now")
-        XCTAssertEqual(ResetCountdown.text(resetsAt: now.addingTimeInterval(-5), now: now), "Resetting now")
-        XCTAssertEqual(ResetCountdown.text(resetsAt: now.addingTimeInterval(2 * 3600 + 13 * 60), now: now), "Resets in 2h 13m")
+        XCTAssertEqual(ResetCountdown.spoken(resetsAt: nil, now: now), "reset time unknown")
         XCTAssertEqual(ResetCountdown.spoken(resetsAt: now.addingTimeInterval(2 * 3600 + 13 * 60), now: now), "resets in 2 hours 13 minutes")
         XCTAssertEqual(UsageSpan.compact(30), "1m")
         XCTAssertEqual(UsageSpan.compact(7200), "2h")
@@ -149,13 +157,13 @@ final class MenuBarSummaryTests: XCTestCase {
     func testSpokenRow() {
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
         let low = UsageWindow(usedPercent: 91, resetsAt: now.addingTimeInterval(41 * 60))
-        XCTAssertEqual(MenuBarSummary.spokenRow(kind: .fiveHour, window: low, now: now),
+        XCTAssertEqual(MenuBarSummary.spokenRow(kind: .fiveHour, window: low, capturedAt: nil, now: now),
                        "5-hour window, 9 percent left, resets in 41 minutes, almost out, On pace, Runs out in 26 minutes")
         let ahead = UsageWindow(usedPercent: 62, resetsAt: now.addingTimeInterval(3.5 * 86_400))
-        XCTAssertEqual(MenuBarSummary.spokenRow(kind: .weekly, window: ahead, now: now),
+        XCTAssertEqual(MenuBarSummary.spokenRow(kind: .weekly, window: ahead, capturedAt: nil, now: now),
                        "Weekly window, 38 percent left, resets in 3 days 12 hours, 12 percent in deficit, Runs out in 2 days 3 hours")
         let unknown = UsageWindow(usedPercent: 38, resetsAt: nil)
-        XCTAssertEqual(MenuBarSummary.spokenRow(kind: .fiveHour, window: unknown, now: now),
+        XCTAssertEqual(MenuBarSummary.spokenRow(kind: .fiveHour, window: unknown, capturedAt: nil, now: now),
                        "5-hour window, 62 percent left, reset time unknown")
     }
 }

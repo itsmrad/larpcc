@@ -105,6 +105,7 @@ struct SettingsView: View {
         .onChange(of: store.snapshot?.profiles.map(\.id)) { _, ids in
             // Leave a profile page only once the profile is really gone (e.g. after Delete).
             if case let .profile(id) = selection, let ids, !ids.contains(id) { selection = .page(.general) }
+            showRequestedProfile()
         }
         .onChange(of: selection) { old, _ in
             if historyMove { historyMove = false; return }
@@ -115,10 +116,12 @@ struct SettingsView: View {
 
     // MARK: Sidebar
 
+    /// Shows the profile the menu bar asked for. Without metadata the request waits for it;
+    /// a profile that no longer exists drops the request.
     private func showRequestedProfile() {
-        guard let id = store.requestedProfileID else { return }
+        guard let id = store.requestedProfileID, let profiles = store.snapshot?.profiles else { return }
         store.requestedProfileID = nil
-        if let snapshot = store.snapshot, !snapshot.profiles.contains(where: { $0.id == id }) { return }
+        guard profiles.contains(where: { $0.id == id }) else { return }
         search = ""
         selection = .profile(id)
     }
