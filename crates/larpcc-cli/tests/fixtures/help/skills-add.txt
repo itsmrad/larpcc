@@ -1,0 +1,12 @@
+Copy one explicit package into the immutable managed store
+
+Usage: larp cc skills add [OPTIONS] --name <NAME> <PATH>
+
+Arguments:
+  <PATH>  
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --name <NAME>                            
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

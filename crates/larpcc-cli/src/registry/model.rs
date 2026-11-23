@@ -144,6 +144,8 @@ pub struct Alias {
     pub name: ProfileName,
     pub profile_id: ProfileId,
     pub surface: Surface,
+    /// Lowercase SHA-256 of the exact adjacent receipt bytes, owned independently of `<root>/bin`.
+    pub receipt: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -190,4 +192,17 @@ pub struct LaunchTarget {
     pub stored_executable: PathBuf,
     pub resolved_executable: PathBuf,
     pub identity: crate::platform::FileIdentity,
+}
+
+/// Recorded labels are bounded metadata, never executable qualification.
+pub(crate) fn parse_recorded_version(value: &str) -> Result<String, &'static str> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+    {
+        return Err("expected 1-128 ASCII letters, digits, '.', '_', '+', or '-'");
+    }
+    Ok(value.to_owned())
 }

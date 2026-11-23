@@ -1,0 +1,13 @@
+Manage root-bound alias commands (no PATH or shell edits)
+
+Usage: larp cc alias [OPTIONS] <COMMAND>
+
+Commands:
+  add     Install a Larp copy in the data directory's bin folder that launches PROFILE
+  list    List aliases
+  remove  Remove an alias after verifying its launcher and receipt
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

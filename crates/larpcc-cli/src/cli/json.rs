@@ -45,8 +45,34 @@ pub(super) fn json_or_usage(is_json: bool, command: &str, code: &str, message: &
         ExitCode::from(2)
     }
 }
-fn failure(command: &str, error: Error) -> ExitCode {
-    let (code, message, exit) = match error {
+fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
+    match error {
+        Error::InvalidVersionLabel => {
+            ("usage", "Recorded version label is invalid or too long.", 2)
+        }
+        Error::ForbiddenSource => (
+            "forbidden_source",
+            "Skill sources inside managed or vendor homes are forbidden.",
+            1,
+        ),
+        Error::Io { .. } => ("io", "Local filesystem I/O could not be completed.", 1),
+        Error::Drift => (
+            "drift",
+            "Owned content or filesystem identity has changed.",
+            1,
+        ),
+        Error::SkillNotFound => ("not_found", "Skill was not found.", 1),
+        Error::AliasNotFound => ("not_found", "Alias was not found.", 1),
+        Error::AliasInvalid => (
+            "drift",
+            "Alias launcher, receipt or mapping cannot be verified.",
+            1,
+        ),
+        Error::AliasImageUnverified => (
+            "unsafe_path",
+            "Cannot verify the loaded Larp image for alias creation.",
+            1,
+        ),
         Error::Conflict | Error::NameTaken { .. } => {
             ("conflict", "Registry revision or references conflict.", 1)
         }
@@ -77,7 +103,10 @@ fn failure(command: &str, error: Error) -> ExitCode {
             "The requested local operation could not be completed safely.",
             1,
         ),
-    };
+    }
+}
+fn failure(command: &str, error: Error) -> ExitCode {
+    let (code, message, exit) = failure_details(error);
     json_error(command, code, message, exit)
 }
 fn receipt(entry: &crate::registry::ProfileEntry) -> Value {
@@ -85,6 +114,12 @@ fn receipt(entry: &crate::registry::ProfileEntry) -> Value {
 }
 pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode {
     let command = match &action {
+        CcAction::App {
+            command: AppCommand::Bind { .. },
+        } => "app.bind",
+        CcAction::App { .. } => "app.open",
+        CcAction::Skills { command } => command.action().command(),
+        CcAction::Alias { command } => command.command(),
         CcAction::Run { .. } => "run",
         CcAction::Login { .. } => "login",
         CcAction::Logout { .. } => "logout",
@@ -100,11 +135,19 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
             ProfileAction::Rename { .. } => "profile.rename",
             ProfileAction::Forget { .. } => "profile.forget",
             ProfileAction::Surface { .. } => "profile.surface",
+            ProfileAction::Delete { .. } => "profile.delete",
+            ProfileAction::Recover { .. } => "profile.recover",
+            ProfileAction::Migrate => "profile.migrate",
         },
     };
     if matches!(
         action,
-        CcAction::Run { .. } | CcAction::Login { .. } | CcAction::Logout { .. }
+        CcAction::Run { .. }
+            | CcAction::Login { .. }
+            | CcAction::Logout { .. }
+            | CcAction::Profile {
+                command: ProfileAction::Delete { logout: true, .. }
+            }
     ) {
         return json_error(
             command,
@@ -117,15 +160,40 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         action,
         CcAction::Profile {
             command: ProfileAction::Forget { yes: false, .. }
+                | ProfileAction::Delete { yes: false, .. }
+                | ProfileAction::Recover { yes: false, .. }
         }
     ) {
         return json_error(command, "usage", "This operation requires --yes.", 2);
+    }
+    if let CcAction::Alias { command } = &action
+        && let Some(message) = command.usage()
+    {
+        return json_error(command.command(), "usage", message, 2);
+    }
+    if matches!(action, CcAction::App { .. })
+        && let Err(e) = crate::desktop::preflight()
+    {
+        return failure(command, e);
+    }
+    if matches!(
+        action,
+        CcAction::App {
+            command: AppCommand::Open { .. }
+        }
+    ) && let Err(e) = crate::desktop::open_preflight()
+    {
+        return failure(command, e);
     }
     let r = match Registry::locate() {
         Ok(r) => r.expecting(expected),
         Err(e) => return failure(command, e),
     };
     let result = match action {
+        CcAction::App {command:AppCommand::Bind {provider,path,recorded_version,replace}} => r.bind_desktop(provider,path,recorded_version,replace).map(|changed| json!({"changed":changed,"profile_id":null,"name":null,"warnings":[]})),
+        CcAction::App {command:AppCommand::Open {name}} => r.open_desktop(&name,true).map(|receipt| json!({"profile_id":receipt.profile_id.to_string(),"provider":receipt.provider,"surface":receipt.surface,"outcome":receipt.outcome,"native_auth":receipt.native_auth})),
+        CcAction::Skills {command} => r.skills(command.into_action()),
+        CcAction::Alias {command} => command.execute(&r),
         CcAction::Status {name} => r.metadata_json(command,Some(&name)),
         CcAction::Provider {command:ProviderAction::List} => r.metadata_json(command,None),
         CcAction::Provider {command:ProviderAction::Bind {provider,executable,replace}} => r.bind(provider,executable,replace).map(|outcome| json!({"changed":outcome != crate::registry::BindOutcome::Unchanged,"profile_id":null,"name":null,"warnings":[]})),
@@ -135,6 +203,9 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
             ProfileAction::Add {name,provider} => r.add(name,provider).map(|e| receipt(&e)),
             ProfileAction::Rename {name,new_name} => r.rename(&name,new_name).map(|e| receipt(&e)),
             ProfileAction::Forget {name,..} => r.forget(&name).map(|e| receipt(&e)),
+            ProfileAction::Delete {name,..} => r.delete_profile(name.clone(),false).map(|id| json!({"changed":true,"profile_id":id.to_string(),"name":name,"warnings":[{"code":"keychain_retained","message":super::KEYCHAIN_RETAINED}]})),
+            ProfileAction::Recover {name,..} => r.delete_profile(name.clone(),true).map(|id| json!({"changed":true,"profile_id":id.to_string(),"name":name,"warnings":[]})),
+            ProfileAction::Migrate => r.migrate_profiles().map(|changed| json!({"changed":changed,"profile_id":null,"name":null,"warnings":[]})),
             ProfileAction::Surface {name,surface,enabled} => r.surface(name,if surface=="cli" {crate::registry::Surface::Cli}else{crate::registry::Surface::Desktop},enabled=="on").map(|(e,changed)| { let mut data=receipt(&e); data["changed"]=json!(changed); data }),
         },
         _ => unreachable!("native operations refused above"),
@@ -142,5 +213,35 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
     match result {
         Ok(data) => json_success(command, r.revision(), data),
         Err(e) => failure(command, e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn stage09_app_bind_conflict_exit_and_redacted_messages() {
+        let (code, message, exit) = failure_details(Error::AlreadyBound {
+            provider: Provider::Codex,
+            old: "private-path".into(),
+        });
+        assert_eq!((code, exit), ("conflict", 2));
+        assert!(!message.contains("private-path"));
+        assert_eq!(failure_details(Error::Conflict).2, 1);
+        assert_eq!(failure_details(Error::InvalidVersionLabel).2, 2);
+    }
+    #[test]
+    fn stage06_descriptor_exhaustion_has_redacted_io_envelope_code() {
+        #[cfg(unix)]
+        let code = libc::EMFILE;
+        #[cfg(windows)]
+        let code = 4;
+        let (name, message, exit) = failure_details(Error::Io {
+            action: "test",
+            path: "private-home".into(),
+            source: std::io::Error::from_raw_os_error(code),
+        });
+        assert_eq!((name, exit), ("io", 1));
+        assert!(!message.contains("private-home"));
     }
 }

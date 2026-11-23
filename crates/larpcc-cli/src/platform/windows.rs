@@ -585,6 +585,102 @@ fn ordinal_equal(a: &std::ffi::OsStr, b: &std::ffi::OsStr) -> io::Result<bool> {
     )
 }
 
+// Capture the module path's file at startup and keep it pinned for provider rejection.
+static STARTUP_IMAGE: std::sync::OnceLock<Result<CheckedObject, Error>> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn pin_startup_image() {
+    let _ = STARTUP_IMAGE.get_or_init(|| {
+        let path = std::env::current_exe().map_err(|_| Error::NamespaceUnverified)?;
+        let file = open(
+            &path,
+            FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+        )?
+        .ok_or(Error::NamespaceUnverified)?;
+        let mut id: FILE_ID_INFO = unsafe { zeroed() };
+        // SAFETY: live file and writable FILE_ID_INFO output.
+        if unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileIdInfo,
+                (&mut id as *mut FILE_ID_INFO).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(Error::NamespaceUnverified);
+        }
+        Ok(CheckedObject {
+            file,
+            identity: FileIdentity::Windows {
+                volume: id.VolumeSerialNumber,
+                id: id.FileId.Identifier,
+            },
+        })
+    });
+}
+
+pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
+    pin_startup_image();
+    match STARTUP_IMAGE.get() {
+        Some(Ok(object)) => Ok(object.identity.clone()),
+        _ => Err(Error::NamespaceUnverified),
+    }
+}
+
+pub(crate) fn alias_open_at(
+    _parent: &CheckedObject,
+    path: &Path,
+    kind: ObjectKind,
+    create: bool,
+) -> Result<Option<CheckedObject>, Error> {
+    // The retained ancestors deny delete sharing, including the checked parent.
+    if create {
+        return create_file(path).map(Some).map_err(|error| match error {
+            Error::Io { source, .. } if source.kind() == io::ErrorKind::AlreadyExists => {
+                Error::Conflict
+            }
+            error => error,
+        });
+    }
+    if kind == ObjectKind::Directory {
+        return inspect(path, kind);
+    }
+    let Some(file) = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    else {
+        return Ok(None);
+    };
+    verify(file, path, kind, Policy::Managed).map(Some)
+}
+
+pub(crate) fn alias_unlink_at(
+    _bin: &CheckedObject,
+    path: &Path,
+    expected: &FileIdentity,
+) -> Result<(), Error> {
+    remove_skill_leaf(path, expected, ObjectKind::File)
+}
+
+pub(crate) fn alias_publish_at(_bin: &CheckedObject, from: &Path, to: &Path) -> Result<(), Error> {
+    let from = wide(from)?;
+    let to = wide(to)?;
+    // SAFETY: both paths are NUL-terminated and their common parent stays pinned.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+        return Err(
+            if io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists {
+                Error::Conflict
+            } else {
+                Error::AliasInvalid
+            },
+        );
+    }
+    Ok(())
+}
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
     let (target, checked) = executable_checked(path, root)?;
     Ok((target, checked.identity))
@@ -652,36 +748,7 @@ fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObjec
     if n < 2 || magic[..2] != *b"MZ" {
         return Err(unsafe_path(path, "is not a supported native executable"));
     }
-    let own = std::env::current_exe().map_err(|source| Error::Io {
-        action: "locate current executable",
-        path: path.into(),
-        source,
-    })?;
-    let own = open(
-        &own,
-        READ_CONTROL | FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-    )?
-    .ok_or_else(|| unsafe_path(path, "filesystem identity cannot be verified"))?;
-    // SAFETY: plain output structure and live handle, full 128-bit file identity query.
-    let mut id: FILE_ID_INFO = unsafe { zeroed() };
-    if unsafe {
-        GetFileInformationByHandleEx(
-            own.as_raw_handle(),
-            FileIdInfo,
-            (&mut id as *mut FILE_ID_INFO).cast(),
-            size_of::<FILE_ID_INFO>() as u32,
-        )
-    } == 0
-    {
-        return Err(unsafe_path(path, "filesystem identity cannot be verified"));
-    }
-    if checked.identity
-        == (FileIdentity::Windows {
-            volume: id.VolumeSerialNumber,
-            id: id.FileId.Identifier,
-        })
-    {
+    if checked.identity == running_identity(path)? {
         return Err(unsafe_path(path, "is Larp CC itself"));
     }
     Ok((target, checked))
@@ -751,6 +818,155 @@ pub(crate) fn open_auth_lock_checked(path: &Path) -> Result<CheckedObject, Error
 
 #[cfg(test)]
 use super::fixture_private;
+
+pub(crate) fn single_link(file: &File) -> Result<(), Error> {
+    single_link_info(file, Path::new("skills")).map(|_| ())
+}
+// Exclusion metadata only: no ACL policy, content reads, or reparse traversal.
+pub(crate) fn skill_directory_identity(path: &Path) -> Result<CheckedObject, Error> {
+    drive_root(path)?;
+    let file = open(
+        path,
+        FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    .ok_or_else(|| unsafe_path(path, "is missing"))?;
+    // SAFETY: initialized, plain output structures with the exact query sizes.
+    let (mut tag, mut id): (FILE_ATTRIBUTE_TAG_INFO, FILE_ID_INFO) =
+        unsafe { (zeroed(), zeroed()) };
+    // SAFETY: live metadata handle and exact writable output buffers.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileAttributeTagInfo,
+            (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+            size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )
+    } == 0
+        || unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileIdInfo,
+                (&mut id as *mut FILE_ID_INFO).cast(),
+                size_of::<FILE_ID_INFO>() as u32,
+            )
+        } == 0
+    {
+        return Err(io_path(path, "inspect directory identity"));
+    }
+    if tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(unsafe_path(path, "is not a plain directory"));
+    }
+    Ok(CheckedObject {
+        file,
+        identity: FileIdentity::Windows {
+            volume: id.VolumeSerialNumber,
+            id: id.FileId.Identifier,
+        },
+    })
+}
+
+/// Reuse the executable trusted-read ACL policy without executable qualification.
+pub(crate) fn read_skill_object(
+    path: &Path,
+    kind: ObjectKind,
+    source: bool,
+) -> Result<CheckedObject, Error> {
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(unsafe_path(path, "is missing"));
+    }
+    let file = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    .ok_or_else(|| unsafe_path(path, "is missing"))?;
+    verify(
+        file,
+        path,
+        kind,
+        if source {
+            Policy::Executable
+        } else {
+            Policy::Managed
+        },
+    )
+}
+
+/// Parents remain pinned without delete sharing through the delete-by-handle call.
+pub(crate) fn remove_skill_leaf(
+    path: &Path,
+    expected: &FileIdentity,
+    kind: ObjectKind,
+) -> Result<(), Error> {
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(unsafe_path(path, "is missing"));
+    }
+    let file = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | DELETE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+    )?
+    .ok_or_else(|| unsafe_path(path, "is missing"))?;
+    let checked = verify(file, path, kind, Policy::Managed)?;
+    if &checked.identity != expected {
+        return Err(unsafe_path(path, "filesystem identity changed"));
+    }
+    if kind == ObjectKind::File {
+        single_link(&checked.file)?;
+    }
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: live checked handle, exact initialized input structure and size.
+    if unsafe {
+        SetFileInformationByHandle(
+            checked.file.as_raw_handle(),
+            FileDispositionInfo,
+            (&info as *const FILE_DISPOSITION_INFO).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io_path(path, "remove owned skill object"));
+    }
+    Ok(())
+}
+
+pub(crate) fn append_skill_file(
+    path: &Path,
+    expected: &FileIdentity,
+    bytes: &[u8],
+) -> Result<(), Error> {
+    use std::io::{Seek, SeekFrom, Write};
+    let (_parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(unsafe_path(path, "is missing"));
+    }
+    let file = open(
+        path,
+        READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_WRITE_DATA,
+        FILE_SHARE_READ,
+    )?
+    .ok_or_else(|| unsafe_path(path, "is missing"))?;
+    let mut checked = verify(file, path, ObjectKind::File, Policy::Managed)?;
+    if &checked.identity != expected {
+        return Err(unsafe_path(path, "filesystem identity changed"));
+    }
+    single_link(&checked.file)?;
+    checked
+        .file
+        .seek(SeekFrom::End(0))
+        .and_then(|_| checked.file.write_all(bytes))
+        .and_then(|_| checked.file.sync_all())
+        .map_err(|source| Error::Io {
+            action: "write skill file",
+            path: path.into(),
+            source,
+        })
+}
 
 #[cfg(test)]
 mod tests {

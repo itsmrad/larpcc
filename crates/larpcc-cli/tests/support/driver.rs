@@ -1,5 +1,11 @@
+#[path = "../../src/aliases.rs"]
+#[allow(dead_code)]
+mod aliases;
 #[path = "../../src/cli/mod.rs"]
 mod cli;
+#[path = "../../src/desktop/mod.rs"]
+#[allow(dead_code)]
+mod desktop;
 #[path = "../../src/launch/mod.rs"]
 mod launch;
 #[path = "../../src/launch/legacy.rs"]
@@ -13,6 +19,8 @@ mod platform;
 mod provider;
 #[path = "../../src/registry/mod.rs"]
 mod registry;
+#[path = "../../src/share/mod.rs"]
+mod share;
 use clap::{Parser, Subcommand};
 use std::{
     ffi::OsString,
@@ -44,6 +52,24 @@ enum Action {
     },
 }
 fn main() -> std::process::ExitCode {
+    #[cfg(windows)]
+    platform::pin_startup_image();
+    let mut args = std::env::args_os();
+    let runner = format!("larpcc-synthetic{}", std::env::consts::EXE_SUFFIX);
+    if args
+        .next()
+        .as_deref()
+        .and_then(|arg| std::path::Path::new(arg).file_name())
+        != Some(std::ffi::OsStr::new(&runner))
+    {
+        return cli::gate_with_rows(alias_rows).unwrap_or_else(cli::run);
+    }
+    if args.next().as_deref() == Some(std::ffi::OsStr::new("stage05-install")) {
+        return match install_alias() {
+            Ok(()) => 0.into(),
+            Err(error) => cli::operational_error(error),
+        };
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("stage3")) {
         return stage3();
     }
@@ -96,6 +122,44 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+mod alias_args;
+
+fn install_alias() -> Result<(), registry::Error> {
+    use registry::{ProfileName, Registry, Surface};
+    let source = std::env::args_os()
+        .nth(2)
+        .ok_or(registry::Error::AliasInvalid)?;
+    let source = std::path::Path::new(&source);
+    Registry::locate()?.alias_add_with(
+        ProfileName::parse_new("codex-45").unwrap(),
+        &ProfileName::parse_new("claude-work").unwrap(),
+        Surface::Cli,
+        None,
+        |root| aliases::Source::open(source, root),
+    )?;
+    Ok(())
+}
+
+fn alias_rows(
+    forwarded: &[OsString],
+) -> Result<std::borrow::Cow<'static, [launch::admission::ArtifactRow]>, registry::Error> {
+    use launch::admission::Operation;
+    let digest = std::env::var("LARPCC_SYNTHETIC_ALIAS_SHA256")
+        .ok()
+        .and_then(|value| invented_digest(&value))
+        .ok_or(registry::Error::ArtifactInvalid)?;
+    // Check the arguments handed off by the alias separately from the invented row.
+    assert!(
+        forwarded
+            .iter()
+            .map(OsString::as_os_str)
+            .eq(alias_args::ARGS.iter().map(std::ffi::OsStr::new))
+    );
+    let mut row = invented_row(registry::Provider::Codex, Operation::Run, digest);
+    row.argv = alias_args::ARGS;
+    Ok(std::borrow::Cow::Owned(vec![row]))
+}
+
 // Nonpackaged invented-row input. Ordinary larp never compiles this parser or row.
 #[derive(Parser)]
 struct Invented {
@@ -116,7 +180,7 @@ struct Invented {
     args: Vec<OsString>,
 }
 fn stage3() -> std::process::ExitCode {
-    use launch::admission::{self, ArtifactRow, Operation};
+    use launch::admission::{self, Operation};
     let input = Invented::parse_from(
         std::iter::once(OsString::from("stage3")).chain(std::env::args_os().skip(2)),
     );
@@ -126,39 +190,11 @@ fn stage3() -> std::process::ExitCode {
         "logout" => Operation::Logout,
         _ => Operation::Run,
     };
-    let mut sha256 = [0; 32];
-    if input.sha256.len() != 64 || !input.sha256.is_ascii() {
+    let Some(sha256) = invented_digest(&input.sha256) else {
         eprintln!("invalid invented digest");
         return 2.into();
-    }
-    for (i, byte) in sha256.iter_mut().enumerate() {
-        let Ok(value) = u8::from_str_radix(&input.sha256[i * 2..i * 2 + 2], 16) else {
-            eprintln!("invalid invented digest");
-            return 2.into();
-        };
-        *byte = value;
-    }
-    let row = ArtifactRow {
-        provider: input.provider.parse().unwrap(),
-        release: "invented-1",
-        sha256,
-        install_kind: "test-fixture",
-        os: std::env::consts::OS,
-        arch: std::env::consts::ARCH,
-        operation: op,
-        interface: "invented",
-        backend: "invented-no-network",
-        policy_revision: 1,
-        argv: match op {
-            Operation::Run => &[],
-            Operation::Login => &["invented-login"],
-            Operation::Status => &["invented-status"],
-            Operation::Logout => &["invented-logout"],
-        },
-        denied_env: &["LARPCC_SYNTHETIC_DENY_*"],
-        paths: &[],
-        evidence: "synthetic fixture only",
     };
+    let row = invented_row(input.provider.parse().unwrap(), op, sha256);
     #[cfg(unix)]
     let before_signals = observe::observe().unwrap();
     let before_env = std::env::vars_os().collect::<Vec<_>>();
@@ -201,5 +237,45 @@ fn stage3() -> std::process::ExitCode {
                 1.into()
             }
         }
+    }
+}
+
+fn invented_digest(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 || !value.is_ascii() {
+        return None;
+    }
+    let mut sha256 = [0; 32];
+    for (i, byte) in sha256.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(sha256)
+}
+
+fn invented_row(
+    provider: registry::Provider,
+    op: launch::admission::Operation,
+    sha256: [u8; 32],
+) -> launch::admission::ArtifactRow {
+    use launch::admission::{ArtifactRow, Operation};
+    ArtifactRow {
+        provider,
+        release: "invented-1",
+        sha256,
+        install_kind: "test-fixture",
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        operation: op,
+        interface: "invented",
+        backend: "invented-no-network",
+        policy_revision: 1,
+        argv: match op {
+            Operation::Run => &[],
+            Operation::Login => &["invented-login"],
+            Operation::Status => &["invented-status"],
+            Operation::Logout => &["invented-logout"],
+        },
+        denied_env: &["LARPCC_SYNTHETIC_DENY_*"],
+        paths: &[],
+        evidence: "synthetic fixture only",
     }
 }
