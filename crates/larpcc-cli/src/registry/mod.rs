@@ -1,5 +1,6 @@
 mod alias;
 pub(crate) use alias::AliasPin;
+mod delete;
 mod desktop;
 pub mod display;
 mod error;

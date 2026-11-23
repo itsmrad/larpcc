@@ -296,15 +296,26 @@ fn ownership(root: &Path, dirs: &Directories, alias: &Alias) -> Result<Owned, Er
 
 fn remove_artifacts(root: &Path, pin: &DirectoryPin, removed: &[Removed]) -> Result<(), Error> {
     let dirs = verify_directories(root, pin)?;
+    let proven = prepare_removal(root, &dirs, removed, true)?;
+    apply_removal(root, pin, &dirs, proven)
+}
+
+fn prepare_removal<'a>(
+    root: &Path,
+    dirs: &Directories,
+    removed: &'a [Removed],
+    resuming: bool,
+) -> Result<Vec<(&'a ProfileName, Owned)>, Error> {
     let mut proven = Vec::with_capacity(removed.len());
     // Check the whole set before touching any entry. A missing artifact may have
     // been removed before interruption, but any present artifact must agree.
     for r in removed {
-        let owned = ownership(root, &dirs, &r.alias)?;
-        if owned
-            .launcher
-            .as_ref()
-            .is_some_and(|a| Some(a) != r.owned.launcher.as_ref())
+        let owned = ownership(root, dirs, &r.alias)?;
+        if (!resuming && owned != r.owned)
+            || owned
+                .launcher
+                .as_ref()
+                .is_some_and(|a| Some(a) != r.owned.launcher.as_ref())
             || owned
                 .receipt
                 .as_ref()
@@ -314,6 +325,15 @@ fn remove_artifacts(root: &Path, pin: &DirectoryPin, removed: &[Removed]) -> Res
         }
         proven.push((&r.alias.name, owned));
     }
+    Ok(proven)
+}
+
+fn apply_removal(
+    root: &Path,
+    pin: &DirectoryPin,
+    dirs: &Directories,
+    proven: Vec<(&ProfileName, Owned)>,
+) -> Result<(), Error> {
     for (name, owned) in proven {
         for (path, artifact) in [
             (aliases::launcher_path(root, name), owned.launcher),
@@ -321,7 +341,7 @@ fn remove_artifacts(root: &Path, pin: &DirectoryPin, removed: &[Removed]) -> Res
         ] {
             if let Some(artifact) = artifact {
                 verify_directories(root, pin)?;
-                if artifact.present(&dirs, &path)? != Some(true) {
+                if artifact.present(dirs, &path)? != Some(true) {
                     return Err(Error::AliasInvalid);
                 }
                 dirs.remove(&path, &artifact.identity)?;
@@ -376,20 +396,84 @@ fn remove_aliases(
     Ok(after)
 }
 
-/// Profile-delete entry: under the caller's registry write lock (after its revision
-/// precondition, before its tombstone commit), journal-remove every alias of `id` through
-/// this module's own allowlist and commit. Returns the committed registry (or `data`
-/// unchanged when `id` has no aliases); the caller builds its tombstone from the result.
-#[allow(
-    dead_code,
-    reason = "profile delete (a later stage) calls this under the same lock"
-)]
-pub(super) fn remove_profile_aliases(
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProfileCleanup {
+    directories: DirectoryPin,
+    aliases: Vec<Removed>,
+}
+
+pub(super) fn prepare_profile_cleanup(
     root: &Path,
-    data: store::Data,
+    data: &store::Data,
     id: ProfileId,
-) -> Result<store::Data, Error> {
-    remove_aliases(root, data, |a| a.profile_id == id)
+) -> Result<Option<ProfileCleanup>, Error> {
+    let aliases = data.aliases.iter().filter(|a| a.profile_id == id);
+    if aliases.clone().next().is_none() {
+        return Ok(None);
+    }
+    let dirs = Directories::open(root)?;
+    let aliases = aliases
+        .map(|alias| {
+            Ok(Removed {
+                alias: alias.clone(),
+                owned: ownership(root, &dirs, alias)?,
+            })
+        })
+        .collect::<Result<_, Error>>()?;
+    Ok(Some(ProfileCleanup {
+        directories: dirs.pin(),
+        aliases,
+    }))
+}
+
+pub(super) struct PreparedProfileCleanup<'a> {
+    dirs: Directories,
+    pin: &'a DirectoryPin,
+    artifacts: Vec<(&'a ProfileName, Owned)>,
+}
+impl PreparedProfileCleanup<'_> {
+    pub(super) fn apply(self, root: &Path) -> Result<(), Error> {
+        apply_removal(root, self.pin, &self.dirs, self.artifacts)
+    }
+
+    pub(super) fn verify_removed(&self) -> Result<(), Error> {
+        if self
+            .artifacts
+            .iter()
+            .any(|(_, a)| a.launcher.is_some() || a.receipt.is_some())
+        {
+            return Err(Error::AliasInvalid);
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn validate_profile_cleanup<'a>(
+    root: &Path,
+    data: &store::Data,
+    id: ProfileId,
+    cleanup: Option<&'a ProfileCleanup>,
+    resuming: bool,
+) -> Result<Option<PreparedProfileCleanup<'a>>, Error> {
+    let mut aliases = data.aliases.iter().filter(|a| a.profile_id == id);
+    let Some(cleanup) = cleanup else {
+        return if aliases.next().is_none() {
+            Ok(None)
+        } else {
+            Err(Error::RecoveryRequired)
+        };
+    };
+    if cleanup.aliases.is_empty() || !aliases.eq(cleanup.aliases.iter().map(|r| &r.alias)) {
+        return Err(Error::RecoveryRequired);
+    }
+    let dirs = verify_directories(root, &cleanup.directories)?;
+    let artifacts = prepare_removal(root, &dirs, &cleanup.aliases, resuming)?;
+    Ok(Some(PreparedProfileCleanup {
+        dirs,
+        pin: &cleanup.directories,
+        artifacts,
+    }))
 }
 
 pub(super) fn alias_json(root: &Path, a: &Alias) -> Value {
@@ -1166,15 +1250,16 @@ mod tests {
         let root = f.r.root();
         let lock = store::lock(root, Duration::from_secs(10)).unwrap();
         let data = store::load(root).unwrap();
-        let before = data.revision;
-        let after = remove_profile_aliases(root, data, ProfileId::new(1)).unwrap();
-        assert_eq!(after.revision, before + 1);
-        assert_eq!(after.aliases.len(), 1);
-        let unchanged = remove_profile_aliases(root, after, ProfileId::new(1)).unwrap();
-        assert_eq!(unchanged.revision, before + 1);
+        let id = ProfileId::new(1);
+        let plan = prepare_profile_cleanup(root, &data, id).unwrap().unwrap();
+        assert_eq!(plan.aliases.len(), 2);
+        let prepared = validate_profile_cleanup(root, &data, id, Some(&plan), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.artifacts.len(), 2);
+        drop(prepared);
         drop(lock);
-        assert!(!f.launcher("codex-45").exists() && !f.launcher("claude-alt").exists());
-        assert_eq!(f.states(), ["other:ok"]);
-        assert_eq!(store::load(root).unwrap().revision, before + 1);
+        assert!(f.launcher("codex-45").exists() && f.launcher("claude-alt").exists());
+        assert_eq!(store::load(root).unwrap().revision, data.revision);
     }
 }

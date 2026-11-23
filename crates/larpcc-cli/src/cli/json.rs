@@ -135,11 +135,19 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
             ProfileAction::Rename { .. } => "profile.rename",
             ProfileAction::Forget { .. } => "profile.forget",
             ProfileAction::Surface { .. } => "profile.surface",
+            ProfileAction::Delete { .. } => "profile.delete",
+            ProfileAction::Recover { .. } => "profile.recover",
+            ProfileAction::Migrate => "profile.migrate",
         },
     };
     if matches!(
         action,
-        CcAction::Run { .. } | CcAction::Login { .. } | CcAction::Logout { .. }
+        CcAction::Run { .. }
+            | CcAction::Login { .. }
+            | CcAction::Logout { .. }
+            | CcAction::Profile {
+                command: ProfileAction::Delete { logout: true, .. }
+            }
     ) {
         return json_error(
             command,
@@ -152,6 +160,8 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         action,
         CcAction::Profile {
             command: ProfileAction::Forget { yes: false, .. }
+                | ProfileAction::Delete { yes: false, .. }
+                | ProfileAction::Recover { yes: false, .. }
         }
     ) {
         return json_error(command, "usage", "This operation requires --yes.", 2);
@@ -184,6 +194,9 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
             ProfileAction::Add {name,provider} => r.add(name,provider).map(|e| receipt(&e)),
             ProfileAction::Rename {name,new_name} => r.rename(&name,new_name).map(|e| receipt(&e)),
             ProfileAction::Forget {name,..} => r.forget(&name).map(|e| receipt(&e)),
+            ProfileAction::Delete {name,..} => r.delete_profile(name.clone(),false).map(|id| json!({"changed":true,"profile_id":id.to_string(),"name":name,"warnings":[{"code":"keychain_retained","message":super::KEYCHAIN_RETAINED}]})),
+            ProfileAction::Recover {name,..} => r.delete_profile(name.clone(),true).map(|id| json!({"changed":true,"profile_id":id.to_string(),"name":name,"warnings":[]})),
+            ProfileAction::Migrate => r.migrate_profiles().map(|changed| json!({"changed":changed,"profile_id":null,"name":null,"warnings":[]})),
             ProfileAction::Surface {name,surface,enabled} => r.surface(name,if surface=="cli" {crate::registry::Surface::Cli}else{crate::registry::Surface::Desktop},enabled=="on").map(|(e,changed)| { let mut data=receipt(&e); data["changed"]=json!(changed); data }),
         },
         _ => unreachable!("native operations refused above"),

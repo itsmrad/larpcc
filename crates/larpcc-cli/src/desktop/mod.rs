@@ -309,6 +309,23 @@ pub(crate) fn activity_for(target: &ValidatedDesktopTarget) -> Activity {
         Activity::Unknown(InspectionCode::Unavailable)
     }
 }
+
+#[cfg(target_os = "macos")]
+pub(crate) fn deletion_lock_present(directory: &CheckedDirectory) -> Result<bool, Error> {
+    let hostname = singleton::hostname().map_err(|_| Error::AuthBusy)?;
+    match singleton::read(directory, &hostname) {
+        Ok(_) => Ok(true),
+        Err(InspectionCode::Missing) => {
+            directory.recheck().map_err(|_| Error::AuthBusy)?;
+            match singleton::read(directory, &hostname) {
+                Err(InspectionCode::Missing) => Ok(false),
+                _ => Err(Error::AuthBusy),
+            }
+        }
+        Err(_) => Err(Error::AuthBusy),
+    }
+}
+
 /// CORE retains the per-ID lifecycle guard across this entire call.
 pub(crate) fn open_target(
     target: &ValidatedDesktopTarget,

@@ -23,6 +23,7 @@ pub struct CheckedObject {
 pub struct AnchoredPath {
     pub ancestors: Vec<CheckedObject>,
 }
+pub(crate) mod removal;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
