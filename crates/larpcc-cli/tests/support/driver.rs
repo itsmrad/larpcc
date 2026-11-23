@@ -140,13 +140,21 @@ fn install_alias() -> Result<(), registry::Error> {
     Ok(())
 }
 
-fn alias_rows()
--> Result<std::borrow::Cow<'static, [launch::admission::ArtifactRow]>, registry::Error> {
+fn alias_rows(
+    forwarded: &[OsString],
+) -> Result<std::borrow::Cow<'static, [launch::admission::ArtifactRow]>, registry::Error> {
     use launch::admission::Operation;
     let digest = std::env::var("LARPCC_SYNTHETIC_ALIAS_SHA256")
         .ok()
         .and_then(|value| invented_digest(&value))
         .ok_or(registry::Error::ArtifactInvalid)?;
+    // Check the arguments handed off by the alias separately from the invented row.
+    assert!(
+        forwarded
+            .iter()
+            .map(OsString::as_os_str)
+            .eq(alias_args::ARGS.iter().map(std::ffi::OsStr::new))
+    );
     let mut row = invented_row(registry::Provider::Codex, Operation::Run, digest);
     row.argv = alias_args::ARGS;
     Ok(std::borrow::Cow::Owned(vec![row]))

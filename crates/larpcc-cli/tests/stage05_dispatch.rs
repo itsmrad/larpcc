@@ -378,3 +378,26 @@ fn stage05_dispatch_alias_reaches_fake_with_exact_args_home_and_exit() {
     );
     assert!(value["CLAUDE_CONFIG_DIR"].is_null() && !ambient.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn stage05_dispatch_accepts_a_trusted_symlinked_root_ancestor() {
+    use std::os::unix::fs::symlink;
+
+    let mut f = setup();
+    let real_root = f.root.clone();
+    let spelling = f.temp.path().join("alternate");
+    symlink(f.temp.path(), &spelling).unwrap();
+    f.root = spelling.join(real_root.file_name().unwrap());
+    f.larp_json(
+        &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
+        0,
+    );
+    assert_eq!(
+        f.larp_json(&["cc", "alias", "list", "--json"], 0)["data"]["aliases"][0]["state"],
+        "ok"
+    );
+    assert_eq!(stderr(&launch(&f, "codex-45", &[], 1)), PENDING);
+    f.root = real_root;
+    assert_eq!(stderr(&launch(&f, "codex-45", &[], 1)), PENDING);
+}

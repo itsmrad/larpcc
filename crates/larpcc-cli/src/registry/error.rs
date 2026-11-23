@@ -273,7 +273,7 @@ impl Error {
             Self::NewerSchema { .. } => "upgrade Larp CC; the file was not modified".into(),
             Self::NotFound { .. } => "run 'larp cc profile list'".into(),
             Self::AliasNotFound => "run 'larp cc alias list'".into(),
-            Self::AliasInvalid => "run the standard larp command; reinstall the alias with 'larp cc alias remove' and 'larp cc alias add' if it is reported as drifted or incompatible".into(),
+            Self::AliasInvalid => "run standard larp; restore the original alias files before retrying. For pending recovery or files you cannot restore, see Manual alias recovery in the Stage 05 guide".into(),
             Self::Busy { .. } => "retry when the other command finishes".into(),
             Self::TooLarge => "forget unused profiles or use a separate data root".into(),
             Self::Io {

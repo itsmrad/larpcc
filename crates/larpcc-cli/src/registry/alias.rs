@@ -14,7 +14,7 @@ use std::{
     ffi::OsStr,
     fs,
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     time::Duration,
 };
 
@@ -55,15 +55,6 @@ struct Journal {
     after_registry: Option<String>,
     directories: DirectoryPin,
     step: Step,
-}
-
-fn staged_paths(root: &Path, name: &ProfileName) -> [PathBuf; 2] {
-    [
-        root.join("bin")
-            .join(format!(".{}.launcher.pending", name.as_str())),
-        root.join("bin")
-            .join(format!(".{}.receipt.pending", name.as_str())),
-    ]
 }
 
 fn hex(digest: &[u8; 32]) -> String {
@@ -171,7 +162,7 @@ fn recover(root: &Path, current: &store::Data) -> Result<(), Error> {
             if committed != registered.is_some() {
                 return Err(Error::RecoveryRequired);
             }
-            let [stage_launcher, stage_receipt] = staged_paths(root, name);
+            let [stage_launcher, stage_receipt] = aliases::staged_paths(root, name);
             let launcher = aliases::launcher_path(root, name);
             let receipt = aliases::receipt_path(root, name);
             let files = [
@@ -440,7 +431,7 @@ fn crashed() -> bool {
 impl Registry {
     /// Under the write lock: check the precondition first, then resume an interrupted
     /// alias transaction only for callers without a pinned revision.
-    fn alias_mutation_lock(&self) -> Result<store::RegistryLock, Error> {
+    fn alias_mutation_lock(&self, missing: Error) -> Result<store::RegistryLock, Error> {
         let root = self.root();
         if self.expected.is_some() {
             if platform::inspect(&root.join("registry.lock"), ObjectKind::File)?.is_none() {
@@ -450,7 +441,7 @@ impl Registry {
                     return Err(Error::RecoveryRequired);
                 }
                 // No valid target or lock exists. A pinned alias operation creates neither.
-                return Err(Error::AliasNotFound);
+                return Err(missing);
             }
             return store::admission_lock(root);
         }
@@ -475,7 +466,7 @@ impl Registry {
         let _ancestors = platform::anchor(root)?.ancestors;
         let _fixed = store::fixed(root)?;
         if crate::share::pending(root) {
-            let _lock = self.alias_mutation_lock()?;
+            let _lock = self.alias_mutation_lock(Error::RecoveryRequired)?;
             self.alias_resumed()?;
         }
         let (data, _lock) = store::snapshot(root, self.expected)?;
@@ -515,7 +506,9 @@ impl Registry {
             encoding()?;
         }
         let _ancestors = platform::anchor(root)?.ancestors;
-        let _lock = self.alias_mutation_lock()?;
+        let _lock = self.alias_mutation_lock(Error::NotFound {
+            name: profile.clone(),
+        })?;
         let _fixed = store::fixed(root)?;
         let data = self.alias_resumed()?;
         active(&data)?;
@@ -557,7 +550,7 @@ impl Registry {
         write_journal(root, &j)?;
         let result = (|| {
             fault("journal")?;
-            let [stage_launcher, stage_receipt] = staged_paths(root, &name);
+            let [stage_launcher, stage_receipt] = aliases::staged_paths(root, &name);
             let launcher = dirs.create(&stage_launcher)?;
             let launcher_identity = launcher.identity.clone();
             fault("launcher")?;
@@ -667,7 +660,7 @@ impl Registry {
     pub fn alias_remove(&self, name: &ProfileName) -> Result<Value, Error> {
         let root = self.root();
         let _ancestors = platform::anchor(root)?.ancestors;
-        let _lock = self.alias_mutation_lock()?;
+        let _lock = self.alias_mutation_lock(Error::AliasNotFound)?;
         let _fixed = store::fixed(root)?;
         let data = self.alias_resumed()?;
         active(&data)?;
@@ -708,9 +701,7 @@ impl Registry {
             .iter()
             .find(|p| p.id == pin.profile_id())
             .ok_or(Error::AliasInvalid)?;
-        if !aliases::same_launcher(executable, self.root(), pin.receipt.name())? {
-            return Err(Error::AliasInvalid);
-        }
+        pin.receipt.check_location(executable)?;
         Ok((profile.name.clone(), pin, held))
     }
 }
@@ -1065,7 +1056,7 @@ mod tests {
         set_fault(Some("launcher"));
         assert!(f.add("codex-45", "claude-work").is_err());
         set_fault(None);
-        let [stage, _] = staged_paths(f.r.root(), &name("codex-45"));
+        let [stage, _] = aliases::staged_paths(f.r.root(), &name("codex-45"));
         assert!(matches!(f.r.alias_list(), Err(Error::AliasInvalid)));
         assert!(stage.exists() && f.pending());
         assert!(!f.launcher("codex-45").exists());

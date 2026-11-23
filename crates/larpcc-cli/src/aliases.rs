@@ -70,13 +70,23 @@ pub(crate) fn receipt_path(root: &Path, name: &ProfileName) -> PathBuf {
         .join(format!("{}.larp-alias.json", name.as_str()))
 }
 
+pub(crate) fn staged_paths(root: &Path, name: &ProfileName) -> [PathBuf; 2] {
+    [
+        root.join("bin")
+            .join(format!(".{}.launcher.pending", name.as_str())),
+        root.join("bin")
+            .join(format!(".{}.receipt.pending", name.as_str())),
+    ]
+}
+
 /// Metadata only: never execute or read an existing command to test collision.
 pub(crate) fn check_collision(
     root: &Path,
     name: &ProfileName,
     search_path: Option<&OsStr>,
 ) -> Result<(), Error> {
-    let mut candidates = vec![launcher_path(root, name), receipt_path(root, name)];
+    let mut candidates = Vec::from(staged_paths(root, name));
+    candidates.extend([launcher_path(root, name), receipt_path(root, name)]);
     if let Some(search_path) = search_path {
         for directory in std::env::split_paths(search_path) {
             #[cfg(not(windows))]
@@ -103,12 +113,13 @@ fn same_path(a: &Path, b: &Path) -> Result<bool, Error> {
     Ok(a == b)
 }
 
-pub(crate) fn same_launcher(
-    executable: &Path,
-    root: &Path,
-    name: &ProfileName,
-) -> Result<bool, Error> {
-    same_path(executable, &launcher_path(root, name))
+fn launcher_root<'a>(executable: &'a Path, name: &ProfileName) -> Result<&'a Path, Error> {
+    let bin = executable.parent().ok_or(Error::AliasInvalid)?;
+    let root = bin.parent().ok_or(Error::AliasInvalid)?;
+    if !same_path(executable, &launcher_path(root, name))? {
+        return Err(Error::AliasInvalid);
+    }
+    Ok(root)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -395,18 +406,31 @@ impl Receipt {
         executable: &Path,
         name: &ProfileName,
     ) -> Result<(Self, [u8; 32]), Error> {
-        let bin = executable.parent().ok_or(Error::AliasInvalid)?;
-        let root = bin.parent().ok_or(Error::AliasInvalid)?;
-        if !same_path(executable, &launcher_path(root, name))? {
-            return Err(Error::AliasInvalid);
-        }
+        let root = launcher_root(executable, name)?;
         let dirs = Directories::open(root)?;
         let mut receipt = dirs
             .read(&receipt_path(root, name))?
             .ok_or(Error::AliasInvalid)?;
         let bytes = read_bounded(&mut receipt.file)?;
         let parsed: Self = serde_json::from_slice(&bytes).map_err(|_| Error::AliasInvalid)?;
-        if !same_path(&parsed.root, root)? || &parsed.name != name {
+        if &parsed.name != name
+            || dirs.pin() != parsed.directories()
+            || !parsed.root.is_absolute()
+            || parsed
+                .root
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(Error::AliasInvalid);
+        }
+        // The receipt spelling must still reach the pinned directories. This keeps
+        // a moved root closed while accepting another spelling of the same location.
+        if !same_path(&parsed.root, root)?
+            && Directories::open(&parsed.root)
+                .map_err(|_| Error::AliasInvalid)?
+                .pin()
+                != dirs.pin()
+        {
             return Err(Error::AliasInvalid);
         }
         Ok((parsed, Sha256::digest(&bytes).into()))
@@ -539,6 +563,14 @@ impl Receipt {
             });
         }
         Ok(held)
+    }
+
+    pub(crate) fn check_location(&self, executable: &Path) -> Result<(), Error> {
+        let root = launcher_root(executable, &self.name)?;
+        if Directories::open(root)?.pin() != self.directories() {
+            return Err(Error::AliasInvalid);
+        }
+        Ok(())
     }
 
     pub(crate) fn running(&self, executable: &Path) -> Result<(), Error> {

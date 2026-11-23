@@ -248,3 +248,20 @@ fn stage05_transaction_non_unicode_root_refuses_before_alias_artifacts() {
     assert!(!f.root.join("bin").exists());
     assert!(!f.root.join("share-journal.json").exists());
 }
+
+#[test]
+fn stage05_transaction_pinned_add_reports_missing_profile_without_creating_root() {
+    let f = Fixture::new();
+    let args = [
+        "cc",
+        "alias",
+        "add",
+        "codex-45",
+        "claude-work",
+        "--expected-revision",
+        "0",
+    ];
+    let out = f.run(&args, 1);
+    assert!(stderr(&out).starts_with("error: no profile named claude-work\n"));
+    assert!(!f.root.exists());
+}
