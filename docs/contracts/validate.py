@@ -35,7 +35,8 @@ def check(value, rule):
             check(item, rule.get('items', {}))
     elif kind == 'string':
         assert isinstance(value, str)
-        assert re.search(rule.get('pattern', ''), value)
+        if 'pattern' in rule:
+            assert re.fullmatch(rule['pattern'], value)
     elif kind == 'boolean':
         assert isinstance(value, bool)
     elif kind == 'null':
@@ -187,12 +188,12 @@ for identity_file in ('relative', '-i', '/keys/%h', '/keys/$HOME', '/keys/\nfile
 invalid = copy.deepcopy(host_list)
 invalid['data']['hosts'][1]['identity_file'] = '/keys/identity'
 invalid_mutations.append(invalid)
-for alias in ('-oProxyCommand=x', 'alias with space', 'bad*alias'):
+for alias in ('-oProxyCommand=x', 'alias with space', 'bad*alias', 'alias\n'):
     invalid = copy.deepcopy(host_list)
     invalid['data']['hosts'][1]['ssh']['alias'] = alias
     assert not matches(invalid, SCHEMA)
     negative_checks += 1
-for command in ('host.catalog.share', 'host.catalog.apply',
+for command in ('host.catalog.list', 'host.catalog.share', 'host.catalog.apply',
                 'host.catalog.copy', 'host.catalog.import'):
     invalid = copy.deepcopy(next(x for x in fixtures if x['command'] == command and x['ok']))
     invalid['revision'] = None

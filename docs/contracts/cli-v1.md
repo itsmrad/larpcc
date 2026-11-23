@@ -148,7 +148,7 @@ can reject the new syntax as `parse`.
 | `host.list` | `{hosts:[Host]}`, ASCII name order, unique names | Local host store |
 | `host.show` | `{host:Host}` | Local host store |
 | `host.check` | `{name,status}` for the explicitly checked host. Status is `ok`, `unreachable`, `larp_missing` or `incompatible`. A classified probe failure is a completed check with exit 0. | Local host store |
-| `host.catalog.list` | `{kind,entries:[{name,all_machines,content_sha256}]}`, ASCII name order, unique names. The digest is null when the entry cannot be exported. | Selected machine's registry |
+| `host.catalog.list` | `{kind,entries:[{name,all_machines,content_sha256}]}`, ASCII name order, unique names. The digest is null when the entry cannot be exported. | Selected machine's registry. Report `"0"` with an empty list when absent. |
 | `host.catalog.share`, `host.catalog.apply`, `host.catalog.copy`, `host.catalog.import` | Common mutation receipt, non-null entry `name` and null `profile_id` | Selected machine's non-null registry revision. For copy, this is the destination. |
 
 `Host` is `{name,ssh,larp,larpcc_home,identity_file}` with nullable paths.
@@ -158,7 +158,8 @@ uses `ssh:{mode:"config",alias}` and requires a null `identity_file`.
 with the explicit port in `resolved`. Direct mode allows an optional
 `--identity-file LOCAL_PATH`. Paths and destinations are display data in
 the app. Host-store success revisions are canonical decimal u64 strings,
-including `"0"` for a missing host store.
+including `"0"` for a missing host store. For an absent catalog registry, the
+GUI uses the returned `"0"` as its expected revision.
 
 `host.catalog.share` advances the selected registry revision once when the
 flag changes and preserves it on a no-op. Copy uses an approved content

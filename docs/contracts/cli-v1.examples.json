@@ -925,5 +925,60 @@
       "code": "conflict",
       "message": "The source catalog revision changed."
     }
+  },
+  {
+    "schema": 1,
+    "command": "host.catalog.list",
+    "ok": true,
+    "revision": "0",
+    "data": {
+      "kind": "skills",
+      "entries": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "ssh_unavailable",
+      "message": "No supported OpenSSH client is available."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "remote_larp_missing",
+      "message": "Install Larp on the selected host."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "remote_incompatible",
+      "message": "The selected host has an incompatible Larp installation."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "remote_timeout",
+      "message": "The remote request exceeded its deadline."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": false,
+    "error": {
+      "code": "remote_output",
+      "message": "The remote response was invalid."
+    }
   }
 ]

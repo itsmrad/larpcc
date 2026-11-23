@@ -93,7 +93,11 @@ reserved names.
   port in `resolved`. Pass user, host and port as separate argv elements.
 
 Resolve and validate a system OpenSSH executable and launch it directly
-with an argv array. On Windows require a native `ssh.exe`. OpenSSH 6.8 is
+with an argv array. On Windows resolve an absolute path to a regular PE executable named
+`ssh.exe`, using trusted executable lookup that excludes the current
+directory. Reject scripts, `.bat`/`.cmd` wrappers and App Execution Aliases.
+Require an `OpenSSH_for_Windows` version line there, so MSYS and Cygwin
+clients using the generic OpenSSH prefix refuse. OpenSSH 6.8 is
 the compatibility floor because it introduced `UpdateHostKeys`, the newest
 option in the frozen argv. That release also supports `-F none`, `-S none`,
 `ClearAllForwardings`, `LogLevel` and the remaining options.
@@ -110,7 +114,8 @@ unverifiable clients fail as `ssh_unavailable`. Only the synthetic harness
 may use a fixture binary on private PATH.
 
 ```text
-ssh -a -x -o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=4 -- ALIAS 'sh -s'
+ssh -T -a -x -o BatchMode=yes -o ClearAllForwardings=yes
+    -o LogLevel=ERROR -o ConnectTimeout=4 -- ALIAS 'sh -s'
 
 ssh -F none -T -a -x -S none -e none
     -o BatchMode=yes -o StrictHostKeyChecking=yes -o UpdateHostKeys=no
@@ -124,8 +129,10 @@ user's own SSH config, trust policy and authentication as OpenSSH normally
 does, subject only to the fixed options shown. It may use ProxyJump,
 ProxyCommand, LocalCommand, or other configuration the user already trusts.
 Larp never parses or imports that file. A configured hook or transport can
-cause local side effects or contact other machines. Configured PTYs or
-incompatible output may cause the Larp protocol to refuse. Direct mode
+cause local side effects or contact other machines. The fixed `-T` and
+`ClearAllForwardings=yes` neutralize `RequestTTY`, `LocalForward` and
+`RemoteForward` for Larp's calls. ProxyJump requires OpenSSH 7.3 or later.
+[OpenSSH 7.3 release notes](https://www.openssh.org/txt/release-7.3). Direct mode
 skips ambient configuration, disables connection sharing and forwarding,
 and requires pre-established host-key trust using default host-key files.
 Use config mode for ProxyJump. Neither mode accepts raw SSH options.
@@ -134,10 +141,12 @@ Use config mode for ProxyJump. Neither mode accepts raw SSH options.
 
 Pass `SSH_AUTH_SOCK` through unchanged if present. OpenSSH may also use the
 platform's default local agent when applicable. Larp never opens or reads
-the socket and `-a` tells OpenSSH to disable agent forwarding. A macOS GUI
-launch gets `SSH_AUTH_SOCK` from its launchd environment. Direct mode cannot
+the socket and `-a` tells OpenSSH to disable agent forwarding. The Stage 10 bridge passes the
+app process's `SSH_AUTH_SOCK` through only for host-routed calls. Config
+mode launched from the app uses the bridge's minimal `PATH=/usr/bin:/bin`,
+so hooks that require a different PATH can fail. Direct mode cannot
 use agents selected only by `ssh_config IdentityAgent`. Config mode uses
-the user's normal SSH environment and config. Direct mode clears askpass
+the available process environment and the user's SSH config. Direct mode clears askpass
 and provider credential variables and passes only the environment needed
 by OpenSSH, including the local agent socket identifier.
 
@@ -203,13 +212,13 @@ must reject the unknown flag before effects. The probe and receiver gate
 neither qualify a native launch nor establish remote account identity.
 
 Drain both streams concurrently, with a 1 MiB cap per stream for ordinary
-envelopes and empty stderr required. Private export limits are specified below. Probe/read deadline is 5 seconds per SSH
+envelopes and empty stderr required. Private export limits are specified below. Probe/read deadline is 4.5 seconds per SSH
 child, including the 4-second OpenSSH connection timeout. The outer
 deadline also covers hooks and jumps in config mode. Stop at the first
 failure and allow at most 2 seconds for cleanup. The app bridge has a
 15-second end-to-end deadline per read: up to 2 seconds for the local client
-version check, 5 for the remote version probe, 5 for the command, 2 for
-failure cleanup, and 1 for bridge overhead. Cache the local client check by
+version check, 4.5 for the remote version probe, 4.5 for the command and
+2 for failure cleanup, leaving 2 seconds of slack for bridge overhead. Cache the local client check by
 verified executable identity and invalidate it on replacement.
 A dispatched mutation or binary export has a 60-second per-child deadline. On timeout, cancel or overflow, terminate and reap the
 direct SSH child. Losing that process does not establish whether a remote
@@ -234,6 +243,7 @@ router. Reject them in forwarded envelopes as invalid responses.
 | Unsafe syntax, forbidden route or command | `usage` or `unsupported`; no child |
 | Host record absent or routing revision mismatch | `not_found` or `conflict`; no child |
 | No supported SSH client | `ssh_unavailable` / `unreachable` |
+| Explicit `host.check` classified probe failure | Exit 0, `ok:true`, with the status below. No deployment or host change occurs. |
 | SSH exit 255, including transport, host-key or authentication refusal | `ssh_failed` / `unreachable`; fixed hint to verify connectivity, host key and authentication outside Larp |
 | Probe exit 44 or 45 with both streams empty | `remote_larp_missing` / `larp_missing`, or `remote_incompatible` / `incompatible`, respectively |
 | Old/unsupported version, other probe exit or invalid version framing with empty stderr | `remote_incompatible` / `incompatible` |
@@ -266,6 +276,8 @@ A changed flag advances that registry revision once and its receipt reports
 the new revision. A no-op retains the revision. Commit the flag file and
 registry revision with the catalog journal and recovery rules. List derives
 one flag row per current catalog entry at the reported registry revision.
+An absent registry reports revision `"0"` and an empty entry list. The GUI
+retains `"0"` and sends it as the expected revision for that snapshot.
 Share never updates the other machine catalogs or starts a sync.
 
 The app's **Copy to machine…** selects one source entry and destination.
@@ -291,7 +303,7 @@ outcome unknown. No cross-host rollback or background sync.
 
 New entries have sharing off and follow destination-local Stage 06 skill
 defaults or Stage 07 MCP `sync_all`. Identical entries are no-ops that
-preserve switches and flags. A differing same-name entry fails
+preserve switches and flags. An existing entry with the same name but different content fails
 `conflict`. No transfer starts a server, skill or provider, or copies
 profile IDs or switches.
 
@@ -314,10 +326,16 @@ The export frame and import payload have this exact format:
    manifest byte count followed by LF (at most 1 MiB).
 2. Exactly that many UTF-8 bytes of one JSON object with fields
    `{name,sha256,files:[{path,size}]}`, without duplicate or unknown fields.
-   Paths are sorted and unique, slash-separated relative UTF-8 strings.
-   Each size is a canonical decimal string. There are at most 1,000 files,
-   16 path levels, and 16 MiB total file bytes. Implicit directories come
-   only from accepted file paths. There are no link or device record types.
+   Paths are unique, slash-separated relative paths with ASCII components,
+   sorted in bytewise UTF-8 order. Require the exact Stage 06 component
+   rules on both ends. Each component is 1–255 bytes. Refuse controls,
+   `<>:"\|?*`, trailing dot or space, Windows device names (including
+   with an extension), and the credential and dot names above. Require
+   exact root `SKILL.md` and reject ASCII case-fold collisions among
+   sibling components and file/directory prefix conflicts. Each size is
+   a canonical decimal string. Cap at 1,000 files, 1,000 implied
+   directories, 16 path levels and 16 MiB total file bytes. Empty directories
+   are dropped. There are no link or device record types.
 3. Exactly each file's declared bytes, in manifest order, then EOF. The
    Stage 06 digest is SHA-256 over each entry in order: u64 big-endian path
    byte length, UTF-8 path bytes, u64 big-endian file byte length, file
@@ -336,14 +354,20 @@ within the 60-second transfer deadline. The readiness marker has a fixed
 length and does not count toward the 1 MiB JSON receipt cap. Then send the frame and close
 stdin. The marker is stripped locally. An early valid JSON error can
 replace readiness. Only the ordinary JSON receipt or error follows a
-readiness line, with the regular stdout/stderr caps.
+readiness line, with the regular stdout/stderr caps. If the receiver refuses
+early and stdin breaks, stop writing and continue draining within the
+same deadline. Honor a valid JSON error with empty stderr and matching exit
+status. An unverified outcome after dispatch remains unknown.
 
 The receiver independently validates the manifest before accepting file
 data, stages under a private managed temporary root, writes only confined
 new regular files and verifies the digest before the destination catalog
 transaction. Recheck the destination registry revision under lock before
 commit. No sender-supplied destination path or metadata permissions.
-Refuse and clean up staged data on all failures. Success is exit 0,
+Refuse and clean up staged data on all failures. After a crash, a subsequent
+explicit import or recovery may remove abandoned stages using checked
+managed-root paths and the same ownership, journal and lifecycle checks.
+Leave active or unverifiable stages alone. Never resume a partial upload. Success is exit 0,
 `host.catalog.import`. Malformed/truncated/trailing frames or a digest
 mismatch are exit 1 `corrupt`, forbidden paths or entry types are exit 1
 `unsafe_path`, limit violations are exit 1 `too_large`, stale revision
@@ -364,7 +388,8 @@ argument order, literal UTF-8 with only JSON-required escapes and an LF.
 The content digest is SHA-256 over the JSON bytes including LF, excluding
 the prefix. Bound the JSON to 1 MiB and refuse definitions whose typed
 apply argv exceed the per-word or script limits. Only Stage 07 supported
-fields and safe args are transferable. No keychain lookups, literal
+fields and safe args are transferable. Keychain references make an entry
+unexportable and its catalog-list digest null. No keychain lookups, literal
 values in secret fields, arbitrary shell snippets or provider credentials.
 
 For a remote source, `larp --json --remote-request cc host catalog export
@@ -380,11 +405,12 @@ data or allow a source to choose a new destination.
 The CLI reconstructs the typed `host catalog apply mcp` argv from verified
 fields and sends the actual command, args or URL and environment/header
 reference names through the ordinary quoted command path. The receiver
-revalidates stage 07 fields, checks the command file and supported,
-available reference names on that machine without reading secret values,
-executing the server or contacting an endpoint, and reports unavailable
-dependencies as `not_found`. The router maps that result to
-`catalog_unavailable`. A copied URL does not cause a request during copy
+revalidates Stage 07 fields and checks the command file without executing
+the server or contacting an endpoint. Reference validation checks supported
+kinds and syntax only. It never checks whether an environment variable is
+present, reads its value or looks up a keychain item. The receiver reports
+an unavailable command as `not_found` and unsupported references as
+`secret_reference`. Copy maps either destination error to `catalog_unavailable`. A copied URL does not cause a request during copy
 or sync. Apply success is `host.catalog.apply`. The outer
 `host.catalog.copy` returns its own common mutation receipt with the
 destination revision for either kind.
@@ -424,12 +450,12 @@ executables and outside sentinels. Use temporary roots and clean all artifacts.
 |---|---|
 | `stage13_hosts` | Strict configurable alias and direct DEST parsing, exactly one mode, no SSH on CRUD or stale routing, atomic changes, concurrent name reuse refuses, no remote deletion on remove |
 | `stage13_argv` | Exact flags and one fixed SSH command across platforms, config mode keeps ambient config with fixed options only, direct mode disables config and passes agent selection unchanged, identity_file rejects relative/leading-hyphen paths, percent/dollar expansion, control characters and Windows UNC/device paths before spawn, exact spaces/quotes/dollars in paths and argv, attempted injected options/commands remain inert, no local SSH config or credentials inspected by Larp |
-| `stage13_transport` | Missing client, host-key refusal and BatchMode prompt refusal with no fallback, banner and post-quantum warning on stderr rejected and redacted, caps on both streams, deadlines/cancel/reap, no raw output or secret sentinels in errors, unknown mutation outcome |
+| `stage13_transport` | Missing client, host-key refusal and BatchMode prompt refusal with no fallback, alias mode overrides configured forwardings and PTY, Windows PE/version admission rejects scripts, aliases, current-directory lookup and MSYS/Cygwin clients, banner and post-quantum warning on stderr rejected and redacted, caps on both streams, deadlines/cancel/reap, no raw output or secret sentinels in errors, unknown mutation outcome |
 | `stage13_protocol` | Missing/old/incompatible Larp, dash fixture with a non-executable absolute file and a directory both exit 44, unsupported OS including MSYS/Cygwin exit 45, escaped paths, reserved router error codes, malformed/framed/trailing/unknown schema and wrong command or exit, compatible version, receiver allowlist, closed native admission and remote LIVE refusal before effects |
 | `stage13_revision` | Same profile IDs/names on different machines, re-add race and stale target conflict before effects, one-shot mutation on disconnect, no fallback or retry |
 | `stage13_catalog` | Destination inheritance including MCP sync_all=true and skill future-profile defaults, isolated share revision/no-op and older writer invalidation, opt-in explicit sync, real skill bytes and MCP definition under explicit approval, reference names only, unavailable target command/reference and no credential values, same-name conflict and same-definition no-op, independent success amid partial failure |
-| `stage13_skill_transfer` | Frame round-trip through fixed script/readiness, no payload before READY, TTY refused, truncated/trailing stream, wrong digest, invalid/duplicate manifest fields, oversize, credential-shaped filename, symlink entry and traversal all refuse before commit. Scope and cleanup checks preserve outside sentinels. |
-| App fixture suite | Decode new and old envelopes, add/remove/check states, revision/routing isolation, previewed copy and sync outcomes, no remote LIVE action, menu uses loaded data and does not poll, launch with N hosts and restore/wake/window/menu open spawn zero SSH processes |
+| `stage13_skill_transfer` | Frame round-trip through fixed script/readiness, no payload before READY, TTY refused, truncated/trailing stream, wrong digest, invalid/duplicate manifest fields, oversize, credential-shaped filename, missing root SKILL.md, non-ASCII path, case-fold collision, symlink entry and traversal all refuse before commit. Early refusal after a broken pipe retains the valid error. Crash cleanup preserves active stages and outside sentinels. |
+| App fixture suite | Decode new and old envelopes, add/remove/check states, revision/routing isolation, previewed copy and sync outcomes, no remote LIVE action, host-only SSH_AUTH_SOCK propagation, menu uses loaded data and does not poll, launch with N hosts and restore/wake/window/menu open spawn zero SSH processes |
 
 Zero matching tests fails implementation acceptance. This planning PR runs
 contract fixture validation only.
