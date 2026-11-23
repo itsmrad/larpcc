@@ -59,3 +59,61 @@ fn valid_email_part(value: &str, max: usize) -> bool {
         && value.len() <= max
         && value.bytes().all(|byte| byte.is_ascii_graphic() && byte != b'@')
 }
+
+#[cfg(all(test, feature = "synthetic-launch"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage14_parser_accepts_only_the_rows_known_results() {
+        let email = ["user", "@", "example.com"].concat();
+        let plan = ["Pl", "us"].concat();
+        for (fields, expected_email, expected_plan) in [
+            (format!("email={email}\nplan={plan}\n"), Some(email.as_str()), Some(plan.as_str())),
+            (format!("email={email}\n"), Some(email.as_str()), None),
+            (format!("plan={plan}\n"), None, Some(plan.as_str())),
+            (String::new(), None, None),
+        ] {
+            let output = format!("signed-in\n{fields}");
+            match invented(Some(0), output.as_bytes(), b"") {
+                Account::SignedIn { email, plan } => {
+                    assert_eq!(email.as_deref(), expected_email);
+                    assert_eq!(plan.as_deref(), expected_plan);
+                }
+                _ => panic!("fixture should parse as signed in"),
+            }
+        }
+        assert!(matches!(invented(Some(3), b"signed-out\n", b""), Account::SignedOut));
+    }
+
+    #[test]
+    fn stage14_parser_rejects_unrecognized_exit_stream_and_shape() {
+        for (code, stdout, stderr) in [
+            (None, b"signed-in\n".as_slice(), b"".as_slice()),
+            (Some(3), b"signed-in\n", b""),
+            (Some(0), b"signed-out\n", b""),
+            (Some(0), b"signed-in\n", b"unexpected"),
+            (Some(0), b"version=0.0.15\nsigned-in\n", b""),
+            (Some(0), b"signed-in\nemail=a@b\nemail=x@y\n", b""),
+            (Some(0), b"signed-in\nplan=Plus\nplan=Plus\n", b""),
+            (Some(0), b"signed-in\nbackend=fixture\n", b""),
+            (Some(0), b"signed-in\nplan=\xff\n", b""),
+            (Some(0), b"signed-in\nplan=\x1b[31mPlus\n", b""),
+            (Some(0), b"signed-in\nplan= Plus\n", b""),
+            (Some(0), b"signed-in\nemail=a@@b\n", b""),
+            (Some(0), b"signed-in\nemail=a b@c\n", b""),
+            (Some(0), b"signed-in\nemail=@b\n", b""),
+            (Some(0), b"signed-in\nplan=\n", b""),
+            (Some(0), b"signed-in", b""),
+        ] {
+            assert!(matches!(invented(code, stdout, stderr), Account::Unknown));
+        }
+        for output in [
+            format!("signed-in\nemail={}@b\n", "a".repeat(65)),
+            format!("signed-in\nemail=a@{}\n", "b".repeat(254)),
+            format!("signed-in\nplan={}\n", "p".repeat(65)),
+        ] {
+            assert!(matches!(invented(Some(0), output.as_bytes(), b""), Account::Unknown));
+        }
+    }
+}
