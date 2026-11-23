@@ -154,17 +154,18 @@ struct MenuBarPanel: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        PanelStack(maxHeight: stackLimit) {
             VStack(spacing: 0) {
                 header
                 notices
             }
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { headerHeight = $0 }
-            VStack(spacing: PanelMetrics.inset) {
-                list
-                footer.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
-            }
-            .padding([.horizontal, .bottom], PanelMetrics.inset)
+            .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+            .clipped()
+            list.padding(.horizontal, PanelMetrics.inset)
+            footer
+                .padding(PanelMetrics.inset)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { footerHeight = $0 }
         }
         .frame(width: 360)
         // The menu bar window keeps the size of its first layout, so it is resized
@@ -259,8 +260,8 @@ struct MenuBarPanel: View {
         if let error = store.usageError {
             notice(error, symbol: "exclamationmark.triangle.fill")
         }
-        if let launchFeedback, !isSnapshot {
-            notice(launchFeedback, symbol: "exclamationmark.triangle.fill", dismiss: { self.launchFeedback = nil })
+        if let feedback = isSnapshot ? snapshotNotice : launchFeedback {
+            notice(feedback, symbol: "exclamationmark.triangle.fill", dismiss: { self.launchFeedback = nil })
         }
     }
 
@@ -283,22 +284,20 @@ struct MenuBarPanel: View {
 
     // MARK: Profiles
 
-    /// Fits its content; scrolls only past 80% of the screen. The list is laid out at its
-    /// natural height (never a sliver), and even the first layout is clipped to the limit.
+    /// The cards at their natural height (never a sliver). `PanelStack` gives them what the
+    /// header and footer leave; they are clipped to it until they are measured, then scroll.
     @ViewBuilder
     private var list: some View {
         let content = profileList
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { listHeight = $0 }
-        if isSnapshot {
-            content
-        } else if listHeight <= maxListHeight {
-            content.frame(maxHeight: maxListHeight, alignment: .top).clipped()
+        if isSnapshot || listHeight <= maxListHeight {
+            content.frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped()
         } else {
             ScrollViewReader { proxy in
                 ScrollView { content }
                     .scrollBounceBehavior(.basedOnSize)
-                    .frame(height: maxListHeight)
+                    .frame(idealHeight: listHeight)
                     .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous))
                     .onChange(of: selection) { _, item in
                         if let item { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(item) } }
@@ -311,19 +310,32 @@ struct MenuBarPanel: View {
     /// exists, before that the screen under the pointer that opened it.
     private var maxPanelHeight: CGFloat {
         #if DEBUG
-        // `--menubar-screen-height=<pt>` stands in for a short display when checking overflow.
-        if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--menubar-screen-height=") }),
-           let value = Double(arg.dropFirst("--menubar-screen-height=".count)) {
-            return value * 0.8
-        }
+        if let height = MenuBarSnapshot.screenHeight { return height * 0.8 }
         #endif
         let pointerScreen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
         return (screenHeight ?? pointerScreen?.visibleFrame.height ?? NSScreen.main?.visibleFrame.height ?? 800) * 0.8
     }
 
+    /// The panel's height limit. The offscreen snapshot has no screen and draws everything,
+    /// unless a debug screen height asks it to check overflow.
+    private var stackLimit: CGFloat {
+        #if DEBUG
+        if isSnapshot && MenuBarSnapshot.screenHeight == nil { return .infinity }
+        #endif
+        return maxPanelHeight
+    }
+
+    private var snapshotNotice: String? {
+        #if DEBUG
+        return MenuBarSnapshot.notice
+        #else
+        return nil
+        #endif
+    }
+
     /// What is left for the cards once the measured header, notices and footer are placed.
     private var maxListHeight: CGFloat {
-        max(120, maxPanelHeight - headerHeight - footerHeight - 2 * PanelMetrics.inset)
+        max(0, maxPanelHeight - headerHeight - footerHeight)
     }
 
     /// One card per profile, grouped under provider labels.
@@ -495,6 +507,35 @@ struct MenuBarPanel: View {
     private func closePanel() {
         guard !isSnapshot else { return }
         dismiss()
+    }
+}
+
+/// Header, cards and footer in a column no taller than `maxHeight`, worked out in a single
+/// layout pass. The footer always gets its full height, the header comes next, and the cards
+/// get whatever is left.
+private struct PanelStack: Layout {
+    let maxHeight: CGFloat
+
+    private func heights(width: CGFloat, subviews: Subviews) -> [CGFloat] {
+        let ideal = subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+        let footer = ideal[2]
+        let header = min(ideal[0], max(0, maxHeight - footer))
+        let cards = min(ideal[1], max(0, maxHeight - footer - header))
+        return [header, cards, footer]
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 360
+        return CGSize(width: width, height: heights(width: width, subviews: subviews).reduce(0, +))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for (subview, height) in zip(subviews, heights(width: bounds.width, subviews: subviews)) {
+            subview.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: height))
+            y += height
+        }
     }
 }
 

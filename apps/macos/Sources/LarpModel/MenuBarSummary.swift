@@ -94,12 +94,12 @@ public enum UsagePace {
     }
 
     /// Compares quota left with time left and projects exhaustion at the average rate, as of the
-    /// moment the sample was taken (`capturedAt`), so an older sample never drifts. After the reset
-    /// time has passed the estimate is out of date.
+    /// moment the sample was taken (`capturedAt`), so an older sample never drifts. Without a
+    /// capture time there is no pace. After the reset time has passed the estimate is out of date.
     public static func text(_ window: UsageWindow, kind: UsageWindowKind, capturedAt: Date?, now: Date,
                             spoken: Bool = false) -> String? {
         if isOutOfDate(window, now: now) { return spoken ? "out of date, refresh" : outOfDate }
-        guard let remaining = window.resetsAt?.timeIntervalSince(capturedAt ?? now),
+        guard let capturedAt, let remaining = window.resetsAt?.timeIntervalSince(capturedAt),
               remaining > 0, remaining < kind.length else { return nil }
         let elapsed = kind.length - remaining
         let left = window.leftPercent

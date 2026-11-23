@@ -154,18 +154,18 @@ enum MenuBarSnapshot {
     private static let prefix = "--menubar-panel-snapshot="
     private static let expandedPrefix = "--menubar-panel-expanded="
 
+    /// `--menubar-screen-height=<pt>`: stands in for a short display when checking overflow.
+    static var screenHeight: CGFloat? {
+        CommandLine.arguments.first { $0.hasPrefix("--menubar-screen-height=") }
+            .flatMap { Double($0.dropFirst("--menubar-screen-height=".count)) }.map { CGFloat($0) }
+    }
+
+    /// `--menubar-notice=<text>`: shows that text as the panel's notice, for overflow checks.
+    static var notice: String? {
+        CommandLine.arguments.first { $0.hasPrefix("--menubar-notice=") }.map { String($0.dropFirst("--menubar-notice=".count)) }
+    }
+
     static func runIfRequested() {
-        // `--menubar-open`: clicks this app's own status item after launch, for live checks
-        // when the item sits under the camera housing and cannot be clicked.
-        if CommandLine.arguments.contains("--menubar-open") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                func button(in view: NSView?) -> NSStatusBarButton? {
-                    guard let view else { return nil }
-                    return view as? NSStatusBarButton ?? view.subviews.lazy.compactMap { button(in: $0) }.first
-                }
-                NSApp.windows.lazy.compactMap { button(in: $0.contentView) }.first?.performClick(nil)
-            }
-        }
         guard let arg = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) }) else { return }
         let path = String(arg.dropFirst(prefix.count))
         guard path.hasPrefix("/"), path.lowercased().hasSuffix(".png") else { exit(2) }

@@ -119,10 +119,11 @@ swift run LarpCC --menubar-panel-snapshot=/abs/path.png --appearance=dark \
 `--menubar-panel-selected=<profile id>` draws one card selected,
 `--menubar-status-snapshot` also writes the status item on a light and a dark
 bar, and `--menubar-panel-accessibility` renders with Increase Contrast and
-Reduce Transparency. For live debug runs, `--menubar-open` opens the panel
-after launch (useful when the item sits under the camera housing) and
-`--menubar-screen-height=<pt>` stands in for a short display. Snapshots draw opaque cards because glass needs a live
-window. Release builds exclude the snapshot hook. Capture the live panel there
+Reduce Transparency. `--menubar-screen-height=<pt>` stands in for a short
+display (in the snapshot and in live debug runs), and `--menubar-notice=<text>`
+adds a notice, so overflow can be checked offscreen: the footer always stays
+whole, the header comes next, and the cards get what is left. Snapshots draw
+opaque cards because glass needs a live window. Release builds exclude the snapshot hook. Capture the live panel there
 with `screencapture -x -o -l <windowID>`. Link debug builds the way
 `scripts/bundle.sh` does (`-Xlinker -platform_version …`); otherwise macOS
 draws the app in its compatibility style with small window corners.
@@ -137,7 +138,8 @@ draws the app in its compatibility style with small window corners.
   collapsed cards, and that the bars line up across cards. Expand each card.
   Confirm reserve, deficit and on-pace, the disabled sample desktop action,
   and that the window grows and shrinks with the card. Check overflow with
-  `--menubar-screen-height=500` and on a small screen.
+  `--menubar-screen-height=360` and a long `--menubar-notice`, and on a small
+  screen: the footer must stay whole.
 - **C. Refresh** Reopen in Local mode and check the update age. Use ⌘R to
   re-read usage, including with the Settings window open and LarpCC
   frontmost. The panel must stay open.
