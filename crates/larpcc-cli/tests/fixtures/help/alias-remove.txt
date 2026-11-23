@@ -1,0 +1,11 @@
+Remove an alias after verifying its launcher and receipt
+
+Usage: larp cc alias remove [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>  Alias name
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

@@ -80,6 +80,31 @@ returns local launched/focused outcomes. No exact Rust signature frozen here.
 MAC waits merged v3 seed for CLI integration; SwiftUI scaffolding is independent.
 SwiftUI shells out to stable JSON; no library extraction or Tauri.
 
+## Remote
+
+Stage 13 follows the local CLI and GUI contracts. [Remote hosts over SSH](docs/stages/13-remote-hosts.md)
+freezes user-installed remote Larp, machine-scoped metadata in the app, and
+explicit MCP/skills copy and sync. D20 allows user-configured SSH aliases
+and strictly parsed direct addresses. D21 permits validated skill packages
+and MCP definitions with secret reference names to cross SSH. Larp never
+transfers its binary. D22 limits the remote OS to Linux and macOS. The menu bar may list profiles from data
+already loaded. Remote native run remains closed pending qualification.
+
+- Use LarpCC only with one person's own machines and accounts. Include this
+  notice in shipped documentation when the feature is delivered.
+- Each machine signs in through its own official clients. Never copy login
+  state, credential files, tokens, keychain items or SSH authentication
+  material across machines.
+- Contact hosts only when the user selects a machine or explicitly refreshes,
+  checks, edits, copies or syncs. App launch, restored selection, window or
+  menu-bar open, and wake never contact hosts. No background polling, schedules,
+  unattended runs or automatic account switching.
+- The user-invoked system SSH child is the only network transport used by
+  Larp for remote management. Remote Larp follows the same safety rules.
+  Stage 11 usage is LOCAL-only for remote profiles, even when a host permits
+  LIVE for local callers. A routed request never reads a usage token or
+  contacts a provider endpoint.
+
 ## Ordered slices and gates
 
 | Slice | Contract and order | Deliverable / failure boundary |
@@ -92,6 +117,7 @@ SwiftUI shells out to stable JSON; no library extraction or Tauri.
 | 08 | [JSON/doctor/injection](docs/stages/08-json-launch-doctor.md), completes CLI | frozen schema:1, version-only detection, invented-row injection; native ROWS empty |
 | 09 | [desktop](docs/stages/09-desktop.md), after CLI | MAC local dispatch interface and separate native proof; uncertain binding/focus/qualification refuses |
 | 10 | [native GUI](docs/stages/10-native-gui.md), after CLI/desktop | SwiftUI consumes CLI JSON, explicit toggles; stale/unknown schema fails safely |
+| 13 | [remote hosts](docs/stages/13-remote-hosts.md), after local CLI/GUI | SSH management and explicit catalog copy/sync; remote usage LOCAL only |
 
 Stages 05–07 can be independently implemented after the exact seed if lead
 allocates disjoint files; shared changes serialize through CORE. Contracts freeze
@@ -108,11 +134,49 @@ LARPCC_HOME and names claude-work/codex-45. Never test existing ~/.claude*,
 is local metadata; human native status is still gated pass-through. JSON never
 mixes native output with envelopes. Doctor --detect-versions permits only bounded
 version-specific output in isolated fresh homes, separately from auth qualification.
-[Threat review](docs/contracts/threats.md) covers DELETE and MCP SECRETS; import is
-OUT OF SCOPE. Native desktop/account rows remain empty until concrete reviewed
+[Threat review](docs/contracts/threats.md) covers deletion, MCP secrets and
+remote SSH management. Import remains out of scope. Native desktop/account
+rows remain empty until concrete reviewed
 qualification, regardless of successful engineering/UI checks. Packaging/release,
 signing/distribution and credentials/spending require later scoped gates; old
 stage-5 release goals are retained as future requirements, not this PR's completion.
+
+## Account summary
+
+Stage 14 follows the local CLI contract. [Account summary and profile extras](docs/stages/14-account-summary.md)
+freezes the CLI step only. The app and menu-bar steps each wait for the
+lead to ask the user, per the rollout order.
+
+- D25: `larp cc status NAME` shows the account email (in full) and plan by
+  default, in human and JSON output, from the official client's status
+  operation only. JSON uses the new `status.account` variant.
+  `--no-account` returns the unchanged metadata `status` and never runs a
+  client. This amends "JSON status is local metadata; human native status is
+  still gated pass-through" above for `status NAME` only: status output is
+  captured by an exact-row parser instead of passed through.
+  Under `--host` (implemented with stage 13) the remote Larp runs its own
+  status and returns the same variant over the user's SSH, only on explicit
+  user action, with never-store on both ends.
+- D26: email and plan are never stored by LarpCC or the app. Parsing is
+  exact-version and fail-closed (`account: unknown`). Invariant 2 stays: no
+  token or credential file reads, ever. Invariant 3 stays: LarpCC makes no
+  network calls; only the official child may.
+- D27: provider version, display name, default launch arguments (inert until
+  a run row widens its grammar) and the usage text graph from stage 11 local
+  data. Registry v4 and its JSON fields are a separate amendment.
+- D24: real-account qualification on the user's Mac with throwaway profiles,
+  the user completing every sign-in. This supersedes "Real-account tests
+  remain unauthorized" for that session only, after the lead merges the plan.
+  Each native operation, including the first status call, is blocked unless
+  the exact build's credential backend, key, precedence and fallback are
+  proven per-home (gate G0). No login runs until G0 proves status and login
+  plus one sign-out path (logout or an approved cleanup path). Once login has
+  been dispatched, every outcome (including failure, cancellation and
+  timeout) runs: confirmed reap and quiescence of the login process tree, then
+  the sign-out path, then confirmed sign-out, and only then deletion. A
+  missing confirmation keeps the throwaway state for recovery and blocks the
+  row. PII-capable observations run only in the user's
+  unrecorded terminal. Rows land in a separate implementation PR.
 
 ---
 

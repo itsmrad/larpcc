@@ -1,0 +1,12 @@
+Bind or open a verified desktop app (ChatGPT on macOS; Claude closed)
+
+Usage: larp cc app [OPTIONS] <COMMAND>
+
+Commands:
+  bind  
+  open  
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

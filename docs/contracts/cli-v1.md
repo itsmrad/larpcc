@@ -94,8 +94,12 @@ Missing/unsafe homes are diagnostic states, not evidence of being signed out.
 `app open PROFILE --json` success is a **local dispatch receipt** only:
 `profile_id,provider,surface:"desktop",outcome:"launched"|"focused",
 native_auth:"not_observed"`. It says nothing about account identity, successful
-authentication, UI readiness or isolation. Currently it fails
-`qualification_pending` before app execution; no success row is authorized.
+authentication, UI readiness or isolation. The [stage09 lead desktop amendment](../stages/09-desktop.md#lead-desktop-admission-amendment--2026-11-17)
+previously authorized local dispatch of strictly verified ChatGPT.app on macOS,
+with a fixed warning for untested/unknown versions. Dispatch is now closed
+pending the attribution re-test described in stage 09. Claude and unsupported platforms remain
+`qualification_pending`. CLI native rows remain empty and `qualified:false`;
+local desktop dispatch does not qualify accounts or storage isolation.
 CORE resolves one coherent v3 profile/provider/cli/desktop/binding snapshot,
 validates ancestry/ACLs and paths, and revalidates snapshot before dispatch.
 MAC retains checked paths through open/focus, revalidates app identity and
@@ -127,6 +131,77 @@ See [examples](cli-v1.examples.json) for SwiftUI decoding fixtures including
 profile/provider/surfaces/desktop, alias, MCP, skills, matrices, status/doctor,
 mutation, parser failure and closed desktop dispatch.
 
+## Remote
+
+[Stage 13](../stages/13-remote-hosts.md) adds host commands and a global
+`--host NAME` selector before the child `--`. Existing local invocations and
+envelope shapes are preserved. A forwarded invocation returns the same dotted
+command and data shape as the target's metadata command. The consumer binds
+the response to the route used in its request. There is no host field in the
+forwarded envelope, and names, IDs and revisions are machine-scoped. An app
+that supports this amendment sends a remote command only through a compatible
+local CLI and validates new envelopes with the amended schema. An older CLI
+can reject the new syntax as `parse`.
+
+| Command | Success data | Revision domain |
+|---|---|---|
+| `host.add`, `host.remove` | Common mutation receipt, non-null host `name` and null `profile_id` | Local host store |
+| `host.list` | `{hosts:[Host]}`, ASCII name order, unique names | Local host store |
+| `host.show` | `{host:Host}` | Local host store |
+| `host.check` | `{name,status}` for the explicitly checked host. Status is `ok`, `unreachable`, `larp_missing` or `incompatible`. A classified probe failure is a completed check with exit 0. | Local host store |
+| `host.catalog.list` | `{kind,entries:[{name,all_machines,content_sha256}]}`, ASCII name order, unique names. The digest is null when the entry cannot be exported. | Selected machine's registry. Report `"0"` with an empty list when absent. |
+| `host.catalog.share`, `host.catalog.apply`, `host.catalog.copy`, `host.catalog.import` | Common mutation receipt, non-null entry `name` and null `profile_id` | Selected machine's non-null registry revision. For copy, this is the destination. |
+
+`Host` is `{name,ssh,larp,larpcc_home,identity_file}` with nullable paths.
+The two host-add options are mutually exclusive. `--ssh-config-host ALIAS`
+uses `ssh:{mode:"config",alias}` and requires a null `identity_file`.
+`--ssh USER@HOST[:PORT]` uses `ssh:{mode:"direct",destination,resolved}`
+with the explicit port in `resolved`. Direct mode allows an optional
+`--identity-file LOCAL_PATH`. Paths and destinations are display data in
+the app. Host-store success revisions are canonical decimal u64 strings,
+including `"0"` for a missing host store. For an absent catalog registry, the
+GUI uses the returned `"0"` as its expected revision.
+
+`host.catalog.share` advances the selected registry revision once when the
+flag changes and preserves it on a no-op. Copy uses an approved content
+digest and independent source and destination revision checks. Catalog
+apply and skills import use the destination's inheritance rules, previewed
+against its registry revision.
+
+Stage 13 defines a private framed SSH stream for catalog exports and for
+`host.catalog.import skills`. Export success is a private frame rather than
+a CLI JSON success variant. Export errors and import results use schema 1.
+The transport consumes the import readiness marker before reading its JSON
+receipt. App callers use `host catalog copy`, which emits one ordinary JSON
+envelope and never returns payload bytes. See the
+[transfer protocol](../stages/13-remote-hosts.md#skills-transfer) for exact
+framing, limits and import exit codes.
+
+For host-store commands, `--expected-revision` is a host-store precondition.
+For forwarded commands it guards the remote registry. Forwarded app reads and
+mutations also require `--expected-host-revision` (a canonical decimal u64),
+which guards local routing. A direct CLI caller may omit either precondition.
+The selector and host revision never pass through SSH. A routing or target
+conflict returns exit 1 under the requested command and requires renewed user
+intent. Host remove requires `--yes`. Closed native admission and JSON native
+IO refusal keep their early precedence.
+
+New operational error codes are `ssh_unavailable`, `ssh_failed`,
+`remote_larp_missing`, `remote_incompatible`, `remote_timeout`,
+`remote_output`, `remote_outcome_unknown` and `catalog_unavailable`, all
+with exit 1. Error messages contain fixed safe text. An unknown mutation
+outcome requires an explicit read before deciding whether to retry. The
+ordinary JSON `too_large`, `conflict` and other applicable codes remain valid.
+An unsupported route/operation exits 2 with `usage` or `unsupported`.
+The local router reserves `ssh_*`, `remote_*` and `catalog_unavailable`.
+Those codes in a forwarded reply make it invalid. After mutation dispatch,
+an invalid reply leaves the outcome unknown.
+
+Remote profiles use LOCAL usage mode only. If the destination has LIVE enabled,
+forwarded reads still use LOCAL and the receiver refuses requests to read or
+enable LIVE before accessing tokens or contacting a provider. This applies
+independently of the app's controls.
+
 ## Validation without installations
 
 Run `python3 docs/contracts/validate.py` from the repo. This stdlib-only fixture
@@ -137,3 +212,87 @@ validator exists, validate the schema and examples with it too; install nothing.
 Implementers add Rust serialization/CLI e2e fixtures against these exact examples,
 including stderr/stdout/exit assertions. Planning validation does not prove CLI
 implementation or native launch behavior.
+
+Skills source confinement uses `forbidden_source` with a fixed message and no
+source path. Recorded desktop version labels contain 1–128 ASCII letters, digits,
+`.`, `_`, `+` or `-`; labels remain unverified metadata.
+
+## Account summary
+
+[Stage 14](../stages/14-account-summary.md) adds one success variant,
+`status.account`, under schema 1. It amends three statements above for this
+variant only: "No account/auth output is captured, parsed or inferred",
+"`status --json` ... never invokes native `status`" and "No implementation may
+redirect/capture native stdout to manufacture a JSON account result". Every
+other command keeps them.
+
+| Invocation | `command` | Data | Runs official client |
+|---|---|---|---|
+| `status NAME [--json]` | `status.account` | `{profile,provider_version,account,usage,diagnostics}` | Only when an exact Status row admits |
+| `status NAME --no-account [--json]` | `status` | Frozen `status` data, unchanged | Never |
+
+`--no-account` is accepted only by `status`. Elsewhere it is `usage`, exit 2.
+An older CLI rejects it as `parse`, exit 2. `doctor` is unchanged.
+
+`--expected-profile-id ID` is a new public global option before the child
+`--`, accepted only by `status` in this amendment (elsewhere `usage`, exit 2;
+an older CLI rejects it as `parse`). ID is a canonical nonzero decimal u64,
+and an invalid value is `usage` without echo. Under the registry lock, after
+the `--expected-revision` check and before any guard, probe or spawn, NAME
+must resolve to ID, or the command fails `conflict`, exit 1, with no effects.
+It applies to public `status` in both modes, local and `--host`. GUI
+account-status requests MUST send both preconditions from the displayed
+snapshot, plus stage 13's `--expected-host-revision` when routed. The router
+checks the host revision locally before SSH and never forwards it. Human
+callers may omit any of them. It adds no response field. Remote metadata
+status forwards `--expected-profile-id` without the account marker to a
+stage 14 receiver, which enforces it. A stage 13-only receiver fails closed
+with `remote_incompatible`; the ID is never dropped. For a request carrying
+`--remote-account` or `--expected-profile-id`, and after stage 13's transport,
+deadline and stream-cap checks (exit 255 stays `ssh_failed`), a fully
+validated reply with exit 2, empty stderr, `error.code` `usage` and an allowed
+discriminator (the requested `status` or `status.account`, or `parse` for a
+parser rejection) maps to local `remote_incompatible`, exit 1. Any other
+invalid reply stays `remote_output`. The expected success
+discriminator follows the request mode: `status` for metadata,
+`status.account` for account. Under a
+stage 13 `--host` route (implemented with stage 13), the remote Larp runs its
+own account status and the forwarded envelope is the same `status.account`
+shape with no host field. Under `--remote-request`, an unmarked `status` is
+always metadata-only. Account mode requires the internal `--remote-account`
+flag, valid only with `--remote-request` and checked by the receiver before
+any effect. The local router forwards exactly the `--expected-revision` and
+`--expected-profile-id` its caller gave, with no extra SSH read. Before
+display, the router validates the reply like any forwarded read and also
+requires the requested name, the sent profile ID (if sent) and a success
+`revision` equal to the sent `--expected-revision` (if sent). Any mismatch
+is `remote_output` with no account data. A remote without stage 14 support rejects the unknown
+flag, which yields `remote_incompatible`. Deadlines are 16 s per SSH child
+and 33 s for the app bridge, as in stage 13. No separate example is
+needed because the shape is identical. See
+[stage 14](../stages/14-account-summary.md#remote-account-status).
+
+`account` is `{state,email,plan}`. `state` is `signed_in`, `signed_out`,
+`unknown`, `not_qualified` or `unavailable`. Email and plan may be non-null
+only for `signed_in`, and each is null when the row's exact shape lacks it.
+Email is printable ASCII `local@domain` with no further `@`, at most 64 and
+253 bytes. Plan is 1–64 printable ASCII with no leading or trailing space.
+A value outside those forms makes the parser return `unknown`. These values
+are display data, never stored by producer or consumer, and never a parsing
+API. `provider_version` is the admitted row's exact version, or the approved
+version-only probe's, or null. It is always null for `unavailable`.
+`usage` is null here. The stage 11 amendment widens it to that stage's local
+per-profile summary or null. `revision` is a non-null canonical decimal u64.
+
+Exit codes: every completed observation, including `signed_out`, `unknown`,
+`not_qualified` and `unavailable`, exits 0 with one envelope and empty stderr.
+`busy` and `conflict` (the snapshot changed before dispatch or before
+publishing) exit 1 and carry no account data. Errors use the `status.account`
+discriminator. `run|login|logout --json` keep failing `json_native_io`.
+
+Compatibility: a strict v1 consumer that does not know `status.account`
+rejects it. Consumers that must not cause provider activity send
+`--no-account`. The Mac app's frozen schema copy carries this variant, and its
+test asserts that decoding still fails closed until the app step adds support.
+Profile extras fields (`display_name`, `launch_args`) are not part of this
+amendment. They land with the registry v4 bump as a separate amendment.

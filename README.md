@@ -24,9 +24,107 @@ larp cc profile surface work desktop on
 larp cc profile list --json
 larp cc profile rename work job --expected-revision 3
 larp cc profile forget personal --yes
+larp cc profile delete personal --yes
+larp cc profile recover personal --yes
+larp cc profile migrate
 larp cc provider bind claude /absolute/path/to/native-executable
 larp cc provider list
 ```
+
+Close all sessions using the profile before confirming delete or recover,
+including sessions started outside Larp. On Linux and macOS, delete permanently
+removes the managed profile directory and owned aliases, clears sharing
+references and retires the profile ID. If interrupted, resume with
+`profile recover NAME --yes`. Pending cleanup blocks registry consumers.
+Windows refuses profile-tree deletion and recovery until confined removal is
+available. `--logout` requires native qualification. Keychain items, remote
+grants and Electron Safe Storage may remain after deleting a directory.
+
+`profile migrate` upgrades registries with empty legacy homes on Linux and
+macOS. Keep older Larp binaries and native sessions stopped while migrating.
+Windows refuses legacy profile-tree moves. See the stage 04 contract for
+[migration recovery](docs/stages/04-layout-and-delete.md#v2-migration-transaction).
+
+Explicit skill packages can be shared with all active CLI profiles:
+
+```sh
+larp cc skills add /absolute/path/to/package --name example
+larp cc skills list
+larp cc skills matrix
+larp cc skills disable example claude-work
+larp cc skills enable example claude-work
+larp cc skills sync
+larp cc skills remove example
+```
+
+A package requires `SKILL.md` and portable ASCII relative filenames. Trusted
+0755/0644 sources are accepted; symlinks, reparse points, hardlinks, special files,
+unsafe ancestry and case-insensitive collisions refuse. Limits are 1,000 files,
+16 MiB and 16 path levels, with at most 1,000 directories. Nothing executes.
+Sources equal to, containing, or inside managed/vendor homes are refused by
+directory identity before package contents are read. Dot entries, `auth.json`,
+`*.pem` and `id_*` names at any depth refuse the entire package before those
+entries are read. Vendor directory permissions do not authorize content reads.
+The package is copied once into `shared/skills/<name>` and verified by a canonical
+SHA-256 digest. Existing store entries and occupied profile destinations are never
+replaced. Unix uses internal-store symlinks; Windows uses owned digest copies
+because confined junction creation is unavailable. New active CLI profiles inherit
+all skills; explicit disables stay with the immutable profile ID across renames.
+Remove requires disabling all active profile references first. Other global,
+project and provider skill scopes remain independently visible.
+
+`skills.json` is a bounded version-1 catalog; `owned-files.json` records exact
+artifact identities and digests. Both use the registry lock. A bounded write-ahead
+`share-journal.json` keeps package bytes and the concrete mutation plan until the
+index, manifest and registry commit completes. Pending work blocks ordinary
+registry consumers; `skills sync` explicitly resumes it. Missing owned profile
+artifacts are recreated by sync or dropped by disable; changed/occupied entries
+still refuse drift. Sharing writes take ordered per-profile lifecycle guards
+before the registry lock; contention refuses. Forget retains the directory and
+refuses sharing references. Cleanup unlinks verified leaves without traversing a
+link target or using recursive directory removal. Local filesystems and the
+existing same-user/privileged race limitations still apply.
+
+`--json` uses schema 1 for all skills commands. List/matrix are read-only; mutations
+and reads accept `--expected-revision` under the same registry lock before name
+resolution. A stale revision refuses without effects. JSON contains metadata and
+switches, never package contents.
+
+Aliases are recognizable commands that launch one profile:
+
+```sh
+larp cc alias add codex-45 claude-work   # CLI run of profile claude-work
+larp cc alias add work-app codex-45 --desktop
+larp cc alias add claude claude-work --shadow
+larp cc alias list
+larp cc alias remove codex-45
+```
+
+An alias is a copy of the running, trusted `larp` executable at
+`<data directory>/bin/NAME` (`NAME.exe` on Windows) plus an adjacent
+`NAME.larp-alias.json` receipt that pins the absolute data root, the profile ID,
+the surface and the identities and SHA-256 of the launcher and its source.
+Windows alias creation currently refuses because the loaded image cannot be verified.
+The registry keeps an independent receipt digest. Any valid profile name works
+for either provider; `claude` and `codex` require `--shadow`. Nothing is ever
+overwritten: an existing file at the alias path, or (without `--shadow`) a
+same-named command on `PATH`, refuses. Larp CC prints guidance but never edits
+`PATH` or shell files; add the `bin` folder to `PATH` yourself.
+
+An alias-named launcher uses its receipt to select the root. A copy named and
+invoked as `larp` uses the ambient root and ordinary closed admission, ignores
+adjacent receipts, and parses the `cc` grammar. Renaming is a user action and
+provides no privilege boundary.
+Alias arguments (including a literal `--json`) are forwarded to `run`, so the
+stage-3 qualification refusal applies unchanged; a desktop alias forwards to
+`app open` and takes no arguments. Renaming the profile keeps the mapping;
+`profile forget` refuses while aliases reference it. Moved, copied or modified
+launchers, forged receipts and a newer `larp` (reported `incompatible`; remove and
+re-add) refuse. Add and remove use the registry lock and the shared
+`share-journal.json` (kind `alias`): an interrupted add rolls back, an interrupted
+remove completes, and an `alias` command without an expected revision can retry
+recovery. Drift leaves the journal pending. Remove deletes only artifacts proven
+by digest and identity. See [manual alias recovery](docs/stages/05-aliases.md#manual-alias-recovery).
 
 Use `provider bind … --replace` to change a binding. An identical binding is a no-op, even if the executable has subsequently disappeared. Provider list revalidates paths and reports `ok`, `unbound` or `invalid: …`; `ok` means path validation only. Binding never runs an executable or probes its version. Paths and diagnostics escape terminal controls and the specified Unicode format controls.
 
@@ -60,7 +158,12 @@ The root must be absolute with no `..` component, and its immediate parent must 
 and `profiles/<id>/{cli,desktop}`. New roots use schema v3. CLI defaults on and
 desktop off; toggling a surface never qualifies native launch. JSON profile
 list/show include both surfaces, provider, lifecycle state, aliases and desktop
-binding slots. Alias commands and desktop binding/dispatch are not shipped.
+bindings. `app bind codex /Applications/ChatGPT.app [--version LABEL]` and
+`app open PROFILE` enable verified official ChatGPT.app dispatch on macOS after
+`profile surface PROFILE desktop on`. Unrecognized app versions warn and launch;
+JSON dispatch is a local receipt with no native account assertions. Claude.app
+and desktop on other operating systems remain closed. CLI qualification rows
+remain empty. Alias commands are not shipped.
 Existing v1/v2 registries remain readable without migration; mutations refuse
 `recovery_required`. Explicit migration, folder deletion and recovery are pending
 the next Stage04 slice. No old profile directory is automatically moved, copied

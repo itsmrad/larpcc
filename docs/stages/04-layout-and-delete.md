@@ -86,17 +86,33 @@ rollback by guessing, or v3 downgrade. Crash tests inject every boundary. Older
 binaries cannot safely participate during migration: quiesce them explicitly;
 cooperative lock does not constrain unknown old clients.
 
+This delivery migrates only empty legacy homes on Linux and macOS. Windows
+refuses legacy profile-tree moves until a durable confined rename is available.
+An interruption after creating a staging container and before recording its
+identity requires manual recovery. Keep Larp and native clients stopped,
+preserve the journal and both staged directories, and inspect the staged
+container and the legacy sibling before making any repair. If you can establish
+that the unrecorded container is the empty staging container from the interrupted
+attempt, move it aside without touching the staged legacy home or the journal,
+then rerun `profile migrate`. Leave ambiguous or changed directories in place.
+
 ## Delete transaction and confined removal
 
 Acquire per-ID lifecycle guard first, then registry lock; shared order applies
 to launch/auth/delete/share. Never hold registry lock across logout, prompts or
 child waits. Revalidate snapshot after any unlocked interval. Refuse visible
 Larp-managed activity (profile guard held), guard contention,
-or safety failure. On macOS also inspect only validated official Claude.app /
-ChatGPT.app identities for an exact profile `--user-data-dir` argument match;
-known activity refuses. Unknown/unverifiable inspected app identity, denied or
-incomplete inspection, malformed arguments, timeout or truncation refuses with
-safe diagnostics. Never inspect process environment, tokens or account data.
+or safety failure. On macOS enumerate current-user processes and select
+executables inside Claude.app or ChatGPT.app bundle contents before reading any
+arguments. Keep the official main-app signature requirements and verify nested
+helpers against the corresponding vendor team signature. An exact profile
+`--user-data-dir` argument match refuses deletion. Skip a process that exits or
+whose PID is reused during the scan, and skip denied path lookups that have yet
+to identify a candidate. Once identified, a live candidate with unverifiable
+identity or denied, malformed, or truncated arguments still refuses deletion.
+Failed or oversized process enumeration also refuses. If the scan reaches its
+two-second deadline, retry the whole scan once with a fresh two-second budget.
+Never inspect process environment, tokens or account data.
 
 The user must close sessions started outside Larp (including manual terminal
 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` sessions) before confirming `--yes`. This is
@@ -135,6 +151,18 @@ Bound 100,000 entries,
 Manifest cannot enlarge this subtree. Forged path/hash metadata grants no
 arbitrary deletion authority. Same-user privileged racing remains a limitation;
 if native handle confinement cannot be proved, deletion on that OS stays refused.
+Windows deletion and recovery refuse before publishing a tombstone or removing
+an artifact. Linux and macOS use the retained-handle Unix implementation.
+Unix rechecks the full retained ancestry after syncing and immediately before
+unlinking a directory. The kernel does not make that check and the unlink a
+single operation. Same-user or privileged namespace changes can still race that
+interval. If a check cannot establish confinement, the attempt stops.
+
+Lifecycle journal staging uses exclusive creation. Recovery only promotes an
+occupied staging file when its bytes match the next journal record and the
+published journal identifies the same transaction. Preserve unproven staging
+files for inspection. An interruption before the first journal publication can
+require moving the orphaned staging file aside manually.
 
 ## Owned-file amendment
 
@@ -160,7 +188,7 @@ implemented and actually executed with `cargo test --workspace --locked stage04_
 |---|---|
 | stage04_migration | v1/v2 read unchanged; empty/synthetic migration, IDs/bindings/next_id preserved; cli+desktop layout; old schema refusal; nonempty unknown home untouched |
 | stage04_migration_crash | crash each rename/journal/registry boundary; deterministic resume or safe refusal; two migrators serialize; no lost/outside bytes |
-| stage04_delete | folder really absent; forget retains folder; aliases/catalog/skills cleaned; ID never reused; --yes/--logout/JSON precedence; keychain warning |
+| stage04_delete | Delete removes the folder and cleans aliases and sharing references. Forget retains the folder and refuses while references exist. Verify ID retirement, --yes/--logout/JSON precedence and the keychain warning. |
 | stage04_delete_escape | traversal/forged manifest/journal, symlink/junction swap, mount/hardlink/outside sentinel; no outside deletion, no token-content reads |
 | stage04_delete_recovery | crash every cleanup boundary; tombstone blocks all consumers; busy CLI/desktop, surviving managed child and uncertain inspected app identity refuse; concurrent edits/drift retain tombstone |
 

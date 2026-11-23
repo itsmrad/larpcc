@@ -34,3 +34,17 @@ Every GUI mutation and app-open request passes `--expected-revision REV` from
 the displayed snapshot. On conflict refresh and obtain renewed user intent; no
 automatic destructive retry. Test a rename plus old-name reuse between list and
 delete: the stale request must refuse without acting on the replacement ID.
+
+## Stage 13 host-routed subprocess amendment
+
+Keep the bridge's PATH, HOME and LANG baseline. Only a command that contacts
+a configured SSH host gets the app process's `SSH_AUTH_SOCK`, passed through
+unchanged when present. This covers explicit host checks, forwarded metadata
+calls and catalog copies involving a remote route. Local commands and host
+record CRUD keep the baseline. No other variable is inherited. Alias mode
+uses the same minimal `PATH=/usr/bin:/bin`, so a configured hook may need
+an absolute executable path.
+
+Use a synthetic fixture CLI to verify the exact environment and untouched
+socket identifier for both SSH modes, no addition when the variable is unset
+or the command is local, and no unrelated variable or PATH pass-through.

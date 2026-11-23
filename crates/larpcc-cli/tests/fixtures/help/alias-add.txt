@@ -1,0 +1,19 @@
+Install a Larp copy in the data directory's bin folder that launches PROFILE
+
+Usage: larp cc alias add [OPTIONS] <NAME> <PROFILE>
+
+Arguments:
+  <NAME>     Alias command name (profile-name grammar; `larp` and device names are reserved)
+  <PROFILE>  Target profile; the alias follows its ID across renames
+
+Options:
+      --desktop
+          Open the profile's desktop app instead of running its CLI
+      --json
+          Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>
+          Refuse if the registry revision has changed
+      --shadow
+          Required for the names claude and codex; never overwrites an existing file
+  -h, --help
+          Print help
