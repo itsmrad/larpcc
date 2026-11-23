@@ -796,7 +796,7 @@ private struct MenuBarProfileSummary: View {
             UsageMeter(leftPercent: window.leftPercent, level: level)
             Text("\(Int(window.leftPercent.rounded()))%")
                 .fontWeight(.semibold)
-                .foregroundStyle(level.tint(in: theme) ?? .primary)
+                .foregroundStyle(level.textTint(in: theme) ?? .primary)
                 .frame(width: 32, alignment: .trailing)
             // Fixed widths keep every card's meter the same length.
             Label(resetText(window), systemImage: "clock")
@@ -922,13 +922,28 @@ private struct UsageMeter: View {
 }
 
 private extension UsageLevel {
-    /// Calm by default; colour only when a limit is running low. Tahoe keeps the system red;
-    /// the classic themes use a red that stays readable on their darker dark-mode backing.
+    /// Calm by default; colour only when a limit is running low. For the meter and ring.
+    /// Tahoe uses the menu bar's own reds; the classic themes one red tuned to their backing.
     func tint(in theme: Theme) -> Color? {
         switch self {
         case .normal: return nil
         case .low: return .orange
-        case .critical: return theme == .tahoe ? .red : criticalRed
+        case .critical: return theme == .tahoe ? criticalGraphicRed : criticalRed
         }
     }
+
+    /// For the percentage text, which needs more contrast than the meter and ring.
+    func textTint(in theme: Theme) -> Color? {
+        self == .critical && theme == .tahoe ? criticalTextRed : tint(in: theme)
+    }
 }
+
+/// The system red in dark mode. In light mode the system red is too pale on the white
+/// cards, so text uses a deeper red (4.5:1 or better) and the meter and ring a slightly
+/// deeper one (3:1 or better, also on a selected card).
+private let criticalTextRed = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
+})
+private let criticalGraphicRed = Color(nsColor: NSColor(name: nil) { appearance in
+    isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.843, green: 0, blue: 0.082, alpha: 1)
+})
