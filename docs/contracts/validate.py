@@ -175,12 +175,24 @@ def pace(captured_at, resets_at, used, window):
 def one_decimal(x):
     return abs(x * 10 - round(x * 10)) < 1e-9
 
-def window_semantic(w, captured_at):
-    used, resets = w['used_percent'], w['resets_at']
+def window_semantic(w, row_captured_at):
+    used, resets, seen = w['used_percent'], w['resets_at'], w['captured_at']
     assert (w['reason'] is None) == (used is not None and resets is not None)
     assert used is None or one_decimal(used)
-    expected = pace(captured_at, resets, used, w['window_seconds']) if w['reason'] is None else None
+    # Each window carries its own observation time; pace uses it, never the row time.
+    assert (seen is None) == (used is None)
+    assert seen is None or epoch(seen) <= epoch(row_captured_at)
+    expected = pace(seen, resets, used, w['window_seconds']) if w['reason'] is None else None
     assert w['pace'] == expected, (w, expected)
+
+def credits_source_semantic(p):
+    # Only the Codex LIVE response carries reset credits, and never their expiry.
+    c = p['reset_credits']
+    if p['provider'] == 'claude' or p['mode'] == 'local':
+        assert c['state'] == 'unsupported'
+    else:
+        assert c['state'] != 'unsupported'
+        assert c['state'] != 'available' or c['expires_state'] == 'unsupported'
 
 def credits_semantic(c):
     state, count, es = c['state'], c['count'], c['expires_state']
@@ -214,6 +226,9 @@ def usage_semantic(data):
         windows = [ws['five_hour'], ws['weekly']] + (ws['extra'] or [])
         if p['captured_at'] is None:
             assert all(w['used_percent'] is None for w in windows)
+        seen = [epoch(w['captured_at']) for w in windows if w['captured_at'] is not None]
+        if seen:
+            assert max(seen) == epoch(p['captured_at'])  # row time = newest window observation
         for w in windows:
             window_semantic(w, p['captured_at'])
         if ws['extra'] is not None:
@@ -221,6 +236,7 @@ def usage_semantic(data):
             assert keys == sorted(keys) and len({w['label'] for w in ws['extra']}) == len(keys)
             assert all(w['pace'] is None for w in ws['extra'] if w['window_seconds'] is None)
         credits_semantic(p['reset_credits'])
+        credits_source_semantic(p)
         if p['plan'] is not None and p['plan']['source'] == 'client_local':
             assert p['provider'] == 'codex' and src == 'codex_session_log'
         if p['plan'] is not None and p['plan']['source'] == 'live_endpoint':
@@ -235,8 +251,10 @@ def settings_semantic(data):
     live = data['live']
     if live['acknowledged_warning'] is not None:
         assert live['acknowledged_warning'] <= live['current_warning']
+    current = live['acknowledged_warning'] == live['current_warning']
+    assert live['state'] == ('off' if not live['enabled'] else 'on' if current else 'needs_acknowledgement')
     if data['mode'] == 'live' or any(p['mode'] == 'live' for p in rows):
-        assert live['enabled'] and live['acknowledged_warning'] == live['current_warning']
+        assert live['enabled']  # stored LIVE choices survive a warning bump as needs_acknowledgement
 
 def schema_walk(rule):
     if isinstance(rule, dict):
@@ -344,14 +362,18 @@ for label, ok in (('Pro', True), ('Max 5x', True), ('Max 20x', True), ('Team (an
     assert matches(label, SCHEMA['$defs']['plan_label']) == ok, label
 assert matches('Opus weekly', SCHEMA['$defs']['usage_extra_label'])
 assert not matches('Opus weekly ', SCHEMA['$defs']['usage_extra_label'])
-usage = next(x for x in fixtures if x['command'] == 'usage' and x['ok'] and x['data']['profiles'][1:])
+usage = next(x for x in fixtures if x['command'] == 'usage' and x['ok'] and x['data']['profiles'][1:]
+             and x['data']['requested_mode'] == 'settings')
+def settings_fixture(x):
+    x.update(next(copy.deepcopy(f) for f in fixtures if f['command'] == 'settings.usage'))
+    x['data']['live']['state'] = 'paused'
 codex = lambda x: x['data']['profiles'][1]
 def set_window(**kw):
     return lambda x: codex(x)['windows']['five_hour'].update(**kw)
 def extra(n):
     def mutate(x):
         base = copy.deepcopy(codex(x)['windows']['five_hour'])
-        codex(x)['windows']['extra'] = [dict(base, label=f'Bucket {i:02d} 5h') for i in range(n)]
+        codex(x)['windows']['extra'] = [dict(base, label=f'Other limit {i + 1} 5h') for i in range(n)]
     return mutate
 structural = (
     set_window(reason='unknown_reason'),
@@ -372,6 +394,11 @@ structural = (
     lambda x: codex(x)['reset_credits'].pop('expires_at'),
     lambda x: codex(x)['reset_credits'].update(state='unknown'),
     extra(9),
+    # A grammar-valid private bucket name must never validate as a label.
+    lambda x: codex(x)['windows']['extra'][0].update(label='Acme Research 5h'),
+    lambda x: codex(x)['windows']['extra'][0].update(label='codex_other 5h'),
+    lambda x: codex(x)['windows']['five_hour'].pop('captured_at'),
+    lambda x: settings_fixture(x),
 )
 for mutate in structural:
     invalid = copy.deepcopy(usage)
@@ -405,6 +432,22 @@ semantic_only = [
     (usage, lambda x: codex(x).update(source=None)),
     (usage, lambda x: codex(x).update(captured_at='2026-11-21T13:00:00Z')),
     (usage, lambda x: x['data'].update(requested_mode='live')),
+    (usage, lambda x: codex(x)['windows']['extra'][0].update(captured_at='2026-11-21T12:00:01Z')),
+    (usage, lambda x: codex(x)['windows']['extra'][0].update(captured_at=None)),
+    (usage, lambda x: codex(x)['windows']['extra'][0].update(captured_at='2026-11-21T12:00:00Z')),
+    (usage, lambda x: codex(x)['windows']['five_hour'].update(captured_at='2026-11-21T11:00:00Z')),
+    (usage, lambda x: codex(x).update(captured_at='2026-11-21T12:05:00Z')),
+    (usage, lambda x: codex(x)['reset_credits'].update(state='not_recorded', expires_state='not_recorded')),
+    (live_usage, lambda x: x['data']['profiles'][1]['reset_credits'].update(expires_state='recorded',
+                                                                           expires_at='2026-12-01T00:00:00Z')),
+    (live_usage, lambda x: x['data']['profiles'][1]['reset_credits'].update(
+        state='unsupported', count=None, expires_state='unsupported')),
+    (next(x for x in fixtures if x['command'] == 'settings.usage'),
+     lambda x: x['data']['live'].update(state='on')),
+    (next(x for x in fixtures if x['command'] == 'settings.usage' and x['data']['live']['state'] != 'off'),
+     lambda x: x['data']['live'].update(state='on')),
+    (next(x for x in fixtures if x['command'] == 'settings.usage' and x['data']['live']['state'] != 'off'),
+     lambda x: x['data']['live'].update(enabled=False, state='off')),
     (usage, lambda x: x['data']['profiles'][0].update(plan={'label': 'max', 'source': 'client_local'})),
     (usage, lambda x: codex(x).update(plan={'label': 'pro', 'source': 'live_endpoint'})),
     (live_usage, lambda x: x['data']['profiles'][0].update(plan={'label': 'max', 'source': 'live_endpoint'})),

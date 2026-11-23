@@ -18,11 +18,13 @@ other invariant stays binding. Agents never read real tokens or call real
 endpoints; LIVE is built and tested against fakes until the user authorizes
 real verification (RULES 4a).
 
-**Rollout (user rule 2026-11-21, D16).** This PR specifies the complete CLI
-surface. The stage-11 CLI implementation comes right after this plan merges.
-The Mac app and the menu bar (MENUBAR lane, branch `stage/11-usage-ui`) build
-against this contract and its fixtures only; that branch is not wired to real
-CLI data until the lead's explicit go. UI shows only fields the CLI provides.
+**Rollout (RULES "Feature rollout order", user 2026-11-21, D16).** This PR
+specifies the complete CLI surface, and the stage-11 CLI ships first, right
+after this plan merges. The Mac app step and then the menu-bar step (MENUBAR
+lane, branch `stage/11-usage-ui`) each need a separate lead approval, which
+the lead asks the user for, **before that step begins**. No app or menu-bar
+work on this feature starts before its approval; when it starts, it consumes
+only fields the CLI already provides.
 
 **Not in this stage.** Account email and plan from the official client's status
 command are stage 14 (D25/D26: shown from a fresh status run, never stored); this
@@ -116,9 +118,20 @@ The envelope shape is unchanged; the app binds it to the route it used.
 
 ## Persistence
 
-- `usage.json` at the LARPCC_HOME root: strict `version:1`, at most 64 KiB, under
-  the registry lock, written with the stage 06 index commit pattern (temporary
-  file, fsync, rename, then registry revision bump; guarded relock). Fields:
+- `usage.json` at the LARPCC_HOME root: strict `version:1`, at most 64 KiB,
+  changed only under the registry lock by a **journaled two-phase commit** that
+  reuses the stage 04 pending-journal gate. With the registry at revision N:
+  (1) write `usage.json.next` (target revision N+1) and the journal
+  `{kind:"usage_settings", base:N, target:N+1, sha256}`, each fsynced with its
+  directory; (2) advance the registry to N+1 and fsync; (3) rename
+  `usage.json.next` over `usage.json` and fsync the directory; (4) remove the
+  journal. While a journal exists, every reader and mutator of the registry
+  (all `usage`, `settings usage` and launch paths included) runs recovery under
+  the lock **before** comparing `--expected-revision` or reading settings:
+  registry = N → discard `.next` and journal (old settings stay valid at N);
+  registry = N+1 with a matching `.next` digest → finish steps 3–4; anything
+  else → `recovery_required`, exit 1, nothing read. So LIVE consent or mode
+  can never be visible at a revision it was not committed with. Fields:
   `mode`, `live.enabled`, `live.acknowledged_warning` (integer or null),
   `refresh_interval_seconds` (null or 300–86400) and
   `profiles: {"<id>": {mode, plan_label, claude_statusline}}` (`claude_statusline`
@@ -145,7 +158,7 @@ command. Each row:
 | `profile_id`, `name`, `provider` | LarpCC identity only. No email, account ID, org or user name. |
 | `mode` | effective mode for this row, `local` or `live` |
 | `source` | `codex_session_log`, `claude_statusline`, `live_endpoint`, or null when nothing was read |
-| `captured_at` | when the values were observed (local clock), or null. Values are "as of last use" in LOCAL. |
+| `captured_at` | the newest observation time of any window in the row (local clock), or the record time when no window has values; null when nothing was read. Values are "as of last use" in LOCAL. |
 | `client_version` | version of the official client that wrote the LOCAL record (`^N.N.N$`), else null |
 | `plan` | null, or `{label, source}`: `user` (the user-entered label, wins), `client_local` (Codex `plan_type` from the LOCAL record, D29) or `live_endpoint` (Codex `plan_type` from the LIVE response, D32) |
 | `windows.five_hour`, `windows.weekly` | always present window objects, W = 18000 s and 604800 s |
@@ -153,9 +166,13 @@ command. Each row:
 | `reset_credits` | always present tri-state object |
 | `diagnostics` | safe `code,message` objects, ordered by code then message |
 
-**Window** `{used_percent, resets_at, window_seconds, reason, pace}`.
+**Window** `{used_percent, resets_at, captured_at, window_seconds, reason, pace}`.
 `used_percent` is 0–100 with at most one decimal; `resets_at` is an RFC 3339 UTC
-timestamp with whole seconds and `Z`. `reason` is null **exactly** when both
+timestamp with whole seconds and `Z`. `captured_at` is **this window's own**
+observation time, non-null exactly when `used_percent` is. Windows in one row
+can come from different events (Codex buckets are recorded separately), so
+pace, `reset_since_capture` and the future-record check use the window's
+time, never the row's. `reason` is null **exactly** when both
 values are present; otherwise it says why:
 
 | reason | meaning (app text) |
@@ -175,15 +192,23 @@ values are present; otherwise it says why:
 Value normalization: finite numbers in [0, 100] are rounded half away from zero
 to one decimal; (100, 1000] clamp to 100; anything else is `invalid_record`.
 Reset instants are integer seconds in [2020-01-01, 2100-01-01) or
-`invalid_record`. A record whose `captured_at` is more than 300 s after
+`invalid_record`. A window whose `captured_at` is more than 300 s after
 `generated_at` is `invalid_record`. LOCAL values never expire except by
 `reset_since_capture`; nothing is inferred from other fields.
 
 **Extra windows** add `label` and allow `window_seconds: null` (no pace then).
-Labels are **Larp-assigned**, ASCII, 1–48 characters, letters/digits and
-`. _ + / ( ) -`, single inner spaces, no leading/trailing space
-(`usage_extra_label` in the schema). Provider strings that do not fit are
-dropped with diagnostic `extra_label_rejected`, never echoed. Order: label in
+Labels come only from a **fixed Larp vocabulary** (`usage_extra_label` in the
+schema): a bucket word, `Codex`, `Opus`, `Sonnet`, `OAuth apps` or
+`Other limit N`, optionally followed by a duration word, `5h`, `daily`,
+`weekly`, `monthly`, `annual`, `<minutes>m` or `secondary`. Provider bucket
+names and identifiers (`limit_name`, `limit_id`, `metered_feature`) are
+**never** output, not even in forwarded LOCAL output: they may name an
+organization or a private model. Reviewed buckets map to fixed words (Codex
+`codex` → `Codex`; Claude LIVE `seven_day_opus|sonnet|oauth_apps` → `Opus`,
+`Sonnet`, `OAuth apps` with `weekly`). Every other bucket is `Other limit N`,
+with N = 1, 2, … assigned by ascending byte order of the raw identifier within
+this one invocation. The raw identifier is used only for that ordering and is
+then dropped. Order: label in
 ASCII order, then `window_seconds` ascending with null last. Labels are unique
 (later duplicates dropped, `extra_duplicate`). Cap 8, overflow dropped in order
 with `extra_truncated`. `[]` means the source supports extras and reported none;
@@ -201,6 +226,11 @@ null means the source cannot report extras.
 `expires_state` is `recorded` (then `expires_at` is set), `none` (recorded as no
 expiry), `not_recorded` or `unsupported`; for `none|not_recorded|unsupported`
 states it equals the state. "Resets remaining" = `count` plus optional expiry.
+Per source (validator-checked): every LOCAL row and every Claude row is
+`unsupported`/`unsupported` (no LOCAL source records reset credits). A Codex
+LIVE row is `available` or `none` from `available_count`, or `not_recorded`
+when no usable response was received; its `expires_state` is always
+`unsupported` (no second request, D29).
 
 **Plan** (D29, D32). Precedence: the user-entered `plan_label`
 (`source:"user"`) always wins. Otherwise, in a LOCAL row, a plan the official
@@ -211,15 +241,22 @@ Provider plans are held **in memory for the current invocation only**: never
 written to `usage.json`, the capture file, a cache or a log, the same
 never-store rule as D14 tokens and D26 status output. Only the user label
 persists. Today only Codex provides one: `rate_limits.plan_type` of the
-selected `codex`-bucket `token_count` event, used only when it is one of the
-verified 0.169.0 `PlanType` values (`codex-rs/protocol/src/account.rs:9-49`,
-e.g. `plus`, `pro`, `team`) and fits the grammar; it is shown as recorded.
+selected `codex`-bucket `token_count` event. It is used only when it is in the
+**LOCAL allowlist**, the 0.169.0 rollout `PlanType` values
+(`codex-rs/protocol/src/account.rs:12-48`): `free`, `go`, `plus`, `pro`,
+`prolite`, `promax`, `team`, `self_serve_business_prolite`,
+`self_serve_business_usage_based`, `business`, `ent26`,
+`enterprise_cbp_automation`, `enterprise_cbp_usage_based`, `enterprise`, `edu`,
+`edu_plus`, `edu_pro`, `sci`, `sci_plus`. It is shown as recorded.
 Claude's statusLine input carries no plan, so Claude shows the user label only.
 Plans are **never** read from tokens or credential files (Claude
 `subscriptionType`/`rateLimitTier`, Codex `id_token` claims). In LIVE, only the
 Codex response's top-level `plan_type` is used (D32, within D14 because it is
-part of the one usage response, LIVE enabled only), with the same verified
-`PlanType` value check. The Claude LIVE response has no plan field, so Claude
+part of the one usage response, LIVE enabled only), checked against the
+separate **LIVE allowlist**, the backend `PlanType` values
+(`codex-rs/codex-backend-openapi-models/src/models/rate_limit_status_payload.rs:97-148`):
+the LOCAL list plus `guest`, `free_workspace`, `education`, `quorum` and `k12`.
+In both enums `unknown` and anything else give a null plan. The Claude LIVE response has no plan field, so Claude
 LIVE rows show the user label only. Grammar for every source: ASCII, 1–32
 characters, starts with a letter or digit, letters/digits and `. _ + / ( ) -`,
 single inner spaces (`plan_label`). No `@`, quotes, control or non-ASCII
@@ -283,8 +320,13 @@ every fixture's pace. Rust tests (`stage11_pace`) must load the same vector file
 
 **Reader contract.** CODEX_HOME is the derived `profiles/<id>/cli`. Under the
 retained validated profile handle, enumerate only `sessions/YYYY/MM/DD`
-directories (exact digit grammar) newest first and files matching
-`rollout-<YYYY-MM-DDTHH-MM-SS>-<id>.jsonl` (grammar-checked; `.zst`,
+directories (exact digit grammar) newest first and files matching either form
+written by `codex-rs/rollout/src/rollout_file_name.rs:62-74` at
+`rust-v0.169.0`: `rollout-<YYYY-MM-DDTHH-MM-SS>-<thread>.jsonl` or, after a
+revert, `rollout-<YYYY-MM-DDTHH-MM-SS>-<thread>_<rollout>.jsonl`, where
+`<thread>` and `<rollout>` are canonical hyphenated UUIDs (`ThreadId`/`RolloutId`,
+`codex-rs/protocol/src/thread_id.rs:16-43`). Both forms are grammar-checked;
+`.zst`,
 `archived_sessions/` and anything else skipped). No-follow opens; refuse
 symlinks, reparse points, hardlinks (link count > 1), non-regular files and any
 object whose identity leaves the profile root. Newest files by name first.
@@ -294,7 +336,7 @@ object whose identity leaves the profile root. Newest files by name first.
   2 s total. Hitting a cap stops scanning with diagnostic `scan_limit`.
 - Per line: a streaming JSON deserializer whose target struct names only
   `timestamp`, `type`, `payload.type` and, for `event_msg`/`token_count`, the
-  allowlisted `payload.rate_limits` subfields `limit_id`, `limit_name`,
+  allowlisted `payload.rate_limits` subfields `limit_id`,
   `primary|secondary.{used_percent, window_minutes, resets_at}` and `plan_type`
   (D29). Every other value is skipped unretained (e.g. serde `IgnoredAny`).
   `info`, `credits`, `individual_limit` and conversation items are never
@@ -309,9 +351,10 @@ object whose identity leaves the profile root. Newest files by name first.
   `window_minutes` is 300 ±5% fills `five_hour`, 10080 ±5% fills `weekly`
   (position ignored); other codex windows become extras labelled
   `Codex <5h|daily|weekly|monthly|annual|Nm>`. Other buckets become extras
-  labelled `<limit_name or limit_id> <duration>` after grammar check, with
-  `window_seconds = window_minutes·60` (null when absent). `captured_at` is that
-  line's `timestamp` truncated to seconds. `client_version` is the file's
+  labelled `Other limit N <duration>` (fixed vocabulary above; `limit_name` is
+  never read into output), with `window_seconds = window_minutes·60` (null when
+  absent). Each window's `captured_at` is its own event line's `timestamp`,
+  truncated to seconds; the row `captured_at` is the newest of them. `client_version` is the file's
   `session_meta.cli_version`; only verified versions (0.169.0) are interpreted,
   others report `unverified_version` with null values.
 - Codex windows have no reset-credit data in the log: `reset_credits` is
@@ -381,10 +424,25 @@ native-config read in this stage:
 - at `on`: the profile's `profiles/<id>/cli/settings.json`; present →
   `statusline_exists`, nothing changed;
 - before each injecting launch: that file again, plus `.claude/settings.json`
-  and `.claude/settings.local.json` in the launch directory and each parent
-  (≤ 64 levels). Present, unreadable or oversize → the launch proceeds
-  **without** `--settings` (the user's statusLine wins; nothing captured).
-  Managed settings are not read; a managed statusLine already wins over flags.
+  and `.claude/settings.local.json` in the launch directory and each parent up
+  to the filesystem root. Present → the launch proceeds **without**
+  `--settings` (the user's statusLine wins; nothing captured). Managed settings
+  are not read; a managed statusLine already wins over flags.
+
+Absence counts as established only when every checked file is either missing
+(no-follow open reports not-found) or is a regular, owner-readable file ≤ 1 MiB
+that parses as one strict JSON object (no comments, trailing commas,
+duplicate top-level keys or trailing bytes) without a top-level `statusLine`.
+Every other outcome is **indeterminate**: malformed or unsupported syntax,
+non-object JSON, oversize, symlink/reparse point/non-regular file, permission
+or IO error, an undeterminable launch directory, or more than 64 parent levels
+before the root. Indeterminate **refuses** at enable time
+(`statusline_unverifiable`, exit 1, nothing changed) and launches **without**
+injection at launch time. The future Claude row qualification must establish
+exactly where 2.1.325+ discovers user, project and local settings (launch
+directory versus repository root, any other sources) before injection is
+enabled. Until then the walk above is the conservative superset, and
+injection stays off anyway while rows are empty.
 
 The render is exactly
 `{"statusLine":{"type":"command","command":"'<root>/bin/.larp-usage-hook' claude-statusline <ID>","padding":0}}`
@@ -439,8 +497,13 @@ LIVE from working for that profile. LarpCC never chooses for you."
 
 Acknowledgement is stored as `live.acknowledged_warning = 1` in `usage.json` by
 `settings usage live on --acknowledge-risk` (the GUI passes the flag only after
-the user confirms the sheet). Changing the text bumps `current_warning`; rows
-then report `live_disabled` until re-acknowledged. Per-profile opt-in uses
+the user confirms the sheet). Changing the text bumps `current_warning` in a
+new Larp release. Stored LIVE choices (enabled, modes) are kept. `settings
+usage` then reports `live.state:"needs_acknowledgement"` (otherwise `on`, or
+`off` when disabled) and succeeds. In that state every effective-LIVE row
+reports `live_disabled` and `usage --live` fails `live_disabled`, both with
+zero credential reads and zero requests, until `live on --acknowledge-risk`
+records the current version. Per-profile opt-in uses
 `settings usage mode live --profile P`.
 
 **Refresh and invariant 5.** LIVE requests happen only inside a foreground
@@ -481,7 +544,7 @@ anywhere but its pinned endpoint.
 |---|---|---|
 | request | `GET https://api.anthropic.com/api/oauth/usage` (2.1.325: `BASE_API_URL`, usage paths, 5 s timeout) | `GET https://chatgpt.com/backend-api/wham/usage` (`codex-rs/backend-client/src/client/rate_limit_resets.rs:69-82`, `codex-rs/model-provider/src/chatgpt_base_url.rs:6`) |
 | headers | `Authorization: Bearer <token>`, `anthropic-beta: oauth-2025-04-20` (constant present; its use on this call **unverified**), `Accept: application/json`, `User-Agent: larpcc/<version>` | `Authorization: Bearer <token>`, `chatgpt-account-id: <account_id>` (`codex-rs/http-client/src/openai_headers.rs:3`, `codex-rs/backend-client/src/client.rs:388-392`; inside D14 per D29), `Accept`, `User-Agent: larpcc/<version>` |
-| response used | `five_hour`, `seven_day` → windows; `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps` → extras "Opus weekly", "Sonnet weekly", "OAuth apps weekly" (W 604800). Each `{utilization: number 0-100 \| null, resets_at: ISO 8601 \| null}` (binary response parser; units from the SDK schema description) | `rate_limit.primary_window`/`secondary_window` `{used_percent: i32, limit_window_seconds, reset_after_seconds, reset_at}` mapped by window length ±5%; `additional_rate_limits[] {limit_name, metered_feature, rate_limit}` → extras; `rate_limit_reset_credits.available_count` → `reset_credits`; `plan_type` → `plan` `live_endpoint`, held in memory only (D32) (`codex-rs/codex-backend-openapi-models/src/models/*.rs`, `codex-rs/backend-client/src/types.rs:22-75`) |
+| response used | `five_hour`, `seven_day` → windows; `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps` → extras "Opus weekly", "Sonnet weekly", "OAuth apps weekly" (W 604800). Each `{utilization: number 0-100 \| null, resets_at: ISO 8601 \| null}` (binary response parser; units from the SDK schema description) | `rate_limit.primary_window`/`secondary_window` `{used_percent: i32, limit_window_seconds, reset_after_seconds, reset_at}` mapped by window length ±5%; `additional_rate_limits[] {limit_name, metered_feature, rate_limit}` → extras labelled `Other limit N` (names never output); `rate_limit_reset_credits.available_count` → `reset_credits`; `plan_type` → `plan` `live_endpoint`, held in memory only (D32) (`codex-rs/codex-backend-openapi-models/src/models/*.rs`, `codex-rs/backend-client/src/types.rs:22-75`) |
 | ignored | `extra_usage`, `cinder_cove`, `wattle_ember`, `limits[]`, all dollar fields | `credits`, `spend_control`, `account_id`, `user_id`, `rate_limit_upsell`, `rate_limit_reached_type` |
 | reset credits | `unsupported` (only an experimental `cedar_ember=1` variant has them; D29 keeps it unsupported) | count from the summary; expiry `unsupported` (needs a second request, which D29 rules out) |
 
@@ -534,11 +597,12 @@ every fixture deleted in finally. No vendor binary or real account.
 |---|---|
 | `stage11_json` | every new example envelope byte-for-byte; ordering, framing, exit codes, empty stderr, `--expected-revision` conflict before reads, tombstone/unknown profile, `--local --live` usage error |
 | `stage11_pace` | loads `docs/contracts/usage-pace-vectors.json`; every vector exact; skew/reset/unknown cases |
-| `stage11_local_codex` | synthetic rollouts: 5h/weekly by `window_minutes` not position, `plan_type` → `client_local` plan unless a user label overrides, unknown plan value → null, non-codex bucket → extra, newest per bucket, unverified version, `.zst`/archived skipped, symlink/hardlink/outside-root/oversize/line-cap/file-cap refusal, partial line ignored, conversation sentinel strings never appear in stdout/stderr/files |
+| `stage11_local_codex` | synthetic rollouts in both filename forms (`<thread>` and `<thread>_<rollout>`), malformed names skipped: 5h/weekly by `window_minutes` not position, buckets observed at different times keep their own window `captured_at` and pace (vector `extra_observed_two_hours_before_row`), no false `clock_skew`, a grammar-valid private sentinel `limit_name`/`limit_id` never appears in stdout/stderr/files or forwarded output (label `Other limit N`), LOCAL plan allowlist, `plan_type` → `client_local` plan unless a user label overrides, unknown plan value → null, non-codex bucket → extra, newest per bucket, unverified version, `.zst`/archived skipped, symlink/hardlink/outside-root/oversize/line-cap/file-cap refusal, partial line ignored, conversation sentinel strings never appear in stdout/stderr/files |
+| `stage11_statusline_check` | negative fixtures each yield refuse-at-enable and no-injection-at-launch: malformed JSON, JSON with comments or trailing comma, duplicate top-level keys, non-object top level, trailing bytes, oversize, symlink, FIFO/non-regular, unreadable file, unreadable parent, undeterminable launch dir, 65 parent levels; a `statusLine` only in a parent's `.claude/settings.local.json` blocks injection; missing files everywhere establishes absence |
 | `stage11_local_claude_hook` | hook argv/env checks, 256 KiB cap, absent `rate_limits` keeps last capture, hostile input (deep nesting, huge strings, wrong types, NaN), atomic replace under kill, empty stdout and stderr, sentinel input fields never written; render file content/quoting/manifest drift refusal; opt-in default off; `statusline_exists` on enable; existing profile/project/local statusLine (including in a parent directory) → no `--settings` injection; settings values never read or output; `capture_not_installed` while rows are empty |
-| `stage11_live_fake` | fake HTTPS server: success mapping for both providers, Codex `plan_type` → `live_endpoint` plan, user label override, unknown plan value → null, plan bytes absent from every file under LARPCC_HOME after the run, 401 → `sign_in_again`, 3xx not followed, proxy env ignored, oversize/slow/unknown shape → `live_unavailable`, exactly one request per profile, no retry/refresh, `live_disabled` before any credential read, budget |
+| `stage11_live_fake` | fake HTTPS server: success mapping for both providers, LIVE plan allowlist (e.g. `free_workspace` shown in LIVE only), `additional_rate_limits` with a sentinel `limit_name`/`metered_feature` → `Other limit N` with zero sentinel bytes in output, Codex `plan_type` → `live_endpoint` plan, user label override, unknown plan value → null, plan bytes absent from every file under LARPCC_HOME after the run, 401 → `sign_in_again`, 3xx not followed, proxy env ignored, oversize/slow/unknown shape → `live_unavailable`, exactly one request per profile, no retry/refresh, `live_disabled` before any credential read, budget |
 | `stage11_secrets` | fake tokens `fake-token-…` and fake account IDs appear in zero bytes of stdout, stderr, any file under LARPCC_HOME, child argv/env, panic output and error envelopes (including injected parser/TLS/IO failures) |
-| `stage11_settings` | ack required on every enable, `live off` resets modes, mode/interval/capture/plan-label receipts, claude-statusline `--profile` required and Codex `unsupported`, label grammar refusals without echo, `changed:false`, registry revision bumps, pruning |
+| `stage11_settings` | journaled commit: kill between each write and step (`.next`, journal, registry bump, rename), then every reader sees settings exactly at the committed revision and a stale `--expected-revision` fails `conflict`; `needs_acknowledgement` after a warning bump: `settings usage` succeeds and reports it, `usage` rows `live_disabled` and `usage --live` fail with zero credential reads and zero requests; ack required on every enable, `live off` resets modes, mode/interval/capture/plan-label receipts, claude-statusline `--profile` required and Codex `unsupported`, label grammar refusals without echo, `changed:false`, registry revision bumps, pruning |
 | `stage11_closed` | default and `--local` make zero network connections (transport fake asserts unused); no background process or scheduler; hook binary has no network path; real hosts unreachable from tests; with `--remote-request`, `usage` is forced LOCAL even when LIVE is enabled, and `--live` and every usage mutation are `unsupported` before credential reads, requests or writes |
 
 ## Decided (D29, lead 2026-11-21; the user may veto)

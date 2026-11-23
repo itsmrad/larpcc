@@ -141,8 +141,11 @@ mutation, parser failure and closed desktop dispatch.
 
 Additive amendment, schema stays 1. Read envelopes `usage` and `settings.usage`;
 mutation receipts `settings.usage.live|mode|interval|claude-statusline` and
-`profile.plan-label`; new error codes `live_disabled` and `statusline_exists`
-(both exit 1). Grammar, sources,
+`profile.plan-label`; new error codes `live_disabled`, `statusline_exists` and
+`statusline_unverifiable` (all exit 1). Each usage window carries its own
+`captured_at`; extra-window labels use a fixed Larp vocabulary and never carry
+provider bucket names; `settings.usage` reports `live.state`
+(`off|on|needs_acknowledgement`). Grammar, sources,
 reason codes, ordering, normalization and the pace formula are normative in
 [stage 11](../stages/11-usage.md); pace test vectors are in
 [usage-pace-vectors.json](usage-pace-vectors.json). `usage --live --json` is Larp's

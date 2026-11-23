@@ -152,7 +152,7 @@ already loaded. Remote native run remains closed pending qualification.
 | 08 | [JSON/doctor/injection](docs/stages/08-json-launch-doctor.md), completes CLI | frozen schema:1, version-only detection, invented-row injection; native ROWS empty |
 | 09 | [desktop](docs/stages/09-desktop.md), after CLI | MAC local dispatch interface and separate native proof; uncertain binding/focus/qualification refuses |
 | 10 | [native GUI](docs/stages/10-native-gui.md), after CLI/desktop | SwiftUI consumes CLI JSON, explicit toggles; stale/unknown schema fails safely |
-| 11 | [usage limits](docs/stages/11-usage.md), after 08 (D14) | `usage`/settings/plan-label CLI first; LOCAL readers, fake-only LIVE; app/menu bar wait for the lead's go |
+| 11 | [usage limits](docs/stages/11-usage.md), after 08 (D14) | `usage`/settings/plan-label CLI ships first; LOCAL readers, fake-only LIVE; the app step, then the menu-bar step, each start only after separate lead approval (the lead asks the user) |
 | 13 | [remote hosts](docs/stages/13-remote-hosts.md), after local CLI/GUI | SSH management and explicit catalog copy/sync; remote usage LOCAL only |
 
 Stages 05–07 can be independently implemented after the exact seed if lead

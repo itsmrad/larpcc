@@ -1003,6 +1003,7 @@
             "five_hour": {
               "used_percent": null,
               "resets_at": null,
+              "captured_at": null,
               "window_seconds": 18000,
               "reason": "capture_not_installed",
               "pace": null
@@ -1010,6 +1011,7 @@
             "weekly": {
               "used_percent": null,
               "resets_at": null,
+              "captured_at": null,
               "window_seconds": 604800,
               "reason": "capture_not_installed",
               "pace": null
@@ -1045,6 +1047,7 @@
             "five_hour": {
               "used_percent": 30.0,
               "resets_at": "2026-11-21T14:00:00Z",
+              "captured_at": "2026-11-21T12:00:00Z",
               "window_seconds": 18000,
               "reason": null,
               "pace": {
@@ -1057,6 +1060,7 @@
             "weekly": {
               "used_percent": 75.0,
               "resets_at": "2026-11-24T23:59:59Z",
+              "captured_at": "2026-11-21T12:00:00Z",
               "window_seconds": 604800,
               "reason": null,
               "pace": {
@@ -1066,12 +1070,27 @@
                 "lasts_until_reset": false
               }
             },
-            "extra": []
+            "extra": [
+              {
+                "label": "Other limit 1 5h",
+                "used_percent": 10.0,
+                "resets_at": "2026-11-21T14:00:00Z",
+                "captured_at": "2026-11-21T10:00:00Z",
+                "window_seconds": 18000,
+                "reason": null,
+                "pace": {
+                  "elapsed_percent": 20.0,
+                  "reserve_percent": 10.0,
+                  "runs_out_at": "2026-11-21T14:00:00Z",
+                  "lasts_until_reset": true
+                }
+              }
+            ]
           },
           "reset_credits": {
-            "state": "not_recorded",
+            "state": "unsupported",
             "count": null,
-            "expires_state": "not_recorded",
+            "expires_state": "unsupported",
             "expires_at": null
           },
           "diagnostics": []
@@ -1104,6 +1123,7 @@
             "five_hour": {
               "used_percent": null,
               "resets_at": null,
+              "captured_at": null,
               "window_seconds": 18000,
               "reason": "sign_in_again",
               "pace": null
@@ -1111,6 +1131,7 @@
             "weekly": {
               "used_percent": null,
               "resets_at": null,
+              "captured_at": null,
               "window_seconds": 604800,
               "reason": "sign_in_again",
               "pace": null
@@ -1146,6 +1167,7 @@
             "five_hour": {
               "used_percent": 30.0,
               "resets_at": "2026-11-21T14:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
               "window_seconds": 18000,
               "reason": null,
               "pace": {
@@ -1158,6 +1180,7 @@
             "weekly": {
               "used_percent": 12.0,
               "resets_at": "2026-11-24T12:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
               "window_seconds": 604800,
               "reason": null,
               "pace": {
@@ -1188,9 +1211,45 @@
     "data": {
       "mode": "local",
       "live": {
+        "state": "off",
         "enabled": false,
         "acknowledged_warning": null,
         "current_warning": 1,
+        "verified": false
+      },
+      "refresh_interval_seconds": null,
+      "profiles": [
+        {
+          "profile_id": "1",
+          "name": "claude-work",
+          "provider": "claude",
+          "mode": "inherit",
+          "plan_label": "Max 5x",
+          "claude_statusline": false
+        },
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "inherit",
+          "plan_label": null,
+          "claude_statusline": null
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage",
+    "ok": true,
+    "revision": "9",
+    "data": {
+      "mode": "live",
+      "live": {
+        "state": "needs_acknowledgement",
+        "enabled": true,
+        "acknowledged_warning": 1,
+        "current_warning": 2,
         "verified": false
       },
       "refresh_interval_seconds": null,
@@ -1304,6 +1363,15 @@
     "error": {
       "code": "statusline_exists",
       "message": "This profile already has its own statusLine; LarpCC will not replace it."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.claude-statusline",
+    "ok": false,
+    "error": {
+      "code": "statusline_unverifiable",
+      "message": "LarpCC could not confirm that this profile has no statusLine."
     }
   }
 ]

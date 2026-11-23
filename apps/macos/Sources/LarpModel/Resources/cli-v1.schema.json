@@ -506,7 +506,8 @@
             "remote_outcome_unknown",
             "catalog_unavailable",
             "live_disabled",
-            "statusline_exists"
+            "statusline_exists",
+            "statusline_unverifiable"
           ]
         },
         "message": {
@@ -765,6 +766,16 @@
             }
           ]
         },
+        "captured_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "window_seconds": {
           "type": "integer",
           "minimum": 1,
@@ -794,17 +805,18 @@
       "required": [
         "used_percent",
         "resets_at",
+        "captured_at",
         "window_seconds",
         "reason",
         "pace"
       ],
       "additionalProperties": false,
-      "description": "reason is null exactly when used_percent and resets_at are both non-null."
+      "description": "reason is null exactly when used_percent and resets_at are both non-null; captured_at is this window's own observation time (non-null exactly when used_percent is) and is the pace T."
     },
     "usage_extra_label": {
       "type": "string",
-      "pattern": "^(?=.{1,48}$)[A-Za-z0-9](?:[A-Za-z0-9._+/()-]| (?=[A-Za-z0-9._+/()-]))*$",
-      "description": "Larp-assigned display label; ASCII, 1-48 chars, single inner spaces."
+      "pattern": "^(?:Codex|Other limit [1-9][0-9]{0,2}|Opus|Sonnet|OAuth apps)(?: (?:5h|daily|weekly|monthly|annual|[1-9][0-9]{0,6}m|secondary))?$",
+      "description": "Fixed Larp vocabulary only (stage 11); provider bucket names and identifiers never appear."
     },
     "usage_extra_window": {
       "type": "object",
@@ -823,6 +835,16 @@
           ]
         },
         "resets_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "captured_at": {
           "anyOf": [
             {
               "$ref": "#/$defs/timestamp"
@@ -869,6 +891,7 @@
         "label",
         "used_percent",
         "resets_at",
+        "captured_at",
         "window_seconds",
         "reason",
         "pace"
@@ -1139,6 +1162,13 @@
         "live": {
           "type": "object",
           "properties": {
+            "state": {
+              "enum": [
+                "off",
+                "on",
+                "needs_acknowledgement"
+              ]
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -1164,6 +1194,7 @@
             }
           },
           "required": [
+            "state",
             "enabled",
             "acknowledged_warning",
             "current_warning",
