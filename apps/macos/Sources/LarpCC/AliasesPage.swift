@@ -71,13 +71,15 @@ struct AliasesPage: View {
 
             Section {
                 LabeledContent("Command name") {
-                    TextField("Command name", text: $newName, prompt: Text("command-name"))
+                    TextField("Command name", text: $newName,
+                              prompt: Text("command-name").foregroundColor(SettingsTypography.supportingInk))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.leading)
                         .font(.body.monospaced())
-                        .frame(maxWidth: 240)
+                        .frame(maxWidth: 280)
                         .onSubmit(add)
+                        .onChange(of: newName) { error = nil }
                 }
                 Picker("Profile", selection: $newProfileID) {
                     if newProfileID.isEmpty { Text("Choose…").tag("") }
@@ -94,7 +96,7 @@ struct AliasesPage: View {
                 }
                 Toggle(isOn: $shadow) {
                     Text("Allow shadowing")
-                    Text("Allows names already on PATH, including claude and codex. Your PATH order decides which command runs.")
+                    Text("Allows names like claude or codex. PATH order decides which command runs.")
                         .foregroundStyle(SettingsTypography.supportingInk)
                 }
                 HStack {
