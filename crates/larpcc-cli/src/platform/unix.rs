@@ -549,8 +549,11 @@ impl DirId {
     fn parent(&self) -> io::Result<Self> {
         use std::os::fd::AsRawFd;
         let flags = SEARCH | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        let name = c"..";
+        #[cfg(test)]
+        let name = tests::NEXT_PARENT_NAME.take().unwrap_or(name);
         // SAFETY: live directory fd and a static NUL-terminated name.
-        Self::held(unsafe { libc::openat(self.file.as_raw_fd(), c"..".as_ptr(), flags) })
+        Self::held(unsafe { libc::openat(self.file.as_raw_fd(), name.as_ptr(), flags) })
     }
     fn held(fd: libc::c_int) -> io::Result<Self> {
         use std::os::fd::FromRawFd;
@@ -1232,6 +1235,12 @@ pub(crate) fn vendor_app_anchor(path: &Path) -> Result<AnchoredPath, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        // Override one lookup on the calling test thread after the directory handles are open.
+        pub(super) static NEXT_PARENT_NAME: std::cell::Cell<Option<&'static std::ffi::CStr>> = const { std::cell::Cell::new(None) };
+    }
+
     #[test]
     fn disappearing_safe_temp_is_missing_but_unsafe_observation_and_other_errors_refuse() {
         use std::os::unix::fs::PermissionsExt;
@@ -1413,6 +1422,30 @@ mod tests {
         )
         .unwrap();
         executable(&temporary.path().join("ManagedX/tool"), &root).unwrap();
+    }
+    #[test]
+    fn containment_refuses_not_found_after_holding_root() {
+        let (temporary, root) = containment_fixture();
+        let outside = temporary.path().join("outside/tool");
+        NEXT_PARENT_NAME.set(Some(c"missing"));
+        let error = executable(&outside, &root).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Io { action: "inspect", path, source }
+                if path == root && source.kind() == io::ErrorKind::NotFound
+        ));
+    }
+    #[test]
+    fn containment_refuses_parent_walk_stalled_before_root() {
+        let (temporary, root) = containment_fixture();
+        let outside = temporary.path().join("outside/tool");
+        NEXT_PARENT_NAME.set(Some(c"."));
+        let error = executable(&outside, &root).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Io { action: "inspect", path, source }
+                if path == root && source.to_string() == "`..` stopped before the root directory"
+        ));
     }
     #[test]
     fn containment_holds_for_symlinked_spellings() {
