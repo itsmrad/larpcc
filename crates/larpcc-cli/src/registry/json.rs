@@ -73,29 +73,13 @@ impl Registry {
                 json!({"profiles":profiles.into_iter().map(|p| self.profile_json(p,&data)).collect::<Result<Vec<_>,_>>()?}),
             );
         }
-        if command == "profile.show" || command == "status" {
+        if command == "profile.show" {
             let name = name.ok_or(Error::RecoveryRequired)?;
             let p = profiles
                 .into_iter()
                 .find(|p| &p.name == name)
                 .ok_or_else(|| Error::NotFound { name: name.clone() })?;
-            let profile = self.profile_json(p, &data)?;
-            if command == "profile.show" {
-                return Ok(profile);
-            }
-            let cli = data.bindings.iter().find(|b| b.provider == p.provider);
-            let state = if let Some(b) = cli {
-                if crate::provider::validate(b.provider, &b.executable, self.root()).is_ok() {
-                    "ok"
-                } else {
-                    "invalid"
-                }
-            } else {
-                "unbound"
-            };
-            return Ok(
-                json!({"profile":profile,"detected_versions":[{"provider":p.provider,"surface":"cli","binding":binding(cli.map(|b| b.executable.as_path()),None,state)}],"native_auth":"not_observed","native_rows":[],"diagnostics":[]}),
-            );
+            return self.profile_json(p, &data);
         }
         let bindings: Vec<_> = super::Provider::ALL.into_iter().flat_map(|p| {
             let b = data.bindings.iter().find(|b| b.provider == p);
@@ -105,5 +89,34 @@ impl Registry {
              json!({"provider":p,"surface":"desktop","binding":binding(desktop.map(|b| b.path.as_path()),desktop.and_then(|b| b.recorded_version.as_deref()),desktop_state(desktop))})]
         }).collect();
         Ok(json!({"bindings":bindings}))
+    }
+    pub(crate) fn with_status_metadata<T>(
+        &self,
+        name: &super::ProfileName,
+        expected_id: Option<u64>,
+        prepare: impl FnOnce(&Value) -> Result<T, Error>,
+    ) -> Result<(Value, T), Error> {
+        let _ancestors = crate::platform::anchor(self.root())?.ancestors;
+        let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        self.observed.set(Some(data.revision));
+        let p = data.profiles.iter().find(|p| &p.name == name);
+        if expected_id.is_some_and(|id| p.is_none_or(|p| p.id.get() != id)) {
+            return Err(Error::Conflict);
+        }
+        let p = p.ok_or_else(|| Error::NotFound { name: name.clone() })?;
+        let profile = self.profile_json(p, &data)?;
+        let cli = data.bindings.iter().find(|b| b.provider == p.provider);
+        let state = match cli {
+            Some(b)
+                if crate::provider::validate(b.provider, &b.executable, self.root()).is_ok() =>
+            {
+                "ok"
+            }
+            Some(_) => "invalid",
+            None => "unbound",
+        };
+        let metadata = json!({"profile":profile,"detected_versions":[{"provider":p.provider,"surface":"cli","binding":binding(cli.map(|b| b.executable.as_path()),None,state)}],"native_auth":"not_observed","native_rows":[],"diagnostics":[]});
+        let prepared = prepare(&metadata)?;
+        Ok((metadata, prepared))
     }
 }

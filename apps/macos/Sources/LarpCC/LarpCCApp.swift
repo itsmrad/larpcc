@@ -105,6 +105,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var usageError: String?
     @Published private(set) var usageLoading = false
     private var usageTask: Task<Void, Never>?
+    private var usageIsScheduled = false
     private var liveRefresh: Task<Void, Never>?
     enum UsageView { case settings, menuBar }
     private var visibleUsageViews: Set<UsageView> = []
@@ -132,10 +133,8 @@ final class AppStore: ObservableObject {
                 let selected = try await Task.detached { try SelectedLarp(url: url) }.value
                 guard generation == token, !Task.isCancelled else { return }
                 client = ProcessLarpClient(selected: selected)
-                selectedPath = url.path
-                scheduleLiveRefresh()
                 busy = false
-                await refresh()
+                await refresh(admitting: url.path)
             } catch {
                 if generation == token { busy = false; message = ClientError.invalidExecutable.errorDescription }
             }
@@ -143,11 +142,21 @@ final class AppStore: ObservableObject {
     }
     /// Reads usage for every profile from the current source.
     func refreshUsage() {
+        refreshUsage(scheduledInterval: nil)
+    }
+
+    private func refreshUsage(scheduledInterval: Int?) {
         guard isFixture || selectedPath != nil else { return }
-        let source = UsagePreferences.source
+        let source = scheduledInterval == nil ? UsagePreferences.source : .live
         usageTask?.cancel()
         usageLoading = true
+        usageIsScheduled = scheduledInterval != nil
         usageTask = Task {
+            guard !Task.isCancelled else { return }
+            defer {
+                if !Task.isCancelled { clearUsageRefresh() }
+            }
+            if let scheduledInterval, !canRefreshLive(every: scheduledInterval) { return }
             do {
                 let value = try await client.usage(source: source)
                 guard !Task.isCancelled else { return }
@@ -157,9 +166,13 @@ final class AppStore: ObservableObject {
                 usage = [:]
                 usageError = (error as? ClientError)?.errorDescription ?? "Usage is unavailable."
             }
-            usageLoading = false
-            usageTask = nil
         }
+    }
+
+    private func clearUsageRefresh() {
+        usageTask = nil
+        usageIsScheduled = false
+        usageLoading = false
     }
 
     func setUsageView(_ view: UsageView, visible: Bool) {
@@ -172,17 +185,24 @@ final class AppStore: ObservableObject {
     /// Restarts the opt-in interval while at least one usage view is visible.
     func scheduleLiveRefresh() {
         liveRefresh?.cancel(); liveRefresh = nil
+        if usageIsScheduled {
+            usageTask?.cancel()
+            clearUsageRefresh()
+        }
         let minutes = UsagePreferences.intervalMinutes
-        guard !visibleUsageViews.isEmpty, isFixture || selectedPath != nil,
-              UsagePreferences.source == .live, minutes > 0 else { return }
+        guard canRefreshLive(every: minutes) else { return }
         liveRefresh = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(minutes) * 60_000_000_000)
-                guard !Task.isCancelled, let self, !self.visibleUsageViews.isEmpty,
-                      UsagePreferences.source == .live, UsagePreferences.intervalMinutes == minutes else { return }
-                self.refreshUsage()
+                guard !Task.isCancelled, let self, self.canRefreshLive(every: minutes) else { return }
+                self.refreshUsage(scheduledInterval: minutes)
             }
         }
+    }
+
+    private func canRefreshLive(every minutes: Int) -> Bool {
+        !visibleUsageViews.isEmpty && (isFixture || selectedPath != nil)
+            && UsagePreferences.source == .live && minutes > 0 && UsagePreferences.intervalMinutes == minutes
     }
 
     func useFixture() {
@@ -201,14 +221,14 @@ final class AppStore: ObservableObject {
         busy = false
         snapshot = nil
         liveRefresh?.cancel(); liveRefresh = nil
-        usageTask?.cancel(); usageTask = nil
-        usage = [:]; usageError = nil; usageLoading = false
+        usageTask?.cancel(); clearUsageRefresh()
+        usage = [:]; usageError = nil
         message = mutating ? ClientError.outcomeUnknown.errorDescription : "Cancelled. Refresh before choosing another action."
         mutating = false
     }
     func startRefresh() { operation = Task { await refresh() } }
-    func refresh() async {
-        guard !busy, isFixture || selectedPath != nil else { return }
+    func refresh(admitting path: String? = nil) async {
+        guard !busy, isFixture || selectedPath != nil || path != nil else { return }
         busy = true
         generation += 1
         let token = generation
@@ -217,6 +237,10 @@ final class AppStore: ObservableObject {
             let value = try await client.snapshot()
             guard generation == token, !Task.isCancelled else { return }
             snapshot = value
+            if let path {
+                selectedPath = path
+                scheduleLiveRefresh()
+            }
             // Local usage is data already on this Mac, so it follows every refresh.
             // Live usage is only read on request or on the user's chosen interval.
             if UsagePreferences.source == .local { refreshUsage() }
