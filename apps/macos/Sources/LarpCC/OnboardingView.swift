@@ -28,47 +28,60 @@ enum OnboardingStep: String, CaseIterable {
 struct OnboardingView: View {
     @ObservedObject var store: AppStore
     @State private var step: OnboardingStep
+    @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     @FocusState private var primaryFocused: Bool
     @State private var scan: ProviderDetection?
     @State private var loadedKey: ScanKey?
     @State private var scanError: String?
+    @State private var bindingError: String?
     @State private var retry = 0
-    @State private var manualBinding: BindTarget?
     @State private var binding: SetupBinding?
     @State private var addingProfile = false
     @State private var profileName: String?
+    @State private var providerBindings: Set<Provider> = []
     @State private var desktopBindings: Set<Provider> = []
 
     init(store: AppStore, step: OnboardingStep = .welcome) {
         self.store = store
         _step = State(initialValue: step)
+        #if DEBUG
+        if step == .done, OnboardingStep.snapshotValue == .done, store.isFixture {
+            _providerBindings = State(initialValue: [.claude])
+            _desktopBindings = State(initialValue: [.codex])
+            _profileName = State(initialValue: "claude-work")
+        }
+        #endif
     }
 
     private struct ScanKey: Equatable {
         let active: Bool
         let ready: Bool
-        let loadingMetadata: Bool
+        let busy: Bool
         let revision: String?
         let retry: Int
     }
 
     private var scanKey: ScanKey {
         ScanKey(active: step == .providers || step == .desktop,
-                ready: store.snapshot != nil, loadingMetadata: store.snapshot == nil && store.busy,
+                ready: store.snapshot != nil, busy: store.busy,
                 revision: store.snapshot?.revision, retry: retry)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: SettingsSpacing.inset) {
             Text(step.title)
-                .font(.title2.weight(.semibold))
+                .font(SettingsTypography.title)
                 .accessibilityAddTraits(.isHeader)
 
             content
                 .id(step)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .settingsAnimation(value: step)
+
+            if let bindingError {
+                supporting(bindingError).foregroundStyle(SettingsTypography.warningInk)
+            }
 
             Divider()
             HStack {
@@ -91,13 +104,16 @@ struct OnboardingView: View {
         .interactiveDismissDisabled(store.busy)
         .defaultFocus($primaryFocused, true)
         .onChange(of: step) { _, _ in
+            bindingError = nil
             primaryFocused = true
         }
-        .task(id: scanKey) { await loadDetection() }
-        .bindSheet($manualBinding, store: store)
-        .onChange(of: manualBinding?.id) { _, target in
-            if target == nil { retry += 1 }
+        .onChange(of: store.selectedPath) { _, _ in
+            scan = nil
+            providerBindings.removeAll()
+            desktopBindings.removeAll()
+            profileName = nil
         }
+        .task(id: scanKey) { await loadDetection() }
         .sheet(isPresented: $addingProfile) {
             AddProfileSheet(store: store) { name in
                 profileName = name
@@ -107,7 +123,7 @@ struct OnboardingView: View {
         .sheet(item: $binding) { target in
             SetupBindingSheet(store: store, target: target) {
                 if target.desktop { desktopBindings.insert(target.provider) }
-                retry += 1
+                else { providerBindings.insert(target.provider) }
             }
         }
     }
@@ -132,9 +148,9 @@ struct OnboardingView: View {
         case .profile:
             supporting("Profiles give each Claude Code or Codex setup a separate data folder. You can add a profile now or from Settings later.")
         case .done:
-            let tools = Set(scan?.executables.filter(\.bound).map(\.provider) ?? [])
+            let tools = providerBindings.union(scan?.executables.filter(\.bound).map(\.provider) ?? [])
             if tools.isEmpty && desktopBindings.isEmpty {
-                supporting("No bindings to show. You can connect installations from Settings.")
+                supporting("You can connect installations from Settings at any time.")
             }
             ForEach(Provider.allCases, id: \.self) { provider in
                 if tools.contains(provider) { Label("\(toolName(provider)) bound", systemImage: "checkmark.circle") }
@@ -148,14 +164,16 @@ struct OnboardingView: View {
         if let scanError, loadedKey == scanKey {
             UnavailablePane(title: "Detection unavailable", symbol: "terminal",
                             message: scanError, retry: {
-                if store.snapshot == nil { store.startRefresh() }
-                retry += 1
+                Task {
+                    await store.refresh()
+                    retry += 1
+                }
             })
             .frame(height: 170)
             if step == .providers, store.snapshot != nil {
                 ForEach(Provider.allCases, id: \.self) { provider in
                     Button("Choose \(toolName(provider)) executable…") {
-                        manualBinding = BindTarget(provider: provider, kind: .tool)
+                        chooseProvider(provider)
                     }
                     .disabled(store.busy)
                 }
@@ -176,7 +194,7 @@ struct OnboardingView: View {
                 }
                 .padding(.trailing, SettingsSpacing.inline)
             }
-            .frame(height: 260)
+            .frame(height: step == .providers ? 345 : 200)
             if scan.limited { supporting("The scan reached its limit. Some installations may be missing.") }
             if scan.skippedCount > 0 {
                 supporting("Skipped protected locations (\(scan.skippedCount)).")
@@ -192,13 +210,22 @@ struct OnboardingView: View {
             HStack {
                 Text(toolName(provider)).font(.headline).accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button("Choose another…") { manualBinding = BindTarget(provider: provider, kind: .tool) }
+                Button("Choose another…") { chooseProvider(provider) }
                     .accessibilityLabel("Choose another \(toolName(provider)) executable")
                     .disabled(store.busy)
             }
             if candidates.isEmpty { supporting("No installation found") }
             ForEach(candidates, id: \.path) { candidate in
-                LabeledContent {
+                HStack(alignment: .top, spacing: SettingsSpacing.control) {
+                    VStack(alignment: .leading, spacing: SettingsSpacing.tight) {
+                        pathLabel(candidate.path)
+                        supporting("\(installKind(candidate.install_kind)) · Version: \(candidate.version ?? "Unavailable")")
+                        supporting("\(candidate.qualified ? "Qualified" : "Not qualified") · \(candidate.bound ? "Bound" : "Not bound")")
+                        if !candidate.bindable {
+                            supporting("Binding unavailable · \(candidate.bind_reason ?? "Trust check failed")")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     if candidate.bindable && !candidate.bound {
                         Button("Bind…") {
                             binding = SetupBinding(provider: provider, path: candidate.path, desktop: false,
@@ -207,24 +234,27 @@ struct OnboardingView: View {
                         .accessibilityLabel("Bind \(candidate.path)")
                         .disabled(store.busy)
                     }
-                } label: {
-                    pathLabel(candidate.path)
-                    supporting("\(candidate.install_kind.capitalized) · Version: \(candidate.version ?? "Unavailable")")
-                    supporting("\(candidate.qualified ? "Qualified" : "Not qualified") · \(candidate.bound ? "Bound" : "Not bound")")
-                    if !candidate.bindable {
-                        supporting(candidate.bind_reason ?? "Binding unavailable")
-                    } else {
-                        supporting("Eligible to bind")
-                    }
                 }
             }
         }
+        .padding(SettingsSpacing.control)
+        .sectionBox(theme.tokens)
     }
 
     @ViewBuilder private func desktopRows(_ scan: ProviderDetection) -> some View {
         if scan.desktop_apps.isEmpty { supporting("No desktop apps found") }
         ForEach(scan.desktop_apps, id: \.path) { app in
-            LabeledContent {
+            HStack(alignment: .top, spacing: SettingsSpacing.control) {
+                VStack(alignment: .leading, spacing: SettingsSpacing.tight) {
+                    Text(app.provider.desktopApp).font(SettingsTypography.heading)
+                    pathLabel(app.path)
+                    if let version = app.version { supporting("Version: \(version)") }
+                    supporting("Code requirement: \(app.code_requirement.capitalized)")
+                    if app.provider == .claude {
+                        supporting("Binding and launch closed · Qualification pending")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if app.provider == .codex {
                     Button("Bind…") {
                         binding = SetupBinding(provider: app.provider, path: app.path, desktop: true,
@@ -233,15 +263,28 @@ struct OnboardingView: View {
                     .accessibilityLabel("Bind \(app.provider.desktopApp) at \(app.path)")
                     .disabled(store.busy)
                 }
-            } label: {
-                Text(app.provider.desktopApp)
-                pathLabel(app.path)
-                if let version = app.version { supporting("Version: \(version)") }
-                supporting("Code requirement: \(app.code_requirement.capitalized)")
-                if app.provider == .claude {
-                    supporting("Binding and launch closed · Qualification pending")
-                }
             }
+            .padding(SettingsSpacing.control)
+            .sectionBox(theme.tokens)
+        }
+    }
+
+    private func chooseProvider(_ provider: Provider) {
+        let revision = store.snapshot?.revision
+        guard let path = choosePath(title: "Choose \(toolName(provider)) executable") else { return }
+        guard MCPInput.isAbsolutePath(path) else {
+            bindingError = "Choose an executable with a valid absolute path."
+            return
+        }
+        bindingError = nil
+        binding = SetupBinding(provider: provider, path: path, desktop: false, revision: revision)
+    }
+
+    private func installKind(_ kind: String) -> String {
+        switch kind {
+        case "homebrew": return "Homebrew"
+        case "npm", "bun": return kind
+        default: return kind.capitalized
         }
     }
 
@@ -301,11 +344,10 @@ struct OnboardingView: View {
         guard key.active else { return }
         scanError = nil
         loadedKey = nil
+        guard !key.busy else { return }
         guard key.ready else {
-            if !key.loadingMetadata {
-                loadedKey = key
-                scanError = "Refresh local metadata to try again."
-            }
+            loadedKey = key
+            scanError = "Refresh local metadata to try again."
             return
         }
         do {
