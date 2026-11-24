@@ -22,7 +22,7 @@ struct CatalogPage: View {
                         set: { on in
                             if on {
                                 confirmation = Confirmation(title: "Turn on every server for every profile?",
-                                    message: "Larp switches every current MCP server on for every active command-line profile. New servers and command-line profiles start with them on. Turning this off later keeps the switches as they are.",
+                                    message: "Larp turns on every compatible server for each profile, including profiles with the command line turned off. Those profiles receive their servers when the command line is enabled. New servers and profiles inherit this setting. Turning it off later preserves saved switches.",
                                     button: "Turn On", action: .setSyncNewServers(true))
                             } else {
                                 store.perform(.setSyncNewServers(false))
@@ -30,7 +30,7 @@ struct CatalogPage: View {
                         }
                     )) {
                         Text("Turn on new MCP servers automatically")
-                        Text("Turning this on also enables current servers for every active command-line profile.")
+                        Text("Turning this on also saves compatible server assignments for every profile.")
                             .foregroundStyle(SettingsTypography.supportingInk)
                     }
                 }
@@ -158,13 +158,19 @@ struct CatalogPage: View {
 
     private func profileSwitch(_ item: CatalogItem, profile: Profile) -> some View {
         let enabled = item.profileIDs.contains(profile.id)
-        let skillUnavailable = kind == .skill && !profile.cliEnabled
         return LabeledContent {
-            if skillUnavailable && !enabled {
-                Text("Command line is off")
-                    .foregroundStyle(SettingsTypography.supportingInk)
+            if kind == .skill && !profile.cliEnabled {
+                // The CLI reports effective availability here, so the saved switch is unknown.
+                Menu("Set Skill") {
+                    Button("Turn On") {
+                        store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: true))
+                    }
+                    Button("Turn Off") {
+                        store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: false))
+                    }
+                }
+                .accessibilityLabel("Set \(item.id) for \(profile.name)")
             } else {
-                // Keep an existing sample switch clearable after the CLI surface is turned off.
                 Toggle(isOn: Binding(
                     get: { enabled },
                     set: { store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: $0)) }
@@ -184,8 +190,9 @@ struct CatalogPage: View {
             } icon: {
                 ProviderGlyph(provider: profile.provider, size: 14)
             }
-            if skillUnavailable && enabled {
-                Text("Command line is off").foregroundStyle(SettingsTypography.supportingInk)
+            if kind == .skill && !profile.cliEnabled {
+                Text("Changes take effect when the command line is enabled.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
     }

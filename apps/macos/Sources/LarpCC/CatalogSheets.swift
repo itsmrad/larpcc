@@ -29,6 +29,7 @@ struct AddServerSheet: View {
     }
     private var problem: String? {
         if trimmed(name).isEmpty { return "Enter a server name." }
+        if !LarpNames.isValid(trimmed(name)) { return catalogNameHint }
         if store.snapshot?.servers.contains(where: { $0.id == trimmed(name) }) == true { return "A server with that name already exists." }
         return MCPInput.problem(name: trimmed(name), transport: transport)
     }
@@ -149,7 +150,7 @@ struct AddSkillSheet: View {
         if !MCPInput.isAbsolutePath(path) { return "Choose a folder with a valid absolute path." }
         if trimmed(name).isEmpty { return "Enter a skill name." }
         if !LarpNames.isValid(trimmed(name)) {
-            return "Use a lowercase name: letters, digits, - or _, up to 32 characters."
+            return catalogNameHint
         }
         if store.snapshot?.skills.contains(where: { $0.id == trimmed(name) }) == true {
             return "A skill with that name already exists."
@@ -194,3 +195,5 @@ struct AddSkillSheet: View {
         return LarpNames.isValid(String(name.prefix(32))) ? String(name.prefix(32)) : ""
     }
 }
+
+private let catalogNameHint = "Start with a lowercase letter. Use up to 32 lowercase letters, digits, hyphens, or underscores."
