@@ -169,6 +169,7 @@ struct MenuBarSettingsSection: View {
             Toggle(isOn: $hideDock) {
                 Text("Hide Dock icon when the window is closed")
                 Text(shown ? "LarpCC stays reachable from the menu bar." : "Needs “Show in menu bar”.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
             .disabled(!shown)
         }
