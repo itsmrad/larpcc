@@ -1,7 +1,7 @@
 import Foundation
 
 // Presentation values, not a CLI wire contract. Paths are display-only.
-public enum Provider: String, Sendable, CaseIterable {
+public enum Provider: String, Sendable, CaseIterable, Decodable {
     case claude, codex
     public var title: String { rawValue.capitalized }
     public var symbol: String { self == .claude ? "sun.max" : "circle.hexagongrid" }
@@ -208,7 +208,50 @@ public enum ClientError: Error, LocalizedError, Sendable, Equatable {
     }
 }
 
+public struct ProviderDetection: Decodable, Sendable {
+    public struct Executable: Decodable, Sendable {
+        public struct Identity: Decodable, Sendable {
+            public let kind: String
+            public let dev: String
+            public let ino: String
+        }
+
+        public let provider: Provider
+        public let path: String
+        public let resolved_path: String
+        public let identity: Identity
+        public let size: String
+        public let install_kind: String
+        public let bindable: Bool
+        public let bind_reason: String?
+        public let qualified: Bool
+        public let bound: Bool
+        public let sha256: String?
+        public let cdhash: String?
+        public let version: String?
+        public let version_diagnostic: String
+    }
+
+    public struct DesktopApp: Decodable, Sendable {
+        public let provider: Provider
+        public let path: String
+        public let resolved_path: String
+        public let bundle_id: String?
+        public let version: String?
+        public let code_requirement: String
+    }
+
+    // Skipped entries can name protected locations. Only surface the count.
+    struct Skipped: Decodable, Sendable {}
+    let skipped: [Skipped]
+    public var skippedCount: Int { skipped.count }
+    public let executables: [Executable]
+    public let desktop_apps: [DesktopApp]
+    public let limited: Bool
+}
+
 public protocol LarpClient: Sendable {
+    func detectProviders(revision: String?) async throws -> ProviderDetection
     func snapshot() async throws -> Snapshot
     func perform(_ action: LarpAction) async throws -> String
     /// Usage limits keyed by profile ID; profiles with no data are absent.
@@ -218,6 +261,7 @@ public protocol LarpClient: Sendable {
 // Sample mode has no filesystem, process, provider or network access.
 public actor FixtureLarpClient: LarpClient {
     private var state: Snapshot
+    private var providerPaths: [Provider: String] = [:]
     private static let claudeApp = DesktopBinding(state: .ok, displayPath: "/Applications/Claude.app", detectedVersion: nil, recordedVersion: nil)
     private static let chatGPTApp = DesktopBinding(state: .unbound, displayPath: nil, detectedVersion: nil, recordedVersion: nil)
     public init() {
@@ -243,6 +287,33 @@ public actor FixtureLarpClient: LarpClient {
         ], syncNewServers: false)
     }
     public func snapshot() async throws -> Snapshot { state }
+
+    public func detectProviders(revision: String?) async throws -> ProviderDetection {
+        guard revision == state.revision else { throw ClientError.conflict }
+        return ProviderDetection(
+            skipped: [.init()],
+            executables: [
+                sampleExecutable(.claude, "/opt/homebrew/bin/claude", kind: "homebrew", reason: nil),
+                sampleExecutable(.codex, "/usr/local/bin/codex", kind: "npm", reason: nil),
+                sampleExecutable(.codex, "/fixture/shared/bin/codex", kind: "unknown", reason: "writable directory")
+            ].sorted { $0.bound && !$1.bound },
+            desktop_apps: [
+                .init(provider: .claude, path: "/Applications/Claude.app", resolved_path: "/Applications/Claude.app",
+                      bundle_id: nil, version: nil, code_requirement: "unavailable"),
+                .init(provider: .codex, path: "/Applications/ChatGPT.app", resolved_path: "/Applications/ChatGPT.app",
+                      bundle_id: nil, version: "1.2.3", code_requirement: "unavailable")
+            ],
+            limited: false
+        )
+    }
+
+    private func sampleExecutable(_ provider: Provider, _ path: String, kind: String,
+                                  reason: String?) -> ProviderDetection.Executable {
+        .init(provider: provider, path: path, resolved_path: path,
+              identity: .init(kind: "unix", dev: "1", ino: "1"), size: "1024", install_kind: kind,
+              bindable: reason == nil, bind_reason: reason, qualified: false, bound: providerPaths[provider] == path,
+              sha256: nil, cdhash: nil, version: "unapproved", version_diagnostic: "version_unapproved")
+    }
 
     public func perform(_ action: LarpAction) async throws -> String {
         func index(_ id: String) throws -> Int {
@@ -288,8 +359,12 @@ public actor FixtureLarpClient: LarpClient {
         case let .recover(id):
             let i = try index(id)
             state.profiles[i].recoverable = false
-        case .migrate, .syncServers, .syncSkills, .bindProvider:
+        case .migrate, .syncServers, .syncSkills:
             break
+        case let .bindProvider(provider, path, replace):
+            guard MCPInput.isAbsolutePath(path) else { throw ClientError.invalidInput }
+            if providerPaths[provider] != nil, !replace { throw ClientError.alreadyBound }
+            providerPaths[provider] = path
         case let .open(id, _):
             _ = try index(id)
             throw ClientError.qualificationPending

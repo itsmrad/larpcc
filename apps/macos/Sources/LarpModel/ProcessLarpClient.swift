@@ -111,6 +111,15 @@ public actor ProcessLarpClient: LarpClient {
         displayed = state
         return state
     }
+    public func detectProviders(revision: String?) async throws -> ProviderDetection {
+        guard let revision, displayed?.revision == revision else { throw ClientError.staleSelection }
+        let token = generation
+        let result = try await request(["provider", "detect"], revision: revision)
+        guard generation == token, result.revision == revision else { throw ClientError.conflict }
+        guard case let .providerDetect(detection) = result.data else { throw ClientError.invalidResponse }
+        return detection
+    }
+
     /// Not wired until the `larp cc usage` contract merges.
     public func usage(source: UsageSource) async throws -> [String: UsageReport] {
         throw ClientError.commandUnavailable

@@ -12,7 +12,7 @@ final class ProcessBridgeTests: XCTestCase {
     func testEveryFrozenExampleAndErrorVariant() throws {
         let prospectiveCommands: Set<String> = ["status.account", "host.list", "host.show", "host.check", "host.catalog.list",
                                                  "usage", "settings.usage", "settings.usage.live", "settings.usage.interval",
-                                                 "provider.evidence", "provider.detect"]
+                                                 "provider.evidence"]
         var checkedProspective: Set<String> = []
         for (index, e) in try Self.examples().enumerated() {
             if e["ok"] as? Bool == true, let command = e["command"] as? String,

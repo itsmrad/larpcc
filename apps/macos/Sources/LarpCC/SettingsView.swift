@@ -73,7 +73,7 @@ struct SettingsView: View {
 
     var body: some View {
         split
-        .task { store.startRefresh() }
+        .task { store.offerSetup(); store.startRefresh() }
         .confirmationDialog("Stop this change?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("Stop", role: .destructive) { store.cancel() }
             Button("Keep Waiting", role: .cancel) {}
@@ -82,6 +82,7 @@ struct SettingsView: View {
         }
         .sheet(item: $store.sheet) { sheet in
             switch sheet {
+            case .onboarding: OnboardingView(store: store)
             case .addProfile:
                 AddProfileSheet(store: store) { name in
                     if let id = store.snapshot?.profiles.first(where: { $0.name == name })?.id { selection = .profile(id) }

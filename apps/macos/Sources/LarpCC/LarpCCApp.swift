@@ -16,9 +16,24 @@ struct LarpCCApp: App {
         SettingsSnapshot.runIfRequested()
         #endif
     }
+    @ViewBuilder
+    private var settingsContent: some View {
+        #if DEBUG
+        if let step = OnboardingStep.snapshotValue, store.isFixture {
+            OnboardingView(store: store, step: step)
+                .task { await store.refresh() }
+                .onAppear { (AppearanceMode.launchOverride ?? .system).apply() }
+        } else {
+            SettingsView(store: store)
+        }
+        #else
+        SettingsView(store: store)
+        #endif
+    }
+
     var body: some Scene {
         Window("LarpCC", id: "settings") {
-            SettingsView(store: store)
+            settingsContent
                 .themed()
                 .onAppear { fitWindowOnScreen() }
                 .background { UsageWindowVisibility(store: store, usageView: .settings) }
@@ -87,13 +102,31 @@ private struct NewProfileCommand: View {
 
 /// App-wide sheets, opened from the menu bar, toolbar or sidebar.
 enum AppSheet: String, Identifiable {
-    case addProfile, addServer, addSkill
+    case addProfile, addServer, addSkill, onboarding
     var id: String { rawValue }
 }
 
 @MainActor
 final class AppStore: ObservableObject {
     @Published var sheet: AppSheet?
+    private var offeredSetup = false
+
+    func offerSetup() {
+        #if DEBUG
+        guard !CommandLine.arguments.contains(where: { $0.hasPrefix("--settings-snapshot=") }) else { return }
+        #endif
+        guard !offeredSetup, selectedPath == nil, sheet == nil else { return }
+        offeredSetup = true
+        sheet = .onboarding
+    }
+
+    func detectProviders(revision: String?) async throws -> ProviderDetection {
+        guard let snapshot, snapshot.revision == revision else { throw ClientError.staleSelection }
+        let token = generation
+        let detection = try await client.detectProviders(revision: revision)
+        guard generation == token else { throw ClientError.conflict }
+        return detection
+    }
     @Published var snapshot: Snapshot?
     @Published var busy = false
     @Published var message: String?

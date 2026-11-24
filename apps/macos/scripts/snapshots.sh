@@ -31,6 +31,7 @@ swift build --product LarpCC \
 bin="$(swift build --show-bin-path)/LarpCC"
 
 pages=(general mcp skills aliases desktop about)
+onboarding_steps=(welcome larp providers desktop profile done)
 # Every profile in the sample data, so new sample profiles are picked up automatically.
 if ! profile_ids="$(perl -e 'alarm shift; exec @ARGV' 30 "$bin" --sample-profile-ids)" || [[ -z "$profile_ids" ]]; then
   echo 'Could not list sample profiles.' >&2
@@ -79,6 +80,10 @@ for theme in "${themes[@]}"; do
       render "settings-$page-$theme-$appearance.png" "${common[@]}" --page="$page" \
         --settings-snapshot="$out/settings-$page-$theme-$appearance.png"
     done
+    for step in "${onboarding_steps[@]}"; do
+      file="onboarding-$step-$theme-$appearance.png"
+      render "$file" "${common[@]}" --onboarding-step="$step" --settings-snapshot="$out/$file"
+    done
     panel="--menubar-panel-snapshot=$out/panel"
     status=()
     [[ "$appearance" == light ]] && status=(--menubar-status-snapshot="$out/status-item-$theme-lightdark.png")
@@ -93,7 +98,7 @@ for theme in "${themes[@]}"; do
 done
 
 # Each theme has five panel variants per appearance and one combined status-item PNG.
-expected_count=$(( ${#themes[@]} * (2 * (${#pages[@]} + 5) + 1) ))
+expected_count=$(( ${#themes[@]} * (2 * (${#pages[@]} + ${#onboarding_steps[@]} + 5) + 1) ))
 shopt -s nullglob
 pngs=("$out"/*.png)
 actual_count=${#pngs[@]}

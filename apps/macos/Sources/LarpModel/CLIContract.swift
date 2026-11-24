@@ -82,6 +82,7 @@ struct CLIEnvelope: Decodable {
     let error: SafeError?
     struct SafeError: Decodable { let code: String; let message: String }
     enum Payload: Decodable {
+        case providerDetect(ProviderDetection)
         case profiles([WireProfile]), profile(WireProfile), aliases([WireAlias]), bindings([Detection])
         case mcp(MCPList), skills(SkillsList), matrix(Matrix), status(Status), mutation(Mutation), receipt(Receipt), text(String), version(String)
         init(from decoder: Decoder) throws { throw ClientError.invalidResponse }
@@ -98,6 +99,7 @@ struct CLIEnvelope: Decodable {
         case "profile.list": data = .profiles(try Profiles(from: d).profiles)
         case "profile.show": data = .profile(try WireProfile(from: d))
         case "alias.list": data = .aliases(try Aliases(from: d).aliases)
+        case "provider.detect": data = .providerDetect(try ProviderDetection(from: d))
         case "provider.list": data = .bindings(try Bindings(from: d).bindings)
         case "mcp.list": data = .mcp(try MCPList(from: d))
         case "skills.list": data = .skills(try SkillsList(from: d))
@@ -120,6 +122,11 @@ struct CLIEnvelope: Decodable {
         case let .profiles(p): try profiles(p)
         case let .profile(p): try profiles([p])
         case let .aliases(a): try unique(a.map(\.name))
+        case let .providerDetect(scan):
+            guard scan.executables.allSatisfy({
+                ($0.version == "unapproved" && $0.version_diagnostic == "version_unapproved")
+                    || ($0.version == nil && $0.version_diagnostic == "version_probe_unavailable")
+            }) else { throw ClientError.invalidResponse }
         case let .bindings(b): try unique(b.map { $0.provider + "." + $0.surface })
         case let .matrix(m):
             try unique(m.profiles.map(\.id)); try unique(m.profiles.map(\.name)); try unique(m.rows.map(\.name))

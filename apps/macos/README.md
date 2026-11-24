@@ -56,6 +56,10 @@ references are never displayed or logged. The bundled frozen schema validates
 required fields, enums, numeric strings and rejects unknown fields before typed
 decoding; the workflow checks its bytes against the merged source contract.
 
+## Onboarding
+
+On first run, choose a trusted `larp` executable to find local Claude Code, Codex and desktop installations. Detection uses `larp cc provider detect --json`. Review each candidate and confirm any binding or replacement. Creating a profile is optional. In General, **Run setup again** reopens the wizard.
+
 ## Themes
 
 General › System › Theme picks the look of LarpCC’s own content: **Automatic**
