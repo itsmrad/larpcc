@@ -300,7 +300,7 @@ fn native_paths(t: &LaunchTarget, row: &ArtifactRow) -> Result<Vec<CheckedObject
 pub(crate) fn checked_artifact(path: &Path, root: &Path) -> Result<CheckedArtifact, Error> {
     checked_artifact_with(path, root, |_| {})
 }
-fn checked_artifact_with(
+pub(crate) fn checked_artifact_with(
     path: &Path,
     root: &Path,
     before_read: impl FnOnce(&File),

@@ -611,4 +611,18 @@ for invalid in semantic_negatives:
         negative_checks += 1
     else:
         raise AssertionError('invalid account summary accepted')
+# Stage 08 provider evidence: exact digest and identity forms, never extra (account) fields.
+evidence = next(x for x in fixtures if x['command'] == 'provider.evidence' and x['ok'])
+for mutate in (
+    lambda x: x['data'].update(sha256='0' * 63),
+    lambda x: x['data'].update(account='user'),
+    lambda x: x['data']['identity'].update(kind='windows'),
+    lambda x: x['data'].update(size=1048576),
+    lambda x: x['data'].update(mode='755'),
+    lambda x: x.update(revision=None),
+):
+    invalid = copy.deepcopy(evidence)
+    mutate(invalid)
+    assert not matches(invalid, SCHEMA)
+    negative_checks += 1
 print(f'{len(fixtures)} valid envelopes; all {len(expected)} success variants; {len(vectors)} pace vectors; {negative_checks} negative checks passed')
