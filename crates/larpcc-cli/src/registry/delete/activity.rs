@@ -574,6 +574,7 @@ mod tests {
         argv_missing: bool,
         reads: Cell<usize>,
         listings: Cell<usize>,
+        stat_calls: Cell<usize>,
         pids: &'static [i32],
     }
 
@@ -600,6 +601,7 @@ mod tests {
                 argv_missing: false,
                 reads: Cell::new(0),
                 listings: Cell::new(0),
+                stat_calls: Cell::new(0),
                 pids: &[1],
             }
         }
@@ -694,6 +696,7 @@ mod tests {
         }
 
         fn stat_dir(&self, path: &[u8]) -> Result<Recorded, ScanError> {
+            self.stat_calls.set(self.stat_calls.get() + 1);
             if !self.injected.is_empty() {
                 return Ok(match self.injected.get(path) {
                     Some(id) => Recorded::Present(*id),
@@ -817,18 +820,24 @@ mod tests {
             expected: Some(path_bytes(&desktop)),
             ..Fixture::candidate(&[], None)
         };
-        let checks = Cell::new(0u32);
-        let result = table.scan(|| {
-            let seen = checks.get();
-            checks.set(seen + 1);
-            // Opening recheck and the process loop are checks 0-3. Check 4 is the final recheck.
-            if seen == 4 {
-                Err(ScanError::Deadline)
-            } else {
-                Ok(())
-            }
-        });
-        assert_eq!(result, Err(ScanError::Busy));
+        let mut attempts = 0;
+        let result = retry_scan(
+            |uncertain| {
+                attempts += 1;
+                table.scan_with_history(uncertain, || {
+                    // The second stat is the final pathname recheck.
+                    if table.stat_calls.get() >= 2 {
+                        Err(ScanError::Deadline)
+                    } else {
+                        Ok(())
+                    }
+                })
+            },
+            || panic!("final recheck expiry should not wait"),
+        );
+        assert!(matches!(result, Err(Error::AuthBusy)));
+        assert_eq!(attempts, 1);
+        assert_eq!(table.stat_calls.get(), 2);
     }
 
     #[test]
