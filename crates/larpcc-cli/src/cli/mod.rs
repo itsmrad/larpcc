@@ -3,6 +3,7 @@ mod doctor;
 mod json;
 mod render;
 use crate::account::{self, StatusRow};
+use crate::registry::usage::data::{cli as usage_cli, clock as usage_clock};
 #[allow(unused_imports, reason = "the synthetic driver has its own entrypoint")]
 pub use alias::gate;
 #[cfg(feature = "synthetic-launch")]
@@ -28,6 +29,8 @@ use std::{
     disable_help_subcommand = true
 )]
 struct Cli {
+    #[arg(long, global = true, hide = true)]
+    remote_request: bool,
     /// Emit one local metadata JSON envelope
     #[arg(long, global = true)]
     json: bool,
@@ -70,6 +73,13 @@ enum RootAction {
 
 #[derive(Subcommand)]
 enum CcAction {
+    /// Read LOCAL usage for one or all active profiles
+    Usage(usage_cli::ReadUsage),
+    /// Read or change usage settings
+    Settings {
+        #[command(subcommand)]
+        command: usage_cli::SettingsCommand,
+    },
     /// Bind or open a verified desktop app (ChatGPT on macOS; Claude closed)
     #[command(arg_required_else_help = true, disable_help_subcommand = true)]
     App {
@@ -311,6 +321,8 @@ enum ProviderAction {
 
 #[derive(Subcommand)]
 enum ProfileAction {
+    /// Set or clear a profile's usage plan label
+    PlanLabel(usage_cli::PlanLabel),
     /// Enable or disable a profile surface (does not qualify native launch)
     Surface {
         name: ProfileName,
@@ -438,7 +450,8 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
                 || host_revision_present
                 || (!informational
                     && error.kind() != ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-                    && is_mcp_invocation(&args))
+                    && (invocation_starts_with(&args, &["cc", "mcp"])
+                        || invocation_starts_with(&args, &["cc", "profile", "plan-label"])))
             {
                 return json_or_usage(false, "parse", "usage", "Invalid command or arguments.");
             }
@@ -455,6 +468,24 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
         }
     };
     let RootAction::Cc { command } = cli.command;
+    let read_clock = usage_clock::now();
+    if cli.remote_request {
+        let unsupported = match &command {
+            CcAction::Usage(_) | CcAction::Settings { .. } => None,
+            CcAction::Profile {
+                command: ProfileAction::PlanLabel(_),
+            } => Some("profile.plan-label"),
+            _ => Some("parse"),
+        };
+        if let Some(discriminator) = unsupported {
+            return json_or_usage(
+                cli.json,
+                discriminator,
+                "unsupported",
+                "This command is unavailable on remote requests.",
+            );
+        }
+    }
     if let CcAction::Status { name, no_account } = &command {
         let command = if *no_account {
             "status"
@@ -518,7 +549,12 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
         );
     }
     if cli.json {
-        return execute_json(command, cli.expected_revision);
+        return execute_json(
+            command,
+            cli.expected_revision,
+            read_clock,
+            cli.remote_request,
+        );
     }
     let expected = cli.expected_revision;
     let command = match command {
@@ -644,6 +680,16 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
                 Err(error) => operational_error(error),
             };
         }
+        CcAction::Usage(args) => {
+            return usage_output("usage", expected, |registry| {
+                args.execute(registry, read_clock, cli.remote_request)
+            });
+        }
+        CcAction::Settings { command } => {
+            return usage_output(command.discriminator(), expected, |registry| {
+                command.execute(registry, cli.remote_request)
+            });
+        }
         CcAction::Profile { command } => command,
     };
     if matches!(
@@ -725,9 +771,9 @@ fn status(
     }
 }
 
-fn is_mcp_invocation(args: &[std::ffi::OsString]) -> bool {
+fn invocation_starts_with(args: &[std::ffi::OsString], commands: &[&str]) -> bool {
     let mut args = args.iter().skip(1);
-    let mut commands = ["cc", "mcp"].into_iter();
+    let mut commands = commands.iter().copied();
     while let Some(arg) = args.next() {
         if arg == "--expected-revision" {
             args.next();
@@ -778,6 +824,9 @@ fn escape_error_values(error: &mut clap::Error) {
 
 fn execute(command: ProfileAction, registry: &Registry) -> Result<String, Error> {
     Ok(match command {
+        ProfileAction::PlanLabel(args) => {
+            usage_cli::human("profile.plan-label", &args.execute(registry)?)
+        }
         ProfileAction::Surface {
             name,
             surface,
@@ -832,11 +881,33 @@ pub(super) fn operational_error(error: Error) -> ExitCode {
     }
     if matches!(
         error,
-        Error::AlreadyBound { .. } | Error::InvalidVersionLabel | Error::McpInvalid
+        Error::AlreadyBound { .. }
+            | Error::InvalidVersionLabel
+            | Error::McpInvalid
+            | Error::UsagePlanLabel
+            | Error::UsageMode
+            | Error::UsageInterval
+            | Error::UsageRemoteUnsupported
+            | Error::UsageConfirmation
     ) {
         ExitCode::from(2)
     } else {
         ExitCode::FAILURE
+    }
+}
+
+fn usage_output(
+    command: &str,
+    expected: Option<u64>,
+    action: impl FnOnce(&Registry) -> Result<serde_json::Value, Error>,
+) -> ExitCode {
+    match Registry::locate().and_then(|registry| action(&registry.expecting(expected))) {
+        Ok(data) => write_output(
+            usage_cli::human(command, &data).as_bytes(),
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        ),
+        Err(error) => operational_error(error),
     }
 }
 

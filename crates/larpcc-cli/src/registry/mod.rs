@@ -11,6 +11,7 @@ pub(crate) use model::parse_recorded_version;
 mod paths;
 mod skills;
 mod store;
+pub(crate) mod usage;
 #[allow(unused_imports)]
 pub use skills::SkillsAction;
 #[cfg(test)]
