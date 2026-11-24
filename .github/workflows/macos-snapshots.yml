@@ -1,0 +1,43 @@
+name: macOS Snapshots
+
+# Renders every Settings page, the menu bar panel and the status item in each theme and
+# appearance with sample data, and uploads them as the `snapshots` artifact.
+on:
+  pull_request:
+    paths:
+      - 'apps/macos/**'
+      - '.github/workflows/macos-snapshots.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-snapshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshots:
+    # macOS 26 draws all three themes (Tahoe needs it).
+    runs-on: macos-26
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: apps/macos
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and display
+        run: |
+          sw_vers
+          swift --version
+          system_profiler SPDisplaysDataType | grep -E 'Resolution|Display Type' || true
+      - name: Render snapshots
+        run: ./scripts/snapshots.sh "$RUNNER_TEMP/snapshots"
+      - name: Upload snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshots
+          path: ${{ runner.temp }}/snapshots
+          if-no-files-found: error
+          retention-days: 14

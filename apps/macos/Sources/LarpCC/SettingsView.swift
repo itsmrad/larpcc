@@ -68,20 +68,11 @@ struct SettingsView: View {
     @State private var search = ""
     @State private var confirmingStop = false
     @AppStorage(PreferenceKey.appearance) private var appearance = AppearanceMode.system.rawValue
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 300)
-        } detail: {
-            detail
-                // Minimum on the detail column, not the split view: a split-view
-                // minimum makes the detail snap instead of resizing as the sidebar slides in.
-                .frame(minWidth: 460, minHeight: 480)
-                .navigationTitle(title)
-                .toolbar { toolbar }
-                .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
-        }
+        split
         .task { store.startRefresh() }
         .confirmationDialog("Stop this change?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("Stop", role: .destructive) { store.cancel() }
@@ -99,11 +90,13 @@ struct SettingsView: View {
             case .addSkill: AddSkillSheet(store: store)
             }
         }
-        .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply() }
+        .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply(); showRequestedProfile() }
+        .onChange(of: store.requestedProfileID) { _, _ in showRequestedProfile() }
         .onChange(of: appearance) { _, value in (AppearanceMode(rawValue: value) ?? .system).apply() }
         .onChange(of: store.snapshot?.profiles.map(\.id)) { _, ids in
             // Leave a profile page only once the profile is really gone (e.g. after Delete).
             if case let .profile(id) = selection, let ids, !ids.contains(id) { selection = .page(.general) }
+            showRequestedProfile()
         }
         .onChange(of: selection) { old, _ in
             if historyMove { historyMove = false; return }
@@ -114,55 +107,125 @@ struct SettingsView: View {
 
     // MARK: Sidebar
 
-    private var sidebar: some View {
-        List(selection: $selection) {
-            Section {
-                ForEach(SettingsPage.allCases.filter { matches($0.title + " " + $0.keywords) }) { page in
-                    Label {
-                        Text(page.title)
-                    } icon: {
-                        IconTile(symbol: page.symbol, color: page.color)
-                    }
-                    .tag(Selection.page(page))
-                }
+    /// Tahoe: the system split view with its floating glass sidebar. Sequoia and Sonoma: an
+    /// edge-to-edge sidebar on the sidebar material with a hairline, as those releases drew it.
+    @ViewBuilder
+    private var split: some View {
+        if theme.tokens.floatingSidebar {
+            NavigationSplitView {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 300)
+            } detail: {
+                detailColumn
             }
-            if let snapshot = store.snapshot {
+        } else {
+            HStack(spacing: 0) {
+                sidebar
+                    .scrollContentBackground(.hidden)
+                    .frame(width: 230)
+                    .background {
+                        if reduceTransparency {
+                            Color(nsColor: .windowBackgroundColor).ignoresSafeArea()
+                        } else {
+                            SidebarMaterial().ignoresSafeArea()
+                        }
+                    }
+                Divider().ignoresSafeArea()
+                detailColumn.background(classicPageBackground.ignoresSafeArea())
+            }
+            .modifier(ClearToolbar())
+        }
+    }
+
+    private var detailColumn: some View {
+        detail
+            // Minimum on the detail column, not the split view: a split-view
+            // minimum makes the detail snap instead of resizing as the sidebar slides in.
+            .frame(minWidth: 460, minHeight: 480)
+            .navigationTitle(title)
+            .toolbar { toolbar }
+            .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
+    }
+
+    /// Shows the profile the menu bar asked for. Without metadata the request waits for it;
+    /// a profile that no longer exists drops the request.
+    private func showRequestedProfile() {
+        guard let id = store.requestedProfileID, let profiles = store.snapshot?.profiles else { return }
+        store.requestedProfileID = nil
+        guard profiles.contains(where: { $0.id == id }) else { return }
+        search = ""
+        selection = .profile(id)
+    }
+
+    private var sidebar: some View {
+        let query = search.trimmingCharacters(in: .whitespaces)
+        let pages = SettingsPage.allCases.filter { matches($0.title + " " + $0.keywords, query: query) }
+        let profiles = store.snapshot?.profiles.filter {
+            matches($0.name + " " + $0.provider.title + " " + $0.aliases.joined(separator: " "), query: query)
+        } ?? []
+
+        return List(selection: $selection) {
+            ForEach(pages) { page in
+                Label {
+                    Text(page.title)
+                } icon: {
+                    IconTile(symbol: page.symbol, color: page.color, size: theme.tokens.sidebarIconSize)
+                }
+                .tag(Selection.page(page))
+            }
+            if store.snapshot != nil {
                 Section {
-                    ForEach(snapshot.profiles.filter { matches($0.name + " " + $0.provider.title + " " + $0.aliases.joined(separator: " ")) }) { profile in
-                        ProfileSidebarRow(profile: profile)
+                    if profiles.isEmpty, !query.isEmpty {
+                        Text(pages.isEmpty ? "No results" : "No matching profiles")
+                            .font(SettingsTypography.supporting)
+                            .foregroundStyle(SettingsTypography.supportingInk)
+                            .selectionDisabled()
+                    }
+                    ForEach(profiles) { profile in
+                        ProfileSidebarRow(profile: profile, usage: store.usage[profile.id])
                             .tag(Selection.profile(profile.id))
                     }
                 } header: {
                     HStack {
                         Text("Profiles")
+                            .font(SettingsTypography.caption.weight(.semibold))
+                            .foregroundStyle(Color(nsColor: .labelColor))
                         Spacer()
-                        Text("\(snapshot.enabledCount) on").monospacedDigit()
-                        Button { store.sheet = .addProfile } label: { Image(systemName: "plus") }
-                            .buttonStyle(.borderless)
-                            .help("New Profile (⌘N)")
-                            .accessibilityLabel("New Profile")
-                            .disabled(store.busy)
+                        SettingsIconButton(title: "New Profile", symbol: "plus", help: "New Profile (⌘N)") {
+                            store.sheet = .addProfile
+                        }
+                        .disabled(store.busy)
                     }
-                    .padding(.trailing, 10)
+                    .padding(.trailing, SettingsSpacing.tight)
                     .accessibilityElement(children: .contain)
                 }
             }
         }
         .listStyle(.sidebar)
-        .searchable(text: $search, placement: .sidebar, prompt: "Search")
+        .modifier(SidebarDensity(size: theme.tokens.sidebarRowSize))
+        .overlay(alignment: .topLeading) {
+            if store.snapshot == nil, pages.isEmpty, !query.isEmpty {
+                Text("No results")
+                    .font(SettingsTypography.supporting)
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .padding(SettingsSpacing.inset)
+                    .allowsHitTesting(false)
+            }
+        }
+        .modifier(SidebarSearch(text: $search, inSidebarSplit: theme.tokens.floatingSidebar))
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: store.isFixture ? "testtube.2" : "terminal")
-                Text(store.isFixture ? "Sample data" : "Your larp executable")
+            VStack(spacing: 0) {
+                if !theme.tokens.floatingSidebar { Divider() }
+                Label(store.isFixture ? "Sample data" : "Your larp executable",
+                      systemImage: store.isFixture ? "testtube.2" : "terminal")
+                    .font(SettingsTypography.caption)
+                    .foregroundStyle(Color(nsColor: .labelColor))
                     .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, SettingsSpacing.inset)
+                    .padding(.vertical, SettingsSpacing.inline)
             }
             .help(store.isFixture ? "Sample data: changes stay in memory and reset on restart." : "Using your larp executable")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .accessibilityElement(children: .combine)
         }
     }
 
@@ -211,16 +274,27 @@ struct SettingsView: View {
     private var metadataUnavailable: some View {
         Group {
             if store.busy {
-                ProgressView("Loading local metadata…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingPane(title: "Loading local metadata…")
+                    .transition(.opacity)
+            } else if store.isFixture || store.selectedPath != nil {
+                UnavailablePane(title: "Local metadata unavailable", symbol: "terminal",
+                                message: "Refresh to try loading it again.", retry: store.startRefresh)
+                    .transition(.opacity)
             } else {
                 UnavailablePane(title: "Local metadata unavailable", symbol: "terminal",
                                 message: "Choose a trusted larp executable or use sample data in General.")
+                    .transition(.opacity)
             }
         }
+        .settingsAnimation(value: store.busy)
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        if !theme.tokens.floatingSidebar {
+            // Starts the navigation controls and title past the edge-to-edge sidebar.
+            SidebarWidthSpacer()
+        }
         ToolbarItem(placement: .navigation) {
             ControlGroup {
                 Button { move(back: true) } label: { Label("Back", systemImage: "chevron.left") }
@@ -259,18 +333,19 @@ struct SettingsView: View {
         if let message = store.message {
             VStack(spacing: 0) {
                 Divider()
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(spacing: SettingsSpacing.inline) {
                     Image(systemName: "info.circle").foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     Text(message)
-                        .font(.callout)
+                        .font(SettingsTypography.supporting)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button { store.message = nil } label: { Image(systemName: "xmark") }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Dismiss message")
+                    SettingsIconButton(title: "Dismiss message", symbol: "xmark", help: "Dismiss message") {
+                        store.message = nil
+                    }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
+                .padding(.horizontal, SettingsSpacing.page)
+                .padding(.vertical, SettingsSpacing.inline)
             }
             .background(.bar)
         }
@@ -278,8 +353,7 @@ struct SettingsView: View {
 
     // MARK: Helpers
 
-    private func matches(_ text: String) -> Bool {
-        let query = search.trimmingCharacters(in: .whitespaces)
+    private func matches(_ text: String, query: String) -> Bool {
         return query.isEmpty || text.localizedCaseInsensitiveContains(query)
     }
 
@@ -304,18 +378,206 @@ struct SettingsView: View {
 
 private struct ProfileSidebarRow: View {
     let profile: Profile
+    let usage: UsageReport?
+    @Environment(\.theme) private var theme
+
     var body: some View {
         HStack(spacing: 10) {
-            // Not a Label: the sidebar restyles Label icons, which washes out the marks.
-            ProviderGlyph(provider: profile.provider)
-            Text(profile.name).lineLimit(1)
-            Spacer(minLength: 4)
-            if profile.readiness != .off {
-                StatusDot(color: profile.readiness.color)
+            ProviderGlyph(provider: profile.provider, size: theme.tokens.sidebarIconSize - 4)
+                .accessibilityHidden(true)
+            Text(profile.name)
+                .lineLimit(1)
+                .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
+            Spacer(minLength: SettingsSpacing.tight)
+            UsageHint(report: usage)
+            SidebarReadiness(readiness: profile.readiness)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct SidebarReadiness: View {
+    let readiness: Readiness
+    @Environment(\.backgroundProminence) private var prominence
+
+    private var symbol: String {
+        switch readiness {
+        case .ready: return "checkmark.circle"
+        case .attention: return "exclamationmark.triangle"
+        case .off: return "minus.circle"
+        }
+    }
+
+    private var ink: Color {
+        if prominence == .increased { return .white }
+        switch readiness {
+        case .ready: return SettingsTypography.successInk
+        case .attention: return SettingsTypography.warningInk
+        case .off: return SettingsTypography.supportingInk
+        }
+    }
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(SettingsTypography.caption.weight(.semibold))
+            .foregroundStyle(ink)
+            .frame(width: 14)
+            .help(readiness.title)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Sidebar hint for the lowest percentage left when a usage window is getting low.
+private struct UsageHint: View {
+    let report: UsageReport?
+    @Environment(\.backgroundProminence) private var prominence
+
+    var body: some View {
+        if let left = report?.lowestLeftPercent, left < 25 {
+            let critical = left < 10
+            let severity = critical ? "Critical usage" : "Low usage"
+            // Keep the displayed percentage on the same side of the cutoff.
+            let percent = Int(left.rounded(.down))
+            HStack(spacing: SettingsSpacing.tight) {
+                Image(systemName: critical ? "exclamationmark.circle.fill" : "exclamationmark.circle")
+                Text("\(percent)%").monospacedDigit()
+            }
+            .font(SettingsTypography.caption.weight(.medium))
+            .foregroundStyle(ink(critical: critical))
+            .fixedSize()
+            .help("\(severity): \(percent)% of a usage window left")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(severity), \(percent) percent left")
+        }
+    }
+
+    private func ink(critical: Bool) -> Color {
+        if prominence == .increased { return .white }
+        return critical ? SettingsTypography.criticalInk : SettingsTypography.warningInk
+    }
+}
+
+private struct SettingsIconButton: View {
+    let title: String
+    let symbol: String
+    let help: String
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(SettingsTypography.caption.weight(.semibold))
+                .frame(width: 22, height: 22)
+                .background {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(.primary.opacity(hovering && isEnabled ? 0.1 : 0))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .onHover { hovering = $0 }
+        .settingsAnimation(value: hovering)
+        .help(help)
+        .accessibilityLabel(title)
+    }
+}
+
+/// The pre-glass sidebar material, edge to edge under the title bar.
+private struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// The system search field sits in the sidebar only inside a split view; elsewhere LarpCC
+/// puts a native search field at the top of the sidebar, as earlier releases did.
+private struct SidebarSearch: ViewModifier {
+    @Binding var text: String
+    let inSidebarSplit: Bool
+
+    func body(content: Content) -> some View {
+        if inSidebarSplit {
+            content.searchable(text: $text, placement: .sidebar, prompt: "Search")
+        } else {
+            content.safeAreaInset(edge: .top, spacing: 0) {
+                SearchField(text: $text)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 6)
+                    .padding(.bottom, 4)
             }
         }
-        .opacity(profile.readiness == .off ? 0.55 : 1)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
+    }
+}
+
+private struct SearchField: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = "Search"
+        field.setAccessibilityLabel("Search Settings")
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+        func controlTextDidChange(_ notification: Notification) {
+            text.wrappedValue = (notification.object as? NSSearchField)?.stringValue ?? ""
+        }
+    }
+}
+
+/// Lets the edge-to-edge sidebar run up under the title bar, as it did before Liquid Glass.
+private struct ClearToolbar: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.toolbarBackground(.hidden, for: .windowToolbar)
+        } else {
+            content
+        }
+    }
+}
+
+private struct SidebarWidthSpacer: ToolbarContent {
+    var body: some ToolbarContent {
+        if #available(macOS 26, *) {
+            ToolbarItem(placement: .navigation) { spacer }.sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .navigation) { spacer }
+        }
+    }
+
+    private var spacer: some View {
+        Color.clear.frame(width: 140, height: 1).accessibilityHidden(true)
+    }
+}
+
+/// The pre-Tahoe page background: light grey in light mode, as those releases drew windows.
+private let classicPageBackground = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .windowBackgroundColor : NSColor(white: 0.925, alpha: 1)
+})
+
+/// Sets the sidebar density only when the theme asks for one.
+private struct SidebarDensity: ViewModifier {
+    let size: SidebarRowSize?
+
+    func body(content: Content) -> some View {
+        if let size { content.environment(\.sidebarRowSize, size) } else { content }
     }
 }
