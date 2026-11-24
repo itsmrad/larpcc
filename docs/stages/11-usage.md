@@ -35,6 +35,14 @@ stored. No spend, cost, credit balance or token counts anywhere.
 
 ## CLI surface
 
+**MVP scope (D36, 2026-11-24).** This build supports LOCAL usage. LIVE syntax
+is reserved and returns `live_disabled` once its arguments are valid. When a
+stored settings file has LIVE enabled, `settings usage` reports
+`needs_acknowledgement` with a null acknowledgement and leaves the file's
+bytes untouched. An effective LIVE mode produces disabled rows. Both
+`--local` and forwarded usage reads use LOCAL. Usage makes zero credential
+reads and zero provider requests.
+
 ```text
 larp cc usage [PROFILE] [--local|--live]                       # command "usage"
 larp cc settings usage                                         # "settings.usage"
