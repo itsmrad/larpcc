@@ -153,6 +153,7 @@ struct MenuBarSettingsSection: View {
             Toggle(isOn: $shown) {
                 Text("Show in menu bar")
                 Text("Usage limits, resets and quick actions, one click away.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
             Picker("Menu bar shows", selection: Binding(
                 get: { MenuBarMode(rawValue: mode) ?? .tightest },
