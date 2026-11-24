@@ -227,6 +227,12 @@ pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, Path
 }
 
 #[cfg(windows)]
+pub(crate) fn open_running_larp(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
+    let _ = (path, root);
+    Err(Error::AliasImageUnverified)
+}
+
+#[cfg(windows)]
 pub(crate) fn open_auth_lock(path: &Path) -> Result<CheckedObject, Error> {
     windows::open_auth_lock_checked(path)
 }

@@ -95,16 +95,17 @@ jobs:
         env:
           LARPCC_STAGE_FILTER: stage08_
       - if: runner.os == 'macOS'
-        name: Repeat the stage08 held-home probe 20 times
+        # With its sibling tests, as in the stage08 step: alone it never reproduced the SIGKILL.
+        name: Repeat the stage08 tests with the held-home probe 20 times
         shell: bash
         timeout-minutes: 5
         run: |
-          test_name=provider::version::tests::stage08_spawn_enters_held_home_without_pathname_chdir
           log="$RUNNER_TEMP/stage08-held-home.log"
           for iteration in {1..20}; do
             echo "stage08 held-home probe run $iteration/20"
-            cargo +stable test --test stage05_receipts --locked "$test_name" -- --exact | tee "$log"
-            grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured;' "$log"
+            cargo +stable test --test stage05_receipts --locked stage08_ | tee "$log"
+            grep -Fq 'test provider::version::tests::stage08_spawn_enters_held_home_without_pathname_chdir ... ok' "$log"
+            grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored; 0 measured;' "$log"
           done
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
         env:
