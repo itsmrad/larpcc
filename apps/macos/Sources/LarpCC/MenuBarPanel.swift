@@ -868,13 +868,22 @@ private struct ResetLabelStyle: LabelStyle {
 private struct UsageMeter: View {
     let leftPercent: Double
     let level: UsageLevel
+    @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var fill: Color {
+        if level == .critical && theme != .tahoe && colorScheme == .dark {
+            return Color(red: 1, green: 0.53, blue: 0.49)
+        }
+        return level.tint ?? Color.primary.opacity(0.7)
+    }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.12))
                 Capsule()
-                    .fill(level.tint ?? Color.primary.opacity(0.7))
+                    .fill(fill)
                     .frame(width: max(leftPercent > 0 ? 4 : 0, proxy.size.width * leftPercent / 100))
             }
         }
