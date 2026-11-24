@@ -89,11 +89,17 @@ fn fixture(provider: Provider) -> &'static str {
 
 /// Probe the explicitly bound executable. `Err` only for operational failures
 /// (workspace creation, unproven reap, cleanup); every probe refusal is `Failed`.
-pub(crate) fn detect(provider: Provider, executable: &Path, root: &Path) -> Result<Detection, Error> {
+pub(crate) fn detect(
+    provider: Provider,
+    executable: &Path,
+    root: &Path,
+) -> Result<Detection, Error> {
     let candidates: Vec<_> = table()
         .into_iter()
         .filter(|d| {
-            d.provider == provider && d.os == std::env::consts::OS && d.arch == std::env::consts::ARCH
+            d.provider == provider
+                && d.os == std::env::consts::OS
+                && d.arch == std::env::consts::ARCH
         })
         .collect();
     // No candidate: refuse without reading the artifact bytes.
@@ -117,7 +123,14 @@ pub(crate) fn detect(provider: Provider, executable: &Path, root: &Path) -> Resu
     }
     #[cfg(unix)]
     {
-        probe(provider, &descriptor, executable, &resolved, root, &artifact)
+        probe(
+            provider,
+            &descriptor,
+            executable,
+            &resolved,
+            root,
+            &artifact,
+        )
     }
     #[cfg(not(unix))]
     {
@@ -131,8 +144,7 @@ fn well_formed(d: &VersionDescriptor) -> bool {
     let printable = |s: &str| s.bytes().all(|b| (0x20..0x7f).contains(&b));
     d.home_env == home_env(d.provider)
         && d.argv.len() <= 8
-        && d
-            .argv
+        && d.argv
             .iter()
             .all(|a| !a.is_empty() && a.len() <= 64 && printable(a))
         && d.prefix.len() <= 64
@@ -240,7 +252,13 @@ impl Workspace {
     }
     fn populate(&self) -> Result<(), Error> {
         let profiles = self.temp.join("profiles");
-        for path in [profiles, self.profile(), self.home(), self.cli(), self.tmp()] {
+        for path in [
+            profiles,
+            self.profile(),
+            self.home(),
+            self.cli(),
+            self.tmp(),
+        ] {
             crate::platform::create_directory(&path)?;
         }
         Ok(())
@@ -410,6 +428,8 @@ fn spawn(
     // fork. Exec failure returns Err, so std never falls back to a shell or PATH search.
     unsafe {
         command.pre_exec(move || {
+            // Bind the whole Send/Sync struct; disjoint field capture would move raw pointers.
+            let exec = &exec;
             libc::execve(exec.path.as_ptr(), exec.argv.as_ptr(), exec.envp.as_ptr());
             Err(std::io::Error::last_os_error())
         });
@@ -551,7 +571,10 @@ mod tests {
     fn stage08_version_grammar_is_exact() {
         let d = descriptor();
         let ok = |out: &[u8]| parse(&d, out, b"", Some(0));
-        assert_eq!(ok(b"invented-cli 1.2.3 (fixture)\n").as_deref(), Some("1.2.3"));
+        assert_eq!(
+            ok(b"invented-cli 1.2.3 (fixture)\n").as_deref(),
+            Some("1.2.3")
+        );
         assert_eq!(
             ok(b"invented-cli 0.98.0-alpha.2 (fixture)\n").as_deref(),
             Some("0.98.0-alpha.2")

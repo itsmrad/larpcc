@@ -281,10 +281,11 @@ fn version_mode(mode: &str) -> io::Result<u32> {
     Ok(0)
 }
 fn main() -> ExitCode {
-    if let Some(mode) = std::env::args_os()
-        .nth(1)
-        .and_then(|a| a.to_str()?.strip_prefix("invented-version-").map(str::to_owned))
-    {
+    if let Some(mode) = std::env::args_os().nth(1).and_then(|a| {
+        a.to_str()?
+            .strip_prefix("invented-version-")
+            .map(str::to_owned)
+    }) {
         return match version_mode(&mode) {
             Ok(code) => std::process::exit(code as i32),
             Err(_) => ExitCode::FAILURE,

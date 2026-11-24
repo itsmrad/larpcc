@@ -132,10 +132,16 @@ fn stage08_doctor_no_flag_never_probes() {
     let (f, fake, digest) = setup();
     for args in [&["codex-45"][..], &[]] {
         let value = doctor_json(&f, &descriptor(&digest, "ok"), args, 0);
-        assert_eq!(cli_binding(&value)["detected_version"], serde_json::Value::Null);
+        assert_eq!(
+            cli_binding(&value)["detected_version"],
+            serde_json::Value::Null
+        );
         assert_eq!(value["data"]["diagnostics"], serde_json::json!([]));
     }
-    assert!(record(&fake, "ok").is_none(), "doctor probed without the flag");
+    assert!(
+        record(&fake, "ok").is_none(),
+        "doctor probed without the flag"
+    );
     assert!(!f.root.join("probes").exists());
 }
 
@@ -148,9 +154,18 @@ fn stage08_doctor_without_profile_reports_all_bindings() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|d| format!("{}/{}", d["provider"].as_str().unwrap(), d["surface"].as_str().unwrap()))
+        .map(|d| {
+            format!(
+                "{}/{}",
+                d["provider"].as_str().unwrap(),
+                d["surface"].as_str().unwrap()
+            )
+        })
         .collect();
-    assert_eq!(order, ["claude/cli", "claude/desktop", "codex/cli", "codex/desktop"]);
+    assert_eq!(
+        order,
+        ["claude/cli", "claude/desktop", "codex/cli", "codex/desktop"]
+    );
     assert_eq!(cli_binding(&value)["detected_version"], "1.2.3");
     assert_clean(&f);
 }
@@ -165,7 +180,10 @@ fn stage08_doctor_unknown_digest_is_null_without_spawn() {
         &["codex-45", "--detect-versions"],
         0,
     );
-    assert_eq!(cli_binding(&value)["detected_version"], serde_json::Value::Null);
+    assert_eq!(
+        cli_binding(&value)["detected_version"],
+        serde_json::Value::Null
+    );
     assert_eq!(
         value["data"]["diagnostics"],
         serde_json::json!([{"code":"version_unapproved","message":"No reviewed version probe matches the codex executable."}])
@@ -177,9 +195,18 @@ fn stage08_doctor_unknown_digest_is_null_without_spawn() {
 #[test]
 fn stage08_doctor_shipped_table_is_unapproved() {
     let (f, fake, _digest) = setup();
-    let value = f.larp_json(&["cc", "doctor", "codex-45", "--detect-versions", "--json"], 0);
-    assert_eq!(cli_binding(&value)["detected_version"], serde_json::Value::Null);
-    assert_eq!(value["data"]["diagnostics"][0]["code"], "version_unapproved");
+    let value = f.larp_json(
+        &["cc", "doctor", "codex-45", "--detect-versions", "--json"],
+        0,
+    );
+    assert_eq!(
+        cli_binding(&value)["detected_version"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        value["data"]["diagnostics"][0]["code"],
+        "version_unapproved"
+    );
     assert!(record(&fake, "ok").is_none());
 }
 
@@ -223,8 +250,14 @@ fn stage08_doctor_timeout_kills_and_reaps_direct_child() {
     let elapsed = start.elapsed();
     assert!(elapsed >= Duration::from_secs(5), "{elapsed:?}");
     assert!(elapsed < Duration::from_secs(9), "{elapsed:?}");
-    assert_eq!(cli_binding(&value)["detected_version"], serde_json::Value::Null);
-    assert_eq!(value["data"]["diagnostics"][0]["code"], "version_probe_failed");
+    assert_eq!(
+        cli_binding(&value)["detected_version"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        value["data"]["diagnostics"][0]["code"],
+        "version_probe_failed"
+    );
     let pid = record(&fake, "sleep").unwrap()["pid"].as_i64().unwrap() as libc::pid_t;
     // SAFETY: signal 0 only checks existence of the reaped child's former PID.
     let alive = unsafe { libc::kill(pid, 0) } == 0;
@@ -255,12 +288,19 @@ fn stage08_doctor_cleanup_failure_is_operational() {
 fn stage08_doctor_human_output() {
     let (f, _fake, digest) = setup();
     let output = exec(
-        driver(&f, &descriptor(&digest, "ok"), &["codex-45", "--detect-versions"]),
+        driver(
+            &f,
+            &descriptor(&digest, "ok"),
+            &["codex-45", "--detect-versions"],
+        ),
         0,
     );
     assert!(output.stderr.is_empty(), "{}", stderr(&output));
     let text = stdout(&output);
-    assert!(text.starts_with("Profile: codex-45 (ID 1, codex)\n"), "{text}");
+    assert!(
+        text.starts_with("Profile: codex-45 (ID 1, codex)\n"),
+        "{text}"
+    );
     assert!(text.contains("\n  detected version: 1.2.3\n"), "{text}");
     assert!(text.contains("Native auth: not observed\n"), "{text}");
     assert!(text.ends_with("Diagnostics: none\n"), "{text}");
@@ -288,7 +328,12 @@ fn stage08_doctor_crash_leftover_never_wedges_registry_operations() {
     f.profile(&["list"], 0);
     f.profile(&["add", "claude-work", "--provider", "claude"], 0);
     f.profile(&["show", "claude-work"], 0);
-    f.profile(&["delete", "claude-work", "--yes"], 0);
+    // Delete succeeds with its fixed Keychain warning on stderr.
+    let deleted = exec(
+        f.command(&["cc", "profile", "delete", "claude-work", "--yes"]),
+        0,
+    );
+    assert!(stderr(&deleted).starts_with("warning: Keychain items"));
     f.profile(&["migrate"], 0);
     f.run(&["cc", "provider", "list"], 0);
     let value = doctor_json(

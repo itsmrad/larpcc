@@ -29,6 +29,7 @@ fn bound() -> (Fixture, PathBuf) {
 #[test]
 fn stage08_evidence_json_is_exact_and_runs_nothing() {
     let (f, fake) = bound();
+    f.install_larp(); // larp_json's private copy is fixture setup, not an export effect
     let before = f.outside_snapshot();
     let value = f.larp_json(&["cc", "provider", "evidence", "codex", "--json"], 0);
     assert_eq!(value["command"], "provider.evidence");
@@ -62,10 +63,18 @@ fn stage08_evidence_json_is_exact_and_runs_nothing() {
     #[cfg(not(target_os = "macos"))]
     assert_eq!(data["cdhash"], serde_json::Value::Null);
     // Nothing ran: the fake leaves a record next to itself whenever it is executed.
-    assert!(fake.parent().unwrap().read_dir().unwrap().all(|e| {
-        !e.unwrap().file_name().to_string_lossy().contains(".probe-")
-    }));
-    assert_eq!(before, f.outside_snapshot(), "evidence export changed files");
+    assert!(
+        fake.parent()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .all(|e| { !e.unwrap().file_name().to_string_lossy().contains(".probe-") })
+    );
+    assert_eq!(
+        before,
+        f.outside_snapshot(),
+        "evidence export changed files"
+    );
 }
 
 #[test]
@@ -88,7 +97,15 @@ fn stage08_evidence_refuses_unbound_and_stale_revision() {
         serde_json::json!({"code":"not_found","message":"Provider is not bound."})
     );
     let value = f.larp_json(
-        &["cc", "provider", "evidence", "codex", "--json", "--expected-revision", "1"],
+        &[
+            "cc",
+            "provider",
+            "evidence",
+            "codex",
+            "--json",
+            "--expected-revision",
+            "1",
+        ],
         1,
     );
     assert_eq!(value["error"]["code"], "conflict");

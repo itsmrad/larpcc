@@ -62,7 +62,10 @@ fn collect_with(
     if artifact.identity != identity {
         return Err(Error::ArtifactInvalid);
     }
-    let meta = artifact.file.metadata().map_err(|_| Error::ArtifactInvalid)?;
+    let meta = artifact
+        .file
+        .metadata()
+        .map_err(|_| Error::ArtifactInvalid)?;
     #[cfg(unix)]
     let (owner, mode) = {
         use std::os::unix::fs::MetadataExt;
@@ -213,7 +216,10 @@ mod tests {
             std::os::unix::fs::symlink(&b, &swapped).unwrap();
             std::fs::rename(&swapped, &link).unwrap();
         });
-        assert!(matches!(result, Err(Error::ArtifactInvalid)), "swap accepted");
+        assert!(
+            matches!(result, Err(Error::ArtifactInvalid)),
+            "swap accepted"
+        );
     }
     #[test]
     fn stage08_evidence_refuses_untrusted_path() {

@@ -87,7 +87,11 @@ pub(super) fn human(data: &Value, detect: bool) -> String {
                 out,
                 "  {surface} home: {}{} {}",
                 text(&s["state"]),
-                if s["enabled"] == true { "" } else { " (disabled)" },
+                if s["enabled"] == true {
+                    ""
+                } else {
+                    " (disabled)"
+                },
                 text(&s["path"])
             );
         }
