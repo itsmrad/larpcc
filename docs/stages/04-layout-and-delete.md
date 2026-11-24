@@ -102,18 +102,50 @@ Acquire per-ID lifecycle guard first, then registry lock; shared order applies
 to launch/auth/delete/share. Never hold registry lock across logout, prompts or
 child waits. Revalidate snapshot after any unlocked interval. Refuse visible
 Larp-managed activity (profile guard held), guard contention,
-or safety failure. On macOS enumerate current-user processes and select
-executables inside Claude.app or ChatGPT.app bundle contents before reading any
-arguments. Keep the official main-app signature requirements and verify nested
-helpers against the corresponding vendor team signature. An exact profile
-`--user-data-dir` argument match refuses deletion. Skip a process that exits or
-whose PID is reused during the scan, and skip denied path lookups that have yet
-to identify a candidate. Other unresolved initial path errors, including
-`ENOENT` when a live unrelated executable is replaced, refuse deletion because
-the scan cannot classify the process. Failed or oversized process enumeration
-and failed signature validation of a live candidate also refuse deletion.
-If the only blockers are live candidates that are mid-exit or whose liveness,
-path, or arguments could not be read conclusively, wait 150 ms and scan again.
+or safety failure. On macOS enumerate current-user processes. When the executable
+path is available, read arguments only for executables inside Claude.app or
+ChatGPT.app bundle contents. Keep the official main-app signature requirements
+and verify nested helpers against the corresponding vendor team signature. An
+exact profile `--user-data-dir` argument match refuses deletion. Signed
+candidates and the `ENOENT` fallback then compare filesystem identity: the
+device and inode of the resolved argument against the profile directory.
+Absolute symlinks, trailing slashes, `/var` versus `/private/var`, and two
+canonical paths for one directory (an APFS firmlink) cannot hide a match. If
+that target's identity cannot be established, because stat fails or it is not
+a directory, deletion is refused. Re-check process identity after that
+resolution, and only then clear a directory that is not the profile. The
+expected path's device and inode, or its absence, is recorded from that open.
+Before each scan attempt and before clearing, the pathname is stated again
+without reopening; appearance, disappearance, replacement, or a lookup error
+refuses deletion. The scan is a best-effort snapshot. A pathname can change
+after its final lstat, a provider app can launch after the PID list is taken,
+and time passes between the scan returning and the caller taking the registry
+lock. Closing sessions started outside Larp before `--yes` is what covers
+those windows. A same-user process that deliberately races them is outside
+the threat model (threats.md). A valid
+argument vector with no `--user-data-dir` clears the process. Skip a process
+that exits or whose PID is reused during the scan, and skip denied path
+lookups that have yet to identify a candidate.
+
+If the initial path lookup returns `ENOENT`, as can happen after a running
+executable is unlinked, read its bounded argument vector between process
+start-time probes. The first probe can show that the process is already absent.
+It cannot show that the PID was reused; reuse is established by a follow-up
+probe, after the argument read or after directory resolution, whose start time
+differs. `ESRCH` or missing arguments prove the process is gone or the PID was
+reused only when the probe after that read shows it. A matching live stamp,
+including one with the exiting flag set, refuses deletion. On this fallback, an
+exiting process or unreadable arguments return terminal Busy and do not retry.
+A matching directory identity also refuses deletion. A valid argument vector with no `--user-data-dir`, or
+whose directory identity is not the profile and whose start time is still the
+same live process, clears the process. Other unresolved initial path errors,
+failed or oversized enumeration, and failed signature validation of a live
+candidate also refuse deletion.
+
+If the only blockers are signed candidates reported as `CandidateUncertain`
+(mid-exit, or liveness, path, or arguments that could not be read conclusively),
+wait 150 ms and scan again. That is the one retry for this result. An `ENOENT`
+fallback that already returned Busy does not use it.
 An `ESRCH` from an argument or path recheck counts as inconclusive when the
 same candidate is still alive. The retry checks whether an already identified
 candidate is still alive even if its executable path cannot be read.
