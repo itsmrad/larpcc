@@ -120,11 +120,12 @@ lookups that have yet to identify a candidate.
 
 If the initial path lookup returns `ENOENT`, as can happen after a running
 executable is unlinked, read its bounded argument vector between process
-start-time probes. Skip the process only when the probe after the read shows
-that it exited or its PID was reused. `ESRCH` or missing arguments do not prove
-that on their own: a matching live stamp, including one with the exiting flag
-set, refuses deletion. On this fallback, an exiting process or unreadable
-arguments return terminal Busy and do not retry. A matching directory identity
+start-time probes. The stamp taken before that read, and the stamp taken after
+directory resolution, can show that the process exited or its PID was reused.
+`ESRCH` or missing arguments prove exit or reuse only when the probe after that
+read shows the process is gone or its PID was reused. A matching live stamp,
+including one with the exiting flag set, refuses deletion. On this fallback, an
+exiting process or unreadable arguments return terminal Busy and do not retry. A matching directory identity
 also refuses deletion. A valid argument vector with no `--user-data-dir`, or
 whose directory identity is not the profile and whose start time is still the
 same live process, clears the process. Other unresolved initial path errors,

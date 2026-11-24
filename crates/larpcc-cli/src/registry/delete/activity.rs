@@ -103,6 +103,109 @@ trait ProcessTable {
     fn stamp(&self, pid: i32, previous: Option<StartTime>) -> Result<Option<Stamp>, ScanError>;
     fn validate(&self, pid: i32, app: App, main: bool) -> Result<(), Error>;
     fn args(&self, pid: i32) -> Result<Option<Vec<u8>>, Error>;
+    /// `follow` resolves the argv spelling. The expected directory is opened once and kept.
+    fn profile_dir(&self, path: &[u8], follow: bool) -> Result<DirHit, ScanError>;
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct DirId {
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+struct FoundDir {
+    id: DirId,
+    file: Option<std::fs::File>,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+enum DirHit {
+    Found(FoundDir),
+    Absent,
+    /// Non-unix tests have no directory identity. That is not a match and not an error.
+    #[cfg(not(unix))]
+    Unsupported,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+struct Expected {
+    spellings: HashSet<Vec<u8>>,
+    ids: HashSet<DirId>,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn pin_expected(
+    table: &impl ProcessTable,
+    spellings: HashSet<Vec<u8>>,
+) -> Result<(Expected, Vec<std::fs::File>), ScanError> {
+    let mut ids = HashSet::new();
+    let mut held = Vec::new();
+    for spelling in &spellings {
+        if let DirHit::Found(found) = table.profile_dir(spelling, false)? {
+            ids.insert(found.id);
+            held.extend(found.file);
+        }
+    }
+    Ok((Expected { spellings, ids }, held))
+}
+
+#[cfg(all(unix, any(test, target_os = "macos")))]
+fn profile_dir_fs(path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let path = Path::new(std::ffi::OsStr::from_bytes(path));
+    let canonical;
+    let path = if follow {
+        canonical = path.canonicalize().map_err(|_| ScanError::Busy)?;
+        canonical.as_path()
+    } else {
+        match path.symlink_metadata() {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DirHit::Absent),
+            Err(_) => return Err(ScanError::Busy),
+            Ok(meta) if !meta.file_type().is_dir() => return Err(ScanError::Busy),
+            Ok(_) => path,
+        }
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| ScanError::Busy)?;
+    let meta = file.metadata().map_err(|_| ScanError::Busy)?;
+    if !meta.is_dir() {
+        return Err(ScanError::Busy);
+    }
+    let id = DirId {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    };
+    if !follow {
+        // The pathname must still name the directory this descriptor holds.
+        let now = path.symlink_metadata().map_err(|_| ScanError::Busy)?;
+        if !now.file_type().is_dir() || now.dev() != id.dev || now.ino() != id.ino {
+            return Err(ScanError::Busy);
+        }
+    }
+    Ok(DirHit::Found(FoundDir {
+        id,
+        file: Some(file),
+    }))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn target_is_profile(
+    table: &impl ProcessTable,
+    dir: &[u8],
+    expected: &Expected,
+) -> Result<bool, ScanError> {
+    match table.profile_dir(dir, true)? {
+        DirHit::Found(found) => Ok(expected.ids.contains(&found.id)),
+        #[cfg(not(unix))]
+        DirHit::Unsupported => Ok(false),
+        DirHit::Absent => Err(ScanError::Busy),
+    }
 }
 
 #[cfg(any(test, target_os = "macos"))]
@@ -140,7 +243,7 @@ fn retry_scan(
 #[cfg(any(test, target_os = "macos"))]
 fn scan(
     table: &impl ProcessTable,
-    expected: &HashSet<Vec<u8>>,
+    expected: &Expected,
     uncertain: &mut HashMap<i32, Option<StartTime>>,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
@@ -191,45 +294,11 @@ fn scan(
     Ok(())
 }
 
-#[cfg(all(unix, any(test, target_os = "macos")))]
-fn directory_identity(path: &Path) -> Option<(u64, u64)> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let resolved = path.canonicalize().ok()?;
-    // The final component is already resolved, so a symlink planted there cannot be followed.
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(resolved)
-        .ok()?;
-    let meta = file.metadata().ok()?;
-    meta.is_dir().then_some((meta.dev(), meta.ino()))
-}
-
-#[cfg(any(test, target_os = "macos"))]
-fn same_profile_directory(dir: &[u8], expected: &HashSet<Vec<u8>>) -> Result<bool, ScanError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        // Canonical text can name one directory twice. Compare device and inode.
-        let target = directory_identity(Path::new(std::ffi::OsStr::from_bytes(dir)))
-            .ok_or(ScanError::Busy)?;
-        Ok(expected.iter().any(|candidate| {
-            directory_identity(Path::new(std::ffi::OsStr::from_bytes(candidate))) == Some(target)
-        }))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (dir, expected);
-        // shortcut: non-unix tests compare the raw spelling; upgrade when delete scans processes there.
-        Ok(false)
-    }
-}
-
 #[cfg(any(test, target_os = "macos"))]
 fn scan_without_path(
     table: &impl ProcessTable,
     pid: i32,
-    expected: &HashSet<Vec<u8>>,
+    expected: &Expected,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
     let Some(before) = table.stamp(pid, None).map_err(|_| ScanError::Busy)? else {
@@ -255,13 +324,13 @@ fn scan_without_path(
         return Err(ScanError::Busy);
     };
     let dir = user_data_dir(&args)?;
-    if dir.is_some_and(|dir| expected.contains(dir)) {
+    if dir.is_some_and(|dir| expected.spellings.contains(dir)) {
         return Err(ScanError::Busy);
     }
     let Some(dir) = dir else {
         return Ok(());
     };
-    let matched = same_profile_directory(dir, expected)?;
+    let matched = target_is_profile(table, dir, expected)?;
     let Some(again) = table
         .stamp(pid, Some(before.start))
         .map_err(|_| ScanError::Busy)?
@@ -280,7 +349,7 @@ fn scan_candidate(
     pid: i32,
     path: &Path,
     (app, main): (App, bool),
-    expected: &HashSet<Vec<u8>>,
+    expected: &Expected,
     start: &mut Option<StartTime>,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
@@ -306,13 +375,13 @@ fn scan_candidate(
         return Err(ScanError::CandidateUncertain);
     };
     let dir = user_data_dir(&args).map_err(|_| ScanError::CandidateUncertain)?;
-    if dir.is_some_and(|dir| expected.contains(dir)) {
+    if dir.is_some_and(|dir| expected.spellings.contains(dir)) {
         return Err(ScanError::Busy);
     }
     let Some(dir) = dir else {
         return Ok(());
     };
-    let matched = same_profile_directory(dir, expected)?;
+    let matched = target_is_profile(table, dir, expected)?;
     // Resolution sits between identity checks. Recheck before clearing.
     if !same_process(table, pid, before, path)? {
         return Ok(());
@@ -399,6 +468,7 @@ mod tests {
         stamps: RefCell<VecDeque<Option<Stamp>>>,
         args: Option<Vec<u8>>,
         expected: Option<Vec<u8>>,
+        injected: HashMap<Vec<u8>, DirId>,
         argv_missing: bool,
         reads: Cell<usize>,
         listings: Cell<usize>,
@@ -423,6 +493,7 @@ mod tests {
                 ),
                 args: args.map(Vec::from),
                 expected: None,
+                injected: HashMap::new(),
                 argv_missing: false,
                 reads: Cell::new(0),
                 listings: Cell::new(0),
@@ -439,15 +510,12 @@ mod tests {
             uncertain: &mut HashMap<i32, Option<StartTime>>,
             deadline: impl Fn() -> Result<(), ScanError>,
         ) -> Result<(), ScanError> {
-            scan(
-                self,
-                &HashSet::from([self
-                    .expected
-                    .clone()
-                    .unwrap_or_else(|| TARGET.as_bytes().to_vec())]),
-                uncertain,
-                deadline,
-            )
+            let spellings = HashSet::from([self
+                .expected
+                .clone()
+                .unwrap_or_else(|| TARGET.as_bytes().to_vec())]);
+            let (expected, _held) = pin_expected(self, spellings)?;
+            scan(self, &expected, uncertain, deadline)
         }
     }
 
@@ -497,6 +565,25 @@ mod tests {
             packet.extend_from_slice(b"/fixture/Helper\0\0Helper\0");
             packet.extend_from_slice(args);
             Ok(Some(packet))
+        }
+
+        fn profile_dir(&self, path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
+            if !self.injected.is_empty() {
+                return Ok(match self.injected.get(path).copied() {
+                    Some(id) => DirHit::Found(FoundDir { id, file: None }),
+                    None => DirHit::Absent,
+                });
+            }
+            #[cfg(unix)]
+            {
+                profile_dir_fs(path, follow)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = (path, follow);
+                // shortcut: non-unix tests compare the raw spelling; upgrade when delete scans processes there.
+                Ok(DirHit::Unsupported)
+            }
         }
     }
 
@@ -554,9 +641,12 @@ mod tests {
         }
         #[cfg(not(unix))]
         {
-            let table =
-                Fixture::candidate(&stable, Some(b"--user-data-dir=/fixture/desktop-other\0"));
+            let table = Fixture::candidate(
+                &[Some((10, 0)); 4],
+                Some(b"--user-data-dir=/fixture/desktop-other\0"),
+            );
             assert_eq!(table.scan(|| Ok(())), Ok(()));
+            assert!(table.stamps.borrow().is_empty());
         }
     }
 
@@ -872,6 +962,68 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn stage04_delete_matches_injected_identity_when_canonical_spellings_differ() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let expected_dir = root.path().join("expected");
+        let target_dir = root.path().join("target");
+        std::fs::create_dir(&expected_dir).unwrap();
+        std::fs::create_dir(&target_dir).unwrap();
+        assert_ne!(
+            expected_dir.canonicalize().unwrap(),
+            target_dir.canonicalize().unwrap()
+        );
+        let expected_meta = std::fs::metadata(&expected_dir).unwrap();
+        let target_meta = std::fs::metadata(&target_dir).unwrap();
+        assert_ne!(
+            (expected_meta.dev(), expected_meta.ino()),
+            (target_meta.dev(), target_meta.ino())
+        );
+        let id = DirId { dev: 9, ino: 9 };
+        let expected_bytes = path_bytes(&expected_dir);
+        let target_bytes = path_bytes(&target_dir);
+        let arg = directory_arg(&target_dir);
+        let mut injected = HashMap::new();
+        injected.insert(expected_bytes.clone(), id);
+        injected.insert(target_bytes.clone(), id);
+        let signed = Fixture {
+            expected: Some(expected_bytes.clone()),
+            injected,
+            ..Fixture::candidate(&[Some((10, 0)); 4], Some(&arg))
+        };
+        assert_eq!(signed.scan(|| Ok(())), Err(ScanError::Busy));
+        assert!(signed.stamps.borrow().is_empty());
+
+        let mut injected = HashMap::new();
+        injected.insert(expected_bytes.clone(), id);
+        injected.insert(target_bytes, id);
+        let enoent = Fixture {
+            path: None,
+            paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+            expected: Some(expected_bytes),
+            injected,
+            ..Fixture::candidate(&[], Some(&arg))
+        };
+        enoent.stamps.borrow_mut().extend([
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+        ]);
+        assert_eq!(enoent.scan(|| Ok(())), Err(ScanError::Busy));
+        assert!(enoent.stamps.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn stage04_delete_non_directory_target_stays_busy() {
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("not-a-directory");
@@ -970,7 +1122,13 @@ mod macos {
         let table = NativeProcessTable {
             uid: unsafe { libc::geteuid() },
         };
-        retry_scan(
+        let mut spellings = HashSet::new();
+        for path in paths {
+            spellings.insert(path.as_os_str().as_bytes().to_vec());
+        }
+        // One open for the whole quiet check. The retry must not resolve these paths again.
+        let (expected, held) = pin_expected(&table, spellings).map_err(|_| Error::AuthBusy)?;
+        let result = retry_scan(
             |uncertain| {
                 let deadline = Instant::now() + Duration::from_secs(2);
                 let check_deadline = || {
@@ -980,23 +1138,13 @@ mod macos {
                         Ok(())
                     }
                 };
-                let mut expected = HashSet::new();
-                for path in paths {
-                    check_deadline()?;
-                    expected.insert(path.as_os_str().as_bytes().to_vec());
-                    match path.canonicalize() {
-                        Ok(resolved) => {
-                            expected.insert(resolved.as_os_str().as_bytes().to_vec());
-                        }
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-                        Err(_) => return Err(ScanError::Busy),
-                    }
-                }
                 check_deadline()?;
                 scan(&table, &expected, uncertain, check_deadline)
             },
             || std::thread::sleep(Duration::from_millis(150)),
-        )
+        );
+        drop(held);
+        result
     }
 
     struct NativeProcessTable {
@@ -1122,6 +1270,10 @@ mod macos {
             }
             args.truncate(length);
             Ok(Some(args))
+        }
+
+        fn profile_dir(&self, path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
+            profile_dir_fs(path, follow)
         }
     }
 
