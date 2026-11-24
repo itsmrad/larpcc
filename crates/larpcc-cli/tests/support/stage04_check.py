@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 stage = os.environ.get('LARPCC_STAGE_FILTER', 'stage04_')
-assert stage in ('stage04_', 'stage06_')
+assert stage in ('stage04_', 'stage06_', 'stage07_')
 result = subprocess.run(['cargo', *sys.argv[1:], 'test', '--workspace', '--locked', stage],
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 print(result.stdout, end='')
