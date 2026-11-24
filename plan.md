@@ -57,6 +57,41 @@ reference-only renders and fixed redacted output. Provider account restrictions
 cannot be ruled out. Native identity/refresh/logout support requires separately
 authorized finite stage-3 sheets; names/status/desktop receipts prove none of it.
 
+## Stage 11 usage-limits exception (D14)
+
+User decision 2026-11-17, explicit and informed (the lead explained the ban
+risk first): show each profile's 5-hour and weekly limits and reset times in the
+CLI and the Mac app, with **both** modes, LOCAL as the default and LIVE opt-in in
+settings. Scope is this feature only, exactly as [stage 11](docs/stages/11-usage.md)
+specifies; every other invariant stays binding.
+
+- Invariant 2 ("no usage meter reading tokens") is amended only for LIVE: when
+  the user has enabled LIVE and acknowledged the warning, Larp reads that
+  profile's own access token in memory for one request to that provider's usage
+  endpoint. It is never stored, logged, refreshed, put in argv/env or sent
+  elsewhere. LOCAL reads no tokens. A usage meter from LOCAL records is allowed.
+- Invariant 3 (no network to Anthropic/OpenAI) is amended only for that LIVE
+  request: one pinned HTTPS host/path per provider, no proxy, no redirects,
+  bounded, no retries. LOCAL and every other command make no provider requests.
+- Invariant 5 is unchanged: LIVE runs only in a foreground `usage` invocation
+  (user action, or the GUI's opt-in interval while a usage view is visible).
+  No daemon, schedule, login item or background refresh is started by Larp.
+- Stage 04's "never reads auth/history/session contents" is narrowed for LOCAL
+  Codex only: a bounded, confined streaming reader extracts allowlisted
+  rate-limit and plan fields from the profile's own session logs and retains
+  nothing else. LIVE reads only the named credential fields (token, and the
+  Codex account ID as a request header, D29). Native config values are still
+  never read; the opt-in Claude capture only checks whether a `statusLine` key
+  exists, so it never overwrites a user's own statusLine (D29).
+- Plan: the user-entered label, else the plan the client recorded in the LOCAL
+  non-credential data above (D29), else in LIVE the plan in the Codex usage
+  response (D32). Never read from tokens or credential files; provider plans are
+  held in memory for one invocation and never stored (as D14/D26).
+  Account email/plan from status output is stage 14 (D25/D26).
+- Agents never read real tokens or call real endpoints (RULES 4a); LIVE is built
+  and tested against fakes and labelled unverified until the user authorizes a
+  real-account qualification.
+
 ## Data and ownership amendments
 
 Registry v3 adds surfaces, aliases and desktop bindings in **one** bump; derive
@@ -117,6 +152,7 @@ already loaded. Remote native run remains closed pending qualification.
 | 08 | [JSON/doctor/injection](docs/stages/08-json-launch-doctor.md), completes CLI | frozen schema:1, version-only detection, invented-row injection; native ROWS empty |
 | 09 | [desktop](docs/stages/09-desktop.md), after CLI | MAC local dispatch interface and separate native proof; uncertain binding/focus/qualification refuses |
 | 10 | [native GUI](docs/stages/10-native-gui.md), after CLI/desktop | SwiftUI consumes CLI JSON, explicit toggles; stale/unknown schema fails safely |
+| 11 | [usage limits](docs/stages/11-usage.md), after 08 (D14) | `usage`/settings/plan-label CLI ships first; LOCAL readers, fake-only LIVE; the app step, then the menu-bar step, each start only after separate lead approval (the lead asks the user) |
 | 13 | [remote hosts](docs/stages/13-remote-hosts.md), after local CLI/GUI | SSH management and explicit catalog copy/sync; remote usage LOCAL only |
 
 Stages 05–07 can be independently implemented after the exact seed if lead
