@@ -110,9 +110,9 @@ Missing/unsafe homes are diagnostic states, not evidence of being signed out.
 `profile_id,provider,surface:"desktop",outcome:"launched"|"focused",
 native_auth:"not_observed"`. It says nothing about account identity, successful
 authentication, UI readiness or isolation. The [stage09 lead desktop amendment](../stages/09-desktop.md#lead-desktop-admission-amendment--2026-11-17)
-previously authorized local dispatch of strictly verified ChatGPT.app on macOS,
-with a fixed warning for untested/unknown versions. Dispatch is now closed
-pending the attribution re-test described in stage 09. Claude and unsupported platforms remain
+authorizes local dispatch of strictly verified ChatGPT.app on macOS following
+the D34 attribution re-test, with a fixed warning for untested/unknown versions.
+Claude and unsupported platforms remain
 `qualification_pending`. CLI native rows remain empty and `qualified:false`;
 local desktop dispatch does not qualify accounts or storage isolation.
 CORE resolves one coherent v3 profile/provider/cli/desktop/binding snapshot,
