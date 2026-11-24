@@ -145,12 +145,13 @@ private struct SettingsAnimation<Value: Equatable>: ViewModifier {
 extension View {
     /// A grouped section box in the theme's style: shared by the Settings forms and the menu
     /// bar panel's cards, so a profile card looks like a Settings group.
-    func sectionBox(_ tokens: ThemeTokens) -> some View {
+    func sectionBox(_ tokens: ThemeTokens, fill: Color? = nil) -> some View {
         let shape = RoundedRectangle(cornerRadius: tokens.sectionRadius, style: .continuous)
-        return background(shape.fill(Color.primary.opacity(tokens.sectionFill)))
+        return background(shape.fill(fill ?? Color.primary.opacity(tokens.sectionFill)))
             .overlay {
                 if tokens.sectionBorder {
                     shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                        .allowsHitTesting(false)
                 }
             }
     }
@@ -179,6 +180,7 @@ private struct ThemedFormStyle: ViewModifier {
 @available(macOS 15, *)
 private struct ClassicFormStyle: FormStyle {
     let tokens: ThemeTokens
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
 
     func makeBody(configuration: Configuration) -> some View {
@@ -200,7 +202,7 @@ private struct ClassicFormStyle: FormStyle {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        .sectionBox(tokens)
+                        .sectionBox(tokens, fill: colorScheme == .light ? .white.opacity(0.55) : nil)
                         .overlay {
                             if contrast == .increased {
                                 RoundedRectangle(cornerRadius: tokens.sectionRadius)

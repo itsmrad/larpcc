@@ -374,6 +374,7 @@ private struct ProfileSidebarRow: View {
     let profile: Profile
     let usage: UsageReport?
     @Environment(\.theme) private var theme
+
     var body: some View {
         HStack(spacing: 10) {
             ProviderGlyph(provider: profile.provider, size: theme.tokens.sidebarIconSize - 4)
