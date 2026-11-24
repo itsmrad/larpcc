@@ -110,6 +110,7 @@ pub(crate) fn install(root: &Path) -> Result<(), Error> {
         {
             return Err(Error::Drift);
         }
+        existing.file.sync_all().map_err(|_| Error::Drift)?;
         image
     } else {
         let staged = stage(EXE);
@@ -124,9 +125,9 @@ pub(crate) fn install(root: &Path) -> Result<(), Error> {
             let _ = dirs.remove(&staged, &image.identity);
             return Err(error);
         }
-        dirs.sync()?;
         image
     };
+    dirs.sync()?;
     let bytes = serde_json::to_vec(&HookReceipt {
         version: 1,
         root: root.into(),
