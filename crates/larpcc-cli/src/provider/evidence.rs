@@ -4,7 +4,7 @@
 use crate::{
     launch::admission,
     platform::FileIdentity,
-    registry::{BindingState, Error, Provider, Registry, display},
+    registry::{Error, Provider, Registry, display},
 };
 use serde_json::{Value, json};
 use std::{fs::File, path::Path};
@@ -21,8 +21,9 @@ pub(crate) struct Evidence {
     cdhash: Option<Vec<u8>>,
 }
 
-/// The registry snapshot (with `--expected-revision`) selects the binding; the
-/// same revision is required again after hashing.
+/// The revision-checked snapshot (with `--expected-revision`) selects only the
+/// requested binding; only that executable is validated and read. The same
+/// revision and binding are required again after hashing.
 pub(crate) fn collect(registry: &Registry, provider: Provider) -> Result<Evidence, Error> {
     let executable = binding(registry, provider)?;
     let evidence = collect_with(provider, &executable, registry.root(), |_| {})?;
@@ -34,20 +35,9 @@ pub(crate) fn collect(registry: &Registry, provider: Provider) -> Result<Evidenc
 }
 
 fn binding(registry: &Registry, provider: Provider) -> Result<std::path::PathBuf, Error> {
-    match registry
-        .bindings()?
-        .into_iter()
-        .find(|(p, _)| *p == provider)
-        .map(|(_, state)| state)
-    {
-        Some(BindingState::Ok(binding)) => Ok(binding.executable),
-        Some(BindingState::Invalid(binding, reason)) => Err(Error::InvalidExecutable {
-            provider,
-            path: binding.executable,
-            reason,
-        }),
-        Some(BindingState::Unbound) | None => Err(Error::Unbound { provider }),
-    }
+    registry
+        .binding_path(provider)?
+        .ok_or(Error::Unbound { provider })
 }
 
 fn collect_with(
@@ -76,8 +66,25 @@ fn collect_with(
         let _ = &meta;
         (None, None)
     };
+    // The code-signature API reads by pathname, not by the checked handle. Bind it to
+    // the hashed bytes: re-hash afterwards and require the same identity, size,
+    // SHA-256, mtime and ctime. Any change refuses the whole export.
     #[cfg(target_os = "macos")]
-    let cdhash = crate::desktop::code_directory_hash(&resolved).ok();
+    let cdhash = {
+        use std::os::unix::fs::MetadataExt;
+        let hash = crate::desktop::code_directory_hash(&resolved).ok();
+        let again = admission::checked_artifact(path, root)?;
+        let later = again.file.metadata().map_err(|_| Error::ArtifactInvalid)?;
+        if again.identity != identity
+            || again.size != artifact.size
+            || again.sha256 != artifact.sha256
+            || (later.mtime(), later.mtime_nsec()) != (meta.mtime(), meta.mtime_nsec())
+            || (later.ctime(), later.ctime_nsec()) != (meta.ctime(), meta.ctime_nsec())
+        {
+            return Err(Error::ArtifactInvalid);
+        }
+        hash
+    };
     #[cfg(not(target_os = "macos"))]
     let cdhash = None;
     // The code-signature read is path based: the same spelling must still resolve

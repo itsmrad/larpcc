@@ -2,7 +2,7 @@
 //! flag it is local metadata only and starts no child.
 use crate::{
     provider::version::{self, Detection},
-    registry::{BindingState, Error, ProfileName, Provider, Registry},
+    registry::{Error, ProfileName, Provider, Registry},
 };
 use serde_json::{Value, json};
 use std::fmt::Write;
@@ -23,10 +23,9 @@ pub(super) fn data(
     if !detect {
         return Ok(data);
     }
-    // The executables come from the same revision the metadata reported.
-    let bindings = Registry::at(registry.root().to_owned())?
-        .expecting(registry.revision())
-        .bindings()?;
+    // Each executable comes from the same revision the metadata reported, selected
+    // per provider so no other binding is validated or read.
+    let snapshot = Registry::at(registry.root().to_owned())?.expecting(registry.revision());
     let mut diagnostics = Vec::new();
     for entry in data["detected_versions"]
         .as_array_mut()
@@ -42,11 +41,9 @@ pub(super) fn data(
         else {
             continue;
         };
-        let detection = match bindings.iter().find(|(p, _)| *p == provider) {
-            Some((_, BindingState::Ok(binding))) => {
-                version::detect(provider, &binding.executable, registry.root())?
-            }
-            _ => Detection::Failed,
+        let detection = match snapshot.binding_path(provider)? {
+            Some(executable) => version::detect(provider, &executable, registry.root())?,
+            None => Detection::Failed,
         };
         match detection {
             Detection::Detected(version) => entry["binding"]["detected_version"] = json!(version),

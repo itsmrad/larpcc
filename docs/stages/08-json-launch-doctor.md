@@ -67,6 +67,20 @@ behind by a crash stays inert, never blocks list, add, delete, migrate or a
 later probe, and may be deleted by hand. Each probe removes only its own tree,
 using the checked handle-relative profile removal.
 
+The probe follows the stage 3 dispatch contract. The last step before process
+creation re-resolves the stored binding, requires the same resolved path and
+identity, and re-hashes the current bytes (bounded) against the retained
+verified handle. Any change refuses with a null version. The child is then
+started by exact pathname. Path-reopen/same-user races after checks remain
+explicit. Descriptor-bound exec is not used (macOS has none), and the probe
+stays open on macOS under this documented residual.
+
+`provider evidence` selects only the requested binding from the
+revision-checked snapshot, then validates and reads only that executable. On
+macOS, the code-directory hash comes from a pathname API. Evidence therefore
+re-hashes afterwards and requires the same identity, size, SHA-256, mtime and
+ctime as the hashed handle, or it refuses the export.
+
 Known limitation: the probe runs on Unix only. Windows has no checked tree
 removal for the throwaway home, so a matching Windows descriptor yields null
 plus `version_probe_failed` and never spawns. Evidence export works on every

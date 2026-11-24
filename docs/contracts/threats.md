@@ -93,6 +93,15 @@ these controls.
 | Shared runtime files | ChatGPT.app extracts Node runtime binaries into `~/.cache/codex-runtimes`, a shared directory outside `CODEX_HOME` isolation. The cache holds only runtime binaries. `profile delete` leaves the shared cache in place. |
 | Stale nested signature verdict | Bind validates nested code and resources. On open, the cached verdict is keyed by executable and Info.plist metadata and the code directory hash. Changes limited to nested code or resources can leave the key unchanged and go undetected on a cache hit. |
 
+## Version probe and provider evidence (stage 08)
+
+| Threat | Control and remaining exposure |
+|---|---|
+| Probe runs replaced bytes | The descriptor pins the exact artifact SHA-256. As stage 3 dispatch does, the last step before process creation re-resolves the stored binding, requires the same resolved path and identity, and re-hashes the current bytes (bounded) against the retained verified handle. Any change refuses with a null version. The child is then started by exact pathname. Path-reopen/same-user races after checks remain explicit: a same-user process that replaces the path between that final check and exec is outside the guarantee. |
+| Probe output, hang or leakage | Clean explicit env with synthetic homes, null stdin, a 4 KiB combined stdout+stderr cap enforced per read before appending, a 5 s deadline, SIGKILL and a reap proved within 2 s, and the exact grammar with exit 0 and empty stderr. Rejections give null plus a fixed diagnostic; output is never returned or logged. A cleanup or reap failure is an operational error. |
+| Evidence touches more than the requested executable | Only the requested provider's binding is selected from the revision-checked snapshot. Only that executable is validated and read. No profile home, account data or other binding is opened. |
+| Evidence pairs the digest and code hash of different bytes | The macOS code-directory hash API reads by pathname. After that read, evidence re-hashes through the checked path and requires the same identity, size, SHA-256, mtime and ctime as the hashed handle; any change refuses the export. A same-user race that restores identical bytes and timestamps in between remains the stage 3 residual. |
+
 ## Remote
 
 These controls apply to [Stage 13 SSH requests](../stages/13-remote-hosts.md).

@@ -213,7 +213,7 @@ fn stage08_doctor_shipped_table_is_unapproved() {
 #[test]
 fn stage08_doctor_rejected_output_is_null_with_fixed_diagnostic() {
     let (f, fake, digest) = setup();
-    for mode in ["stderr", "nonzero", "oversize", "grammar", "lines"] {
+    for mode in ["stderr", "nonzero", "oversize", "split", "grammar", "lines"] {
         let value = doctor_json(
             &f,
             &descriptor(&digest, mode),

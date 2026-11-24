@@ -115,6 +115,55 @@ fn stage08_evidence_refuses_unbound_and_stale_revision() {
 
 #[cfg(unix)]
 #[test]
+fn stage08_evidence_reads_only_the_requested_binding() {
+    use std::os::unix::fs::PermissionsExt;
+    let (f, _fake) = bound();
+    let other = f.temp.path().join("other-fake");
+    fs::copy(env!("CARGO_BIN_EXE_larpcc-fake-provider"), &other).unwrap();
+    fs::set_permissions(&other, fs::Permissions::from_mode(0o700)).unwrap();
+    f.run(
+        &["cc", "provider", "bind", "claude", other.to_str().unwrap()],
+        0,
+    );
+    f.install_larp();
+    // Linux: an IN_OPEN watch proves the other provider's file is never opened.
+    #[cfg(target_os = "linux")]
+    let watch = {
+        let path = std::ffi::CString::new(other.to_str().unwrap()).unwrap();
+        // SAFETY: plain syscalls on a fresh descriptor and a valid C path.
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(fd >= 0);
+        assert!(unsafe { libc::inotify_add_watch(fd, path.as_ptr(), libc::IN_OPEN) } >= 0);
+        fd
+    };
+    let value = f.larp_json(&["cc", "provider", "evidence", "codex", "--json"], 0);
+    assert_eq!(value["data"]["provider"], "codex");
+    #[cfg(target_os = "linux")]
+    {
+        let mut buffer = [0u8; 4096];
+        let pending = |buffer: &mut [u8; 4096]| {
+            // SAFETY: valid inotify descriptor and writable buffer of the given length.
+            unsafe { libc::read(watch, buffer.as_mut_ptr().cast(), buffer.len()) }
+        };
+        assert!(
+            pending(&mut buffer) < 0,
+            "evidence codex opened the claude binary"
+        );
+        // The watch works: our own open of the other file is observed.
+        drop(fs::File::open(&other).unwrap());
+        assert!(pending(&mut buffer) > 0);
+        // SAFETY: closing the descriptor we created.
+        unsafe { libc::close(watch) };
+    }
+    // Everywhere: an unreadable other binding cannot affect the requested export.
+    fs::set_permissions(&other, fs::Permissions::from_mode(0o100)).unwrap();
+    let value = f.larp_json(&["cc", "provider", "evidence", "codex", "--json"], 0);
+    assert_eq!(value["data"]["provider"], "codex");
+    fs::set_permissions(&other, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn stage08_evidence_refuses_untrusted_bound_path() {
     let (f, fake) = bound();
     use std::os::unix::fs::PermissionsExt;

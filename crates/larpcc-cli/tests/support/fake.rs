@@ -259,6 +259,11 @@ fn version_mode(mode: &str) -> io::Result<u32> {
             return Ok(3);
         }
         "oversize" => out.write_all(&[b'x'; 8192])?,
+        // Both streams near the combined cap at once (2 x 2100 > 4096).
+        "split" => {
+            out.write_all(&[b'x'; 2100])?;
+            io::stderr().write_all(&[b'x'; 2100])?;
+        }
         "grammar" => out.write_all(b"invented-cli 1.2 (fixture)\n")?,
         "lines" => {
             out.write_all(line)?;

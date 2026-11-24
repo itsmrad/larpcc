@@ -323,22 +323,30 @@ fn probe(
     artifact: &admission::CheckedArtifact,
 ) -> Result<Detection, Error> {
     let workspace = Workspace::create(root, provider)?;
-    let result: Result<Option<String>, Error> = (|| {
-        // Revalidate the exact checked bytes immediately before spawn.
-        let Ok(fresh) = admission::checked_artifact(executable, root) else {
-            return Ok(None);
+    // Same contract as stage 3 dispatch: the last step before process creation re-resolves
+    // the stored spelling and re-hashes the current bytes against the retained verified
+    // handle; any change refuses. Dispatch is then by exact pathname, so a same-user
+    // path-reopen race after these checks remains an explicit, documented residual.
+    let revalidate = || {
+        let Ok((now, identity)) = super::validate(provider, executable, root) else {
+            return false;
         };
-        if fresh.identity != artifact.identity
-            || fresh.size != artifact.size
-            || fresh.sha256 != artifact.sha256
-        {
-            return Ok(None);
-        }
-        let env = workspace.environment(provider);
-        let captured = spawn(resolved, d.argv, &env, &workspace.home())?;
-        drop(fresh);
-        Ok(captured.and_then(|c| parse(d, &c.stdout, &c.stderr, c.exit)))
-    })();
+        let Ok(fresh) = admission::checked_artifact(&now, root) else {
+            return false;
+        };
+        now == resolved
+            && identity == artifact.identity
+            && fresh.identity == artifact.identity
+            && fresh.size == artifact.size
+            && fresh.sha256 == artifact.sha256
+            && artifact
+                .file
+                .metadata()
+                .is_ok_and(|m| m.len() == artifact.size)
+    };
+    let env = workspace.environment(provider);
+    let result = spawn(resolved, d.argv, &env, &workspace.home(), revalidate)
+        .map(|captured| captured.and_then(|c| parse(d, &c.stdout, &c.stderr, c.exit)));
     // Cleanup always runs; its failure is an operational failure, never a pass.
     let cleanup = workspace.remove();
     let version = result?;
@@ -410,9 +418,9 @@ fn spawn(
     argv: &[&str],
     env: &[(OsString, OsString)],
     cwd: &Path,
+    revalidate: impl FnOnce() -> bool,
 ) -> Result<Option<Captured>, Error> {
     use std::{
-        io::Read,
         os::unix::{io::AsRawFd, process::CommandExt},
         process::{Command, Stdio},
     };
@@ -436,6 +444,10 @@ fn spawn(
             Err(std::io::Error::last_os_error())
         });
     }
+    // Everything else is prepared; the revalidation is the last step before fork/exec.
+    if !revalidate() {
+        return Ok(None);
+    }
     let Ok(mut child) = command.spawn() else {
         return Ok(None);
     };
@@ -444,7 +456,6 @@ fn spawn(
     let mut out_pipe = child.stdout.take();
     let mut err_pipe = child.stderr.take();
     let mut rejected = false;
-    let mut buffer = [0u8; MAX_OUTPUT + 1];
     loop {
         let mut fds = Vec::new();
         if let Some(pipe) = &out_pipe {
@@ -481,32 +492,32 @@ fn spawn(
         }
         for fd in fds.iter().filter(|fd| fd.revents != 0) {
             let out = out_pipe.as_ref().is_some_and(|p| p.as_raw_fd() == fd.fd);
-            let count = if out {
-                out_pipe.as_mut().map(|p| p.read(&mut buffer))
+            let used = stdout.len() + stderr.len();
+            let step = if out {
+                out_pipe
+                    .as_mut()
+                    .map(|p| read_bounded(p, &mut stdout, used))
             } else {
-                err_pipe.as_mut().map(|p| p.read(&mut buffer))
+                err_pipe
+                    .as_mut()
+                    .map(|p| read_bounded(p, &mut stderr, used))
             };
-            match count {
-                Some(Ok(0)) | None => {
+            match step {
+                Some(Step::Eof) | None => {
                     if out {
                         out_pipe = None;
                     } else {
                         err_pipe = None;
                     }
                 }
-                Some(Ok(n)) => {
-                    if out {
-                        stdout.extend_from_slice(&buffer[..n]);
-                    } else {
-                        stderr.extend_from_slice(&buffer[..n]);
-                    }
+                Some(Step::Data) => (),
+                Some(Step::Reject) => {
+                    rejected = true;
+                    break;
                 }
-                Some(Err(e)) if e.kind() == std::io::ErrorKind::Interrupted => (),
-                Some(Err(_)) => rejected = true,
             }
         }
-        if rejected || stdout.len() + stderr.len() > MAX_OUTPUT {
-            rejected = true;
+        if rejected {
             break;
         }
     }
@@ -549,9 +560,69 @@ fn spawn(
     }))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    Data,
+    Eof,
+    Reject,
+}
+/// One read into `sink` without passing the combined cap: it requests at most the
+/// remaining budget plus one overflow byte, and an overflowing read appends nothing.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn read_bounded(reader: &mut impl std::io::Read, sink: &mut Vec<u8>, used: usize) -> Step {
+    let mut buffer = [0u8; MAX_OUTPUT + 1];
+    let budget = (MAX_OUTPUT + 1).saturating_sub(used).max(1);
+    match reader.read(&mut buffer[..budget]) {
+        Ok(0) => Step::Eof,
+        Ok(n) if used + n > MAX_OUTPUT => Step::Reject,
+        Ok(n) => {
+            sink.extend_from_slice(&buffer[..n]);
+            Step::Data
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => Step::Data,
+        Err(_) => Step::Reject,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Always offers more bytes than asked and records the largest request.
+    struct Flood(usize);
+    impl std::io::Read for Flood {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.0 = self.0.max(buffer.len());
+            buffer.fill(b'x');
+            Ok(buffer.len())
+        }
+    }
+    #[test]
+    fn stage08_capture_never_exceeds_combined_cap() {
+        // Both streams near the cap at once: each read is limited to the shared budget.
+        let (mut out, mut err) = (vec![b'o'; 2048], vec![b'e'; 2047]);
+        let (mut a, mut b) = (Flood(0), Flood(0));
+        let used = out.len() + err.len();
+        assert_eq!(read_bounded(&mut a, &mut out, used), Step::Reject);
+        assert_eq!(a.0, MAX_OUTPUT + 1 - used);
+        assert_eq!(read_bounded(&mut b, &mut err, used), Step::Reject);
+        assert_eq!(out.len() + err.len(), used, "overflowing reads appended");
+        // Exactly the cap is accepted; one byte more is refused before appending.
+        let mut sink = vec![b'o'; MAX_OUTPUT - 1];
+        let mut one = &b"z"[..];
+        assert_eq!(
+            read_bounded(&mut one, &mut sink, MAX_OUTPUT - 1),
+            Step::Data
+        );
+        assert_eq!(sink.len(), MAX_OUTPUT);
+        let mut flood = Flood(0);
+        assert_eq!(
+            read_bounded(&mut flood, &mut sink, MAX_OUTPUT),
+            Step::Reject
+        );
+        assert_eq!((flood.0, sink.len()), (1, MAX_OUTPUT));
+        let mut empty = &b""[..];
+        assert_eq!(read_bounded(&mut empty, &mut sink, MAX_OUTPUT), Step::Eof);
+    }
     fn descriptor() -> VersionDescriptor {
         VersionDescriptor {
             provider: Provider::Codex,
