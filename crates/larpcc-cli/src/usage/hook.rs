@@ -1,9 +1,9 @@
 use super::{claude, files::Directory, profile_directory};
 use crate::{
     aliases::{self, Artifact, Directories, DirectoryPin, Source},
-    launch::admission::{Admitted, Operation},
+    launch::admission::Admitted,
     platform::{self, FileIdentity},
-    registry::{Error, Provider, Registry},
+    registry::{Error, Registry},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -172,11 +172,7 @@ pub(crate) fn attach_to_launch(
     registry: &Registry,
     admitted: &mut Admitted<'_>,
 ) -> Result<(), Error> {
-    let row = admitted.row;
-    if row.operation != Operation::Run
-        || row.provider != Provider::Claude
-        || !APPROVED_STATUSLINE_IMAGES.contains(&row.sha256)
-    {
+    if !APPROVED_STATUSLINE_IMAGES.contains(&admitted.row.sha256) {
         return Ok(());
     }
     if admitted
@@ -274,6 +270,7 @@ fn dispatch() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::Provider;
 
     #[test]
     fn stage11_local_claude_hook_owned_render_and_drift() {

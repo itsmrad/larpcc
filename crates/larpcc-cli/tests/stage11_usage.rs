@@ -691,7 +691,8 @@ fn stage11_local_claude_hook_dispatch_is_silent_and_confined() {
     );
     let hook = fixture.root.join("bin/.larp-usage-hook");
     assert!(hook.is_file());
-    fixture.run(&["cc", "run", "claude-work"], 1);
+    let closed = fixture.run(&["cc", "run", "claude-work"], 1);
+    assert!(stderr(&closed).contains("provider operation is disabled for this combination"));
     assert!(
         !fixture
             .root

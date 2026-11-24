@@ -169,7 +169,9 @@ fn invoke_with(
     #[cfg(unix)]
     let admitted = {
         let mut admitted = admitted;
-        crate::registry::usage::data::hook::attach_to_launch(&registry, &mut admitted)?;
+        if admitted.row.operation == Operation::Run && admitted.row.provider == Provider::Claude {
+            crate::registry::usage::data::hook::attach_to_launch(&registry, &mut admitted)?;
+        }
         admitted
     };
     dispatch(admitted, guard)
