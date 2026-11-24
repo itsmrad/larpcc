@@ -4,6 +4,10 @@ import re
 import subprocess
 import sys
 
+from cargo_test_environment import require_private_test_environment
+
+require_private_test_environment('stage04_check.py')
+
 stage = os.environ.get('LARPCC_STAGE_FILTER', 'stage04_')
 assert stage in ('stage04_', 'stage06_', 'stage07_', 'stage08_')
 result = subprocess.run(['cargo', *sys.argv[1:], 'test', '--workspace', '--locked', stage],
