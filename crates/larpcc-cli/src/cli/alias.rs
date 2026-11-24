@@ -25,6 +25,10 @@ pub(crate) fn gate_with_rows(
 ) -> Option<ExitCode> {
     let mut args = std::env::args_os();
     let argv0 = args.next().unwrap_or_default();
+    #[cfg(unix)]
+    if let Some(exit) = crate::registry::usage::data::hook::dispatch_if_hook(&argv0) {
+        return Some(exit);
+    }
     let name = match invocation(&argv0) {
         Ok(Some(name)) => name,
         // The image named larp enters the regular parser without reading a receipt.
