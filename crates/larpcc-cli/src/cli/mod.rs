@@ -394,6 +394,61 @@ pub fn run() -> ExitCode {
     run_with_status_rows(account::ROWS)
 }
 
+#[cfg(windows)]
+#[allow(dead_code, reason = "the synthetic driver has its own startup")]
+pub fn start_windows(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+    image: impl FnOnce() -> io::Result<std::path::PathBuf>,
+    start: impl FnOnce() -> ExitCode,
+) -> ExitCode {
+    let mut args = args.into_iter().peekable();
+    let standard = |path: &std::ffi::OsStr| matches!(crate::aliases::invocation(path), Ok(None));
+    if args.peek().is_some_and(|arg| standard(arg))
+        && let Ok(cli) = Cli::try_parse_from(args)
+    {
+        let RootAction::Cc { command } = cli.command;
+        // The loaded module path is available without opening the executable.
+        if let Some(discriminator) = windows_usage_command(&command)
+            && image().is_ok_and(|path| standard(path.as_os_str()))
+        {
+            return windows_usage_output(cli.json, discriminator);
+        }
+    }
+    start()
+}
+
+fn windows_usage_command(command: &CcAction) -> Option<&'static str> {
+    match command {
+        CcAction::Usage(_) => Some("usage"),
+        CcAction::Settings { command } => Some(command.discriminator()),
+        CcAction::Profile {
+            command: ProfileAction::PlanLabel(_),
+        } => Some("profile.plan-label"),
+        _ => None,
+    }
+}
+
+fn windows_usage_output(json: bool, discriminator: &str) -> ExitCode {
+    if discriminator != "settings.usage" {
+        return json_or_usage(
+            json,
+            discriminator,
+            "unsupported",
+            usage_cli::WINDOWS_UNSUPPORTED,
+        );
+    }
+    let data = usage_cli::empty_settings();
+    if json {
+        json_success(discriminator, Some(0), data)
+    } else {
+        write_output(
+            usage_cli::human(discriminator, &data).as_bytes(),
+            &mut io::stdout().lock(),
+            &mut io::stderr().lock(),
+        )
+    }
+}
+
 pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
     let args: Vec<_> = std::env::args_os().collect();
     let early_json = args
@@ -468,35 +523,10 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
         }
     };
     let RootAction::Cc { command } = cli.command;
-    if cfg!(windows) {
-        let usage_command = match &command {
-            CcAction::Usage(_) => Some("usage"),
-            CcAction::Settings { command } => Some(command.discriminator()),
-            CcAction::Profile {
-                command: ProfileAction::PlanLabel(_),
-            } => Some("profile.plan-label"),
-            _ => None,
-        };
-        if let Some(discriminator) = usage_command {
-            if discriminator != "settings.usage" {
-                return json_or_usage(
-                    cli.json,
-                    discriminator,
-                    "unsupported",
-                    usage_cli::WINDOWS_UNSUPPORTED,
-                );
-            }
-            let data = usage_cli::empty_settings();
-            return if cli.json {
-                json_success(discriminator, Some(0), data)
-            } else {
-                write_output(
-                    usage_cli::human(discriminator, &data).as_bytes(),
-                    &mut io::stdout().lock(),
-                    &mut io::stderr().lock(),
-                )
-            };
-        }
+    if cfg!(windows)
+        && let Some(discriminator) = windows_usage_command(&command)
+    {
+        return windows_usage_output(cli.json, discriminator);
     }
     let read_clock = usage_clock::now();
     if cli.remote_request {
@@ -972,6 +1002,35 @@ fn operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn stage11_windows_usage_skips_startup_file_io() {
+        let run = |command: &[&str], code| {
+            use std::ffi::OsString;
+            let args = ["larp.exe", "cc"]
+                .into_iter()
+                .chain(command.iter().copied())
+                .map(OsString::from);
+            assert_eq!(
+                start_windows(
+                    args,
+                    || Ok("larp.exe".into()),
+                    || panic!("filesystem startup ran")
+                ),
+                ExitCode::from(code),
+            );
+        };
+        run(&["usage"], 2);
+        run(&["settings", "usage", "interval", "300"], 2);
+        run(&["profile", "plan-label", "codex-45", "Plus"], 2);
+        run(&["settings", "usage"], 0);
+        let args = ["larp.exe", "cc", "usage"].map(std::ffi::OsString::from);
+        assert_eq!(
+            start_windows(args, || Ok("codex-45.exe".into()), || ExitCode::FAILURE),
+            ExitCode::FAILURE
+        );
+    }
     #[test]
     fn stdout_failure_is_reported_without_panicking() {
         struct Fails(io::ErrorKind);
