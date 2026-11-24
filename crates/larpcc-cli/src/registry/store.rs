@@ -375,7 +375,10 @@ pub(super) fn lock(
     let start = Instant::now();
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok((file, held)),
+            Ok(()) => {
+                super::usage::recover(root)?;
+                return Ok((file, held));
+            }
             Err(std::fs::TryLockError::WouldBlock) => {
                 if start.elapsed() >= timeout {
                     return Err(Error::Busy { path });
@@ -404,7 +407,10 @@ pub(super) fn admission_lock(
     let start = Instant::now();
     loop {
         match checked.file.try_lock() {
-            Ok(()) => return Ok((checked.file, held)),
+            Ok(()) => {
+                super::usage::recover(root)?;
+                return Ok((checked.file, held));
+            }
             Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < Duration::from_secs(10) => {
                 thread::sleep(Duration::from_millis(25))
             }
