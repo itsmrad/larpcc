@@ -166,6 +166,14 @@ fn invoke_with(
     if let Some(guard) = &guard {
         revalidate_guard(registry.root(), admitted.snapshot.target.profile.id, guard)?;
     }
+    #[cfg(unix)]
+    let admitted = {
+        let mut admitted = admitted;
+        if admitted.row.operation == Operation::Run && admitted.row.provider == Provider::Claude {
+            crate::registry::usage::data::hook::attach_to_launch(&registry, &mut admitted)?;
+        }
+        admitted
+    };
     dispatch(admitted, guard)
 }
 pub(crate) fn admit<'a>(
