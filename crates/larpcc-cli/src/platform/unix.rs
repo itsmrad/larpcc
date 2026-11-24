@@ -464,8 +464,20 @@ fn executable_policy(
     let invalid = |reason: &str| unsafe_path(path, reason);
     let mut handles = Vec::new();
     let resolved = resolve(path, &mut 0, &mut handles, ancestry, false)?;
-    let canonical_root = canonical_missing(root)?;
-    if contains_path(&resolved, &canonical_root)? {
+    // Identity, not spelling: case variants, firmlinks and bind mounts of the root are the root.
+    let parent = resolved.parent().unwrap_or(Path::new("/"));
+    let inside = match DirId::within(parent, root) {
+        // Nothing exists inside a root that does not exist yet.
+        Err(e)
+            if e.kind() == io::ErrorKind::NotFound
+                && fs::symlink_metadata(root)
+                    .is_err_and(|m| m.kind() == io::ErrorKind::NotFound) =>
+        {
+            false
+        }
+        result => result.map_err(|e| io_error("inspect", root, e))?,
+    };
+    if inside {
         return Err(invalid("is inside the Larp CC data directory"));
     }
     let meta = fs::symlink_metadata(&resolved).map_err(|e| io_error("inspect", path, e))?;
@@ -514,32 +526,57 @@ fn executable_policy(
     }
     Ok((resolved, identity(&opened)))
 }
-fn canonical_missing(path: &Path) -> Result<PathBuf, Error> {
-    let mut suffix = Vec::new();
-    let mut prefix = path;
-    loop {
-        match fs::canonicalize(prefix) {
-            Ok(mut p) => {
-                for s in suffix.iter().rev() {
-                    p.push(s);
-                }
-                return Ok(p);
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                suffix.push(
-                    prefix
-                        .file_name()
-                        .ok_or_else(|| {
-                            unsafe_path(path, "cannot resolve a trusted executable path")
-                        })?
-                        .to_owned(),
-                );
-                prefix = prefix
-                    .parent()
-                    .ok_or_else(|| unsafe_path(path, "cannot resolve a trusted executable path"))?;
-            }
-            Err(e) => return Err(io_error("inspect", path, e)),
+/// A directory held open with O_DIRECTORY|O_NOFOLLOW and identified by (st_dev, st_ino).
+/// Comparisons keep every handle open until decided. Callers must treat any error as a denial.
+pub struct DirId {
+    file: File,
+    id: (u64, u64),
+}
+impl DirId {
+    pub fn open_dir(path: &Path) -> io::Result<Self> {
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)
+            .and_then(Self::held)
+    }
+    fn held(file: File) -> io::Result<Self> {
+        let meta = file.metadata()?;
+        Ok(Self {
+            id: (meta.dev(), meta.ino()),
+            file,
+        })
+    }
+    fn parent(&self) -> io::Result<Self> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: live directory fd and a static NUL-terminated name.
+        let fd = unsafe { libc::openat(self.file.as_raw_fd(), c"..".as_ptr(), flags) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
         }
+        // SAFETY: successful openat returned a new owned fd.
+        Self::held(unsafe { File::from_raw_fd(fd) })
+    }
+    pub fn same_directory(a: &Path, b: &Path) -> io::Result<bool> {
+        let (a, b) = (Self::open_dir(a)?, Self::open_dir(b)?);
+        Ok(a.id == b.id)
+    }
+    /// Whether `dir` is `ancestor` or below it, walking `..` by handle up to `/`.
+    pub fn within(dir: &Path, ancestor: &Path) -> io::Result<bool> {
+        let ancestor = Self::open_dir(ancestor)?;
+        let mut current = Self::open_dir(dir)?;
+        for _ in 0..4096 {
+            if current.id == ancestor.id {
+                return Ok(true);
+            }
+            let parent = current.parent()?;
+            if parent.id == current.id {
+                return Ok(false);
+            }
+            current = parent;
+        }
+        Err(io::Error::other("directory nesting is too deep"))
     }
 }
 
@@ -1277,6 +1314,103 @@ mod tests {
             assert_eq!(calls, 1);
             assert!(matches!(error, Error::ManagedMode { .. }));
         }
+    }
+    // A private temp holding root "Managed" with a native executable at Managed/bin/tool.
+    fn containment_fixture() -> (tempfile::TempDir, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = std::env::var_os("LARPCC_TEST_PARENT")
+            .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
+        let temporary = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .unwrap();
+        let root = temporary.path().join("Managed");
+        for dir in [&root, &root.join("bin"), &temporary.path().join("outside")] {
+            fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        }
+        for tool in [root.join("bin/tool"), temporary.path().join("outside/tool")] {
+            fs::copy(std::env::current_exe().unwrap(), &tool).unwrap();
+            fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        (temporary, root)
+    }
+    #[test]
+    fn dir_id_compares_identity_and_denies_on_error() {
+        let (temporary, root) = containment_fixture();
+        let bin = root.join("bin");
+        let link = temporary.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        assert!(DirId::same_directory(&root, &bin.join("..")).unwrap());
+        assert!(!DirId::same_directory(&root, &bin).unwrap());
+        // The final component is never followed; intermediate components are.
+        assert!(DirId::open_dir(&link).is_err());
+        assert!(DirId::same_directory(&bin, &link.join("bin")).unwrap());
+        assert!(DirId::open_dir(&bin.join("tool")).is_err());
+        assert!(DirId::within(&bin, &root).unwrap());
+        assert!(DirId::within(&root, &root).unwrap());
+        assert!(!DirId::within(&root, &bin).unwrap());
+        assert!(!DirId::within(&temporary.path().join("outside"), &root).unwrap());
+        assert!(DirId::within(&bin, Path::new("/")).unwrap());
+        assert!(DirId::within(&bin, &temporary.path().join("missing")).is_err());
+    }
+    fn inside(path: &Path, root: &Path) -> bool {
+        matches!(executable(path, root),
+            Err(Error::Unsafe { reason, .. }) if reason == "is inside the Larp CC data directory")
+    }
+    #[test]
+    fn containment_baseline_and_outside_executables() {
+        let (temporary, root) = containment_fixture();
+        assert!(inside(&root.join("bin/tool"), &root));
+        let outside = temporary.path().join("outside/tool");
+        executable(&outside, &root).unwrap();
+        executable(&outside, &temporary.path().join("missing")).unwrap();
+        // A sibling sharing the root's name prefix is not inside it.
+        fs::rename(
+            temporary.path().join("outside"),
+            temporary.path().join("ManagedX"),
+        )
+        .unwrap();
+        executable(&temporary.path().join("ManagedX/tool"), &root).unwrap();
+    }
+    #[test]
+    fn containment_holds_for_symlinked_spellings() {
+        let (temporary, root) = containment_fixture();
+        let link = temporary.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        assert!(inside(&link.join("bin/tool"), &root));
+        let ancestor = temporary.path().join("ancestor");
+        std::os::unix::fs::symlink(temporary.path(), &ancestor).unwrap();
+        assert!(inside(&root.join("bin/tool"), &ancestor.join("Managed")));
+        assert!(inside(&ancestor.join("Managed/bin/tool"), &root));
+    }
+    #[test]
+    fn containment_holds_for_case_variant_spellings() {
+        let (temporary, root) = containment_fixture();
+        let upper = temporary.path().join("MANAGED");
+        let insensitive =
+            fs::metadata(&upper).is_ok_and(|m| m.ino() == fs::metadata(&root).unwrap().ino());
+        if !insensitive {
+            eprintln!("skipped: case-sensitive volume");
+            return;
+        }
+        assert!(inside(&upper.join("bin/tool"), &root));
+        assert!(inside(&root.join("bin/tool"), &upper));
+        assert!(inside(&temporary.path().join("managed/BIN/tool"), &root));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn containment_holds_for_the_data_volume_firmlink_spelling() {
+        let (_temporary, root) = containment_fixture();
+        let firm = Path::new("/System/Volumes/Data").join(root.strip_prefix("/").unwrap());
+        if !root.starts_with("/Users") || fs::metadata(&firm).is_err() {
+            eprintln!(
+                "skipped: no Data volume firmlink spelling for {}",
+                root.display()
+            );
+            return;
+        }
+        assert!(inside(&firm.join("bin/tool"), &root));
+        assert!(inside(&root.join("bin/tool"), &firm));
     }
     #[cfg(feature = "synthetic-launch")]
     #[test]

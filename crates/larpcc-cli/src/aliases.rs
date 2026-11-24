@@ -109,8 +109,9 @@ pub(crate) fn check_collision(
 fn same_path(a: &Path, b: &Path) -> Result<bool, Error> {
     #[cfg(windows)]
     return Ok(platform::contains_path(a, b)? && platform::contains_path(b, a)?);
+    // Directories compare by identity; files keep the exact recorded spelling.
     #[cfg(unix)]
-    Ok(a == b)
+    Ok(a == b || platform::DirId::same_directory(a, b).unwrap_or(false))
 }
 
 fn launcher_root<'a>(executable: &'a Path, name: &ProfileName) -> Result<&'a Path, Error> {
@@ -580,12 +581,12 @@ impl Receipt {
         Ok(())
     }
     // Listing from the installed Larp sees its own image; a launcher sees another image.
+    // Decided by image identity, not spelling: a symlinked install still runs the source.
     fn source_image(&self) -> Result<Source, Error> {
-        if let Ok(executable) = std::env::current_exe()
-            && same_path(&executable, &self.source)?
-        {
+        let source = FileIdentity::from(&self.source_identity);
+        if platform::running_identity(&self.source).ok().as_ref() == Some(&source) {
             let current = Source::current(&self.root)?;
-            if !same_path(&current.path, &self.source)? {
+            if current.identity != source {
                 return Err(Error::AliasInvalid);
             }
             return Ok(current);
