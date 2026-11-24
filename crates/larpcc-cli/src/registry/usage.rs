@@ -54,11 +54,33 @@ fn is_false(value: &bool) -> bool {
 struct Settings {
     version: u32,
     mode: Mode,
+    #[serde(deserialize_with = "object")]
     live: Live,
     #[serde(deserialize_with = "required_option")]
     refresh_interval_seconds: Option<u32>,
     #[serde(deserialize_with = "unique_profiles")]
     profiles: BTreeMap<String, Options>,
+}
+
+fn object<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<T, D::Error> {
+    struct Object<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for Object<T> {
+        type Value = T;
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a JSON object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    d.deserialize_map(Object(std::marker::PhantomData))
+}
+
+struct ObjectOnly<T>(T);
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for ObjectOnly<T> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        object(d).map(Self)
+    }
 }
 
 fn required_option<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
@@ -76,7 +98,7 @@ fn unique_profiles<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, O
         }
         fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Self::Value, A::Error> {
             let mut profiles = BTreeMap::new();
-            while let Some((id, settings)) = entries.next_entry()? {
+            while let Some((id, ObjectOnly(settings))) = entries.next_entry()? {
                 if profiles.insert(id, settings).is_some() {
                     return Err(de::Error::custom("duplicate profile ID"));
                 }
@@ -158,7 +180,8 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 fn parse_settings(bytes: &[u8]) -> Result<Settings, Error> {
-    let settings: Settings = serde_json::from_slice(bytes).map_err(|_| Error::RecoveryRequired)?;
+    let ObjectOnly(settings): ObjectOnly<Settings> =
+        serde_json::from_slice(bytes).map_err(|_| Error::RecoveryRequired)?;
     if settings.version != 1
         || settings.mode == Mode::Inherit
         || settings
@@ -197,11 +220,14 @@ fn read_journal(root: &Path) -> Option<Journal> {
 }
 
 pub(super) fn journal_pending(root: &Path) -> bool {
-    crate::share::pending(root) && read_journal(root).is_some()
+    !cfg!(windows) && crate::share::pending(root) && read_journal(root).is_some()
 }
 
 /// Runs while acquiring the existing registry lock, before its caller checks a revision.
 pub(super) fn recover(root: &Path) -> Result<(), Error> {
+    if cfg!(windows) {
+        return Ok(());
+    }
     if !crate::share::pending(root) {
         retire(root, NEXT).map_err(|_| Error::RecoveryRequired)?;
         retire(root, STAGED_JOURNAL).map_err(|_| Error::RecoveryRequired)?;
@@ -413,7 +439,7 @@ impl Registry {
         profile: &Profile,
         read_clock: i64,
     ) -> Result<Option<Value>, Error> {
-        if !active(profile) {
+        if cfg!(windows) || !active(profile) {
             return Ok(None);
         }
         let settings = load(self.root())?;
@@ -423,6 +449,9 @@ impl Registry {
 
     pub(crate) fn change_usage(&self, mutation: Mutation) -> Result<Value, Error> {
         let root = self.root();
+        if self.expected.is_some() {
+            store::snapshot(root, self.expected)?;
+        }
         let _lock = store::lock(root, Duration::from_secs(10))?;
         let data = store::load(root)?;
         self.observed.set(Some(data.revision));
@@ -539,20 +568,16 @@ fn read_row(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    #[cfg(unix)]
     type Temp = tempfile::TempDir;
-    #[cfg(windows)]
-    type Temp = platform::fixture_private::PrivateTempDir;
 
     fn fixture() -> (Temp, Registry) {
         let parent = std::env::var_os("LARPCC_TEST_PARENT")
             .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
-        #[cfg(unix)]
         let temp = {
             use std::os::unix::fs::PermissionsExt;
             tempfile::Builder::new()
@@ -560,8 +585,6 @@ mod tests {
                 .tempdir_in(parent)
                 .unwrap()
         };
-        #[cfg(windows)]
-        let temp = platform::fixture_private::tempdir(&parent).unwrap();
         let registry = Registry::at(temp.path().join("managed")).unwrap();
         registry
             .add("claude-work".parse().unwrap(), Provider::Claude)

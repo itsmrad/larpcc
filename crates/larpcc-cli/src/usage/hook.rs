@@ -70,6 +70,7 @@ fn receipt(dirs: &Directories, root: &Path) -> Result<Option<HookReceipt>, Error
 }
 
 pub(crate) fn install(root: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
     if !claude::safe_root(root) {
         return Ok(());
     }
@@ -84,15 +85,48 @@ pub(crate) fn install(root: &Path) -> Result<(), Error> {
     }
     let executable = root.join("bin").join(EXE);
     let source = Source::current(root)?;
-    let file = dirs.create(&executable)?;
-    let image = Artifact {
-        identity: file.identity.clone(),
-        digest: source.sha256,
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| Error::Drift)?
+        .as_nanos();
+    let stage = |name| {
+        root.join("bin")
+            .join(format!("{name}.{}.{nonce}.tmp", std::process::id()))
     };
-    if let Err(error) = aliases::fill_launcher(file, &source) {
-        let _ = dirs.remove(&executable, &image.identity);
-        return Err(error);
-    }
+    let image = if let Some(existing) = dirs.read(&executable)? {
+        let image = Artifact {
+            identity: existing.identity,
+            digest: source.sha256,
+        };
+        if existing
+            .file
+            .metadata()
+            .map_err(|_| Error::Drift)?
+            .permissions()
+            .mode()
+            & 0o100
+            == 0
+            || image.present(&dirs, &executable)? != Some(true)
+        {
+            return Err(Error::Drift);
+        }
+        image
+    } else {
+        let staged = stage(EXE);
+        let file = dirs.create(&staged)?;
+        let image = Artifact {
+            identity: file.identity.clone(),
+            digest: source.sha256,
+        };
+        if let Err(error) = aliases::fill_launcher(file, &source)
+            .and_then(|()| dirs.publish(&staged, &executable, &image))
+        {
+            let _ = dirs.remove(&staged, &image.identity);
+            return Err(error);
+        }
+        dirs.sync()?;
+        image
+    };
     let bytes = serde_json::to_vec(&HookReceipt {
         version: 1,
         root: root.into(),
@@ -100,11 +134,24 @@ pub(crate) fn install(root: &Path) -> Result<(), Error> {
         executable: image,
     })
     .map_err(|_| Error::Drift)?;
-    let mut receipt = dirs.create(&root.join("bin").join(RECEIPT))?.file;
-    receipt
+    let staged = stage(RECEIPT);
+    let mut file = dirs.create(&staged)?;
+    let receipt = Artifact {
+        identity: file.identity,
+        digest: aliases::digest(&bytes),
+    };
+    let written = file
+        .file
         .write_all(&bytes)
-        .and_then(|_| receipt.sync_all())
-        .map_err(|_| Error::Drift)?;
+        .and_then(|_| file.file.sync_all());
+    drop(file.file);
+    if let Err(error) = written
+        .map_err(|_| Error::Drift)
+        .and_then(|()| dirs.publish(&staged, &root.join("bin").join(RECEIPT), &receipt))
+    {
+        let _ = dirs.remove(&staged, &receipt.identity);
+        return Err(error);
+    }
     dirs.sync()
 }
 

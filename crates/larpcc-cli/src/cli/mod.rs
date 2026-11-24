@@ -468,6 +468,36 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
         }
     };
     let RootAction::Cc { command } = cli.command;
+    if cfg!(windows) {
+        let usage_command = match &command {
+            CcAction::Usage(_) => Some("usage"),
+            CcAction::Settings { command } => Some(command.discriminator()),
+            CcAction::Profile {
+                command: ProfileAction::PlanLabel(_),
+            } => Some("profile.plan-label"),
+            _ => None,
+        };
+        if let Some(discriminator) = usage_command {
+            if discriminator != "settings.usage" {
+                return json_or_usage(
+                    cli.json,
+                    discriminator,
+                    "unsupported",
+                    usage_cli::WINDOWS_UNSUPPORTED,
+                );
+            }
+            let data = usage_cli::empty_settings();
+            return if cli.json {
+                json_success(discriminator, Some(0), data)
+            } else {
+                write_output(
+                    usage_cli::human(discriminator, &data).as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                )
+            };
+        }
+    }
     let read_clock = usage_clock::now();
     if cli.remote_request {
         let unsupported = match &command {

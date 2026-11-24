@@ -6,6 +6,19 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde_json::Value;
 use std::fmt::Write;
 
+pub(crate) const WINDOWS_UNSUPPORTED: &str =
+    "Usage reads and settings changes are unavailable on Windows.";
+
+pub(crate) fn empty_settings() -> Value {
+    serde_json::json!({
+        "mode": "local",
+        "live": {"state":"off", "enabled":false, "acknowledged_warning":null,
+            "current_warning":1, "verified":false},
+        "refresh_interval_seconds": null,
+        "profiles": [],
+    })
+}
+
 #[derive(Args)]
 pub(crate) struct ReadUsage {
     /// Profile name. Omit to list all active profiles.

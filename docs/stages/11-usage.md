@@ -43,6 +43,11 @@ bytes untouched. An effective LIVE mode produces disabled rows. Both
 `--local` and forwarded usage reads use LOCAL. Usage makes zero credential
 reads and zero provider requests.
 
+**Windows MVP limitation.** Usage reads and settings changes, including plan
+labels, exit 2 with `unsupported` before accessing profile or registry files.
+`settings usage` reports LOCAL mode at revision 0 with no profiles or capture
+data. Account status reports `usage: null`.
+
 ```text
 larp cc usage [PROFILE] [--local|--live]                       # command "usage"
 larp cc settings usage                                         # "settings.usage"

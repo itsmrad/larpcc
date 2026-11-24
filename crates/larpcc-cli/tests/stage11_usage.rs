@@ -1,8 +1,76 @@
+#![cfg(unix)]
+
 mod common;
 
 use common::*;
 use serde_json::{Value, json};
 use std::{fs, path::Path};
+
+#[test]
+fn stage11_local_claude_hook_recovers_killed_partial_install() {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        process::{Command, Stdio},
+    };
+    const CHILD: &str = "LARPCC_STAGE11_PARTIAL_INSTALL";
+    if let Some(root) = std::env::var_os(CHILD) {
+        let root = std::path::PathBuf::from(root);
+        let bin = root.join("managed/bin");
+        let image = bin.join(".larp-usage-hook");
+        copy_executable(&root.join("install/larp"), &image);
+        fs::File::open(image).unwrap().sync_all().unwrap();
+        fs::File::open(bin).unwrap().sync_all().unwrap();
+        println!("image synced");
+        std::io::stdout().flush().unwrap();
+        let _ = std::io::stdin().read(&mut [0]);
+        return;
+    }
+
+    let fixture = Fixture::new();
+    profiles(&fixture);
+    fixture.install_larp();
+    let bin = fixture.root.join("bin");
+    create_directory(&bin);
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .env_clear()
+        .env(CHILD, fixture.temp.path())
+        .env("HOME", fixture.temp.path())
+        .args([
+            "stage11_local_claude_hook_recovers_killed_partial_install",
+            "--exact",
+            "--nocapture",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let published = BufReader::new(child.stdout.take().unwrap())
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line == "image synced");
+    let _ = child.kill();
+    child.wait().unwrap();
+    assert!(published);
+    let image = bin.join(".larp-usage-hook");
+    let receipt = bin.join(".larp-usage-hook.receipt.json");
+    assert!(image.is_file());
+    assert!(!receipt.exists());
+    let enable = [
+        "settings",
+        "usage",
+        "claude-statusline",
+        "on",
+        "--profile",
+        "claude-work",
+    ];
+    assert_eq!(usage(&fixture, &enable, 0)["data"]["changed"], true);
+    assert!(receipt.is_file());
+    assert_eq!(usage(&fixture, &enable, 0)["data"]["changed"], false);
+    fs::remove_file(receipt).unwrap();
+    fs::write(&image, b"foreign file").unwrap();
+    assert_eq!(usage(&fixture, &enable, 1)["error"]["code"], "drift");
+    assert_eq!(fs::read(image).unwrap(), b"foreign file");
+}
 
 fn usage(fixture: &Fixture, args: &[&str], code: i32) -> Value {
     fixture.larp_json(&[&["cc", "--json"][..], args].concat(), code)
@@ -11,6 +79,42 @@ fn usage(fixture: &Fixture, args: &[&str], code: i32) -> Value {
 fn profiles(fixture: &Fixture) {
     fixture.profile(&["add", "claude-work", "--provider", "claude"], 0);
     fixture.profile(&["add", "codex-45", "--provider", "codex"], 0);
+}
+
+#[test]
+fn stage11_settings_stale_revision_leaves_fresh_root_absent() {
+    let fixture = Fixture::new();
+    let reply = usage(
+        &fixture,
+        &[
+            "settings",
+            "usage",
+            "interval",
+            "300",
+            "--expected-revision",
+            "4",
+        ],
+        1,
+    );
+    assert_eq!(reply["error"]["code"], "conflict");
+    assert!(!fixture.root.exists());
+}
+
+#[test]
+fn stage11_settings_rejects_positional_json_records() {
+    let fixture = Fixture::new();
+    profiles(&fixture);
+    let settings = fixture.root.join("usage.json");
+    for bytes in [
+        r#"[1,"local",[false,null],null,{}]"#,
+        r#"{"version":1,"mode":"local","live":[false,null],"refresh_interval_seconds":null,"profiles":{}}"#,
+        r#"{"version":1,"mode":"local","live":{"enabled":false,"acknowledged_warning":null},"refresh_interval_seconds":null,"profiles":{"1":["inherit",null,false]}}"#,
+    ] {
+        create_file(&settings, bytes.as_bytes());
+        let reply = usage(&fixture, &["settings", "usage"], 1);
+        assert_eq!(reply["error"]["code"], "recovery_required");
+        fs::remove_file(&settings).unwrap();
+    }
 }
 
 #[test]
@@ -361,6 +465,81 @@ fn log(version: &str, lines: &[String]) -> String {
         output.push('\n');
     }
     output
+}
+
+#[test]
+fn stage11_local_codex_keeps_main_windows_after_a_thousand_other_buckets() {
+    let fixture = Fixture::new();
+    profiles(&fixture);
+    let directory = codex_directory(&fixture);
+    let time = "2026-11-21T12:00:00Z";
+    let mut lines: Vec<_> = (0..1000)
+        .map(|id| {
+            event(
+                time,
+                Some(&format!("a{id:04}")),
+                window(12.0, 300, None),
+                Value::Null,
+                "unknown",
+            )
+        })
+        .collect();
+    lines.push(event(
+        time,
+        None,
+        window(34.0, 300, None),
+        window(56.0, 10080, None),
+        "pro",
+    ));
+    rollout(
+        &directory,
+        &format!("rollout-2026-11-21T12-00-00-{THREAD}.jsonl"),
+        log("0.169.0", &lines).as_bytes(),
+    );
+    let reply = usage(&fixture, &["usage", "codex-45"], 0);
+    let row = &reply["data"]["profiles"][0];
+    assert_eq!(row["windows"]["five_hour"]["used_percent"], 34.0);
+    assert_eq!(row["windows"]["weekly"]["used_percent"], 56.0);
+    assert_eq!(row["windows"]["extra"].as_array().unwrap().len(), 8);
+    assert!(
+        row["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "extra_truncated")
+    );
+}
+
+#[test]
+fn stage11_local_codex_keeps_complete_event_at_tail_boundary() {
+    let fixture = Fixture::new();
+    profiles(&fixture);
+    let directory = codex_directory(&fixture);
+    let mut bytes = log("0.169.0", &[]).into_bytes();
+    bytes.extend_from_slice(b"{}\n");
+    let tail_start = bytes.len();
+    bytes.extend_from_slice(
+        event(
+            "2026-11-21T12:00:00Z",
+            None,
+            window(34.0, 300, None),
+            Value::Null,
+            "pro",
+        )
+        .as_bytes(),
+    );
+    bytes.push(b'\n');
+    bytes.resize(tail_start + 4 * 1024 * 1024, b' ');
+    rollout(
+        &directory,
+        &format!("rollout-2026-11-21T12-00-00-{THREAD}.jsonl"),
+        &bytes,
+    );
+    let reply = usage(&fixture, &["usage", "codex-45"], 0);
+    assert_eq!(
+        reply["data"]["profiles"][0]["windows"]["five_hour"]["used_percent"],
+        34.0
+    );
 }
 
 #[test]

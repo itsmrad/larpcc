@@ -236,15 +236,27 @@ fn scan_file(
         }
     };
     let tail = size.saturating_sub(4 * MIB);
-    let skip_fragment = tail > first;
     let file = input.into_inner().into_inner();
     let offset = tail.max(first);
+    let mut skip_fragment = false;
+    if tail > first {
+        diagnostics.insert("scan_limit");
+        budget.time()?;
+        if budget.bytes == 40 * MIB {
+            return Err(Scan::Limit);
+        }
+        file.seek(SeekFrom::Start(tail - 1))
+            .map_err(|_| Scan::Invalid)?;
+        let mut previous = [0];
+        file.read_exact(&mut previous).map_err(|_| Scan::Invalid)?;
+        budget.bytes += 1;
+        skip_fragment = previous[0] != b'\n';
+    }
     file.seek(SeekFrom::Start(offset))
         .map_err(|_| Scan::Invalid)?;
     let tail_cap = (size - offset).min(40 * MIB - budget.bytes);
     let mut input = BufReader::new(file.take(tail_cap));
     if skip_fragment {
-        diagnostics.insert("scan_limit");
         if !read_line(&mut input, &mut buffer, budget, 4 * MIB)? {
             return Ok(());
         }
@@ -502,17 +514,34 @@ pub(super) fn observe(cli: &Directory, read_clock: i64) -> Observation {
         })
         .and_then(|record| record.limits.plan_type.as_deref())
         .and_then(local_plan);
+    let main = |name| {
+        codex.and_then(|record| {
+            [&record.limits.primary, &record.limits.secondary]
+                .into_iter()
+                .flatten()
+                .find(|limit| category(limit.window_minutes) == Some(name))
+                .map(|limit| (record, limit))
+        })
+    };
+    let five_hour = main("5h");
+    let weekly = main("weekly");
+    for (main, output, seconds) in [
+        (five_hour, &mut row.windows.five_hour, FIVE_HOUR),
+        (weekly, &mut row.windows.weekly, WEEKLY),
+    ] {
+        if let Some((record, limit)) = main {
+            *output = window(limit, record, Some(seconds), read_clock, &mut diagnostics);
+        }
+    }
     let mut extras = Vec::new();
     let mut other = 0;
-    let mut five_hour = false;
-    let mut weekly = false;
     for (bucket, record) in &records {
         let codex = bucket == "codex";
         if !codex {
             other += 1;
             if other > 999 {
                 diagnostics.insert("extra_truncated");
-                break;
+                continue;
             }
         }
         for (limit, fallback) in [
@@ -520,40 +549,33 @@ pub(super) fn observe(cli: &Directory, read_clock: i64) -> Observation {
             (&record.limits.secondary, Some("secondary")),
         ] {
             let Some(limit) = limit else { continue };
-            let category = category(limit.window_minutes);
-            match (codex, category) {
-                (true, Some("5h")) if !five_hour => {
-                    row.windows.five_hour =
-                        window(limit, record, Some(FIVE_HOUR), read_clock, &mut diagnostics);
-                    five_hour = true;
-                }
-                (true, Some("weekly")) if !weekly => {
-                    row.windows.weekly =
-                        window(limit, record, Some(WEEKLY), read_clock, &mut diagnostics);
-                    weekly = true;
-                }
-                _ => {
-                    let length = limit
-                        .window_minutes
-                        .and_then(|minutes| minutes.checked_mul(60))
-                        .filter(|seconds| (1..=MAX_WINDOW).contains(seconds));
-                    let bucket = if codex {
-                        "Codex".to_owned()
-                    } else {
-                        format!("Other limit {other}")
-                    };
-                    let duration = category
-                        .map(str::to_owned)
-                        .or_else(|| length.map(|seconds| format!("{}m", seconds / 60)))
-                        .or_else(|| fallback.map(str::to_owned));
-                    let label = duration
-                        .map_or_else(|| bucket.clone(), |duration| format!("{bucket} {duration}"));
-                    extras.push(Extra {
-                        label,
-                        window: window(limit, record, length, read_clock, &mut diagnostics),
-                    });
-                }
+            if [five_hour, weekly]
+                .into_iter()
+                .flatten()
+                .any(|(_, main)| std::ptr::eq(limit, main))
+            {
+                continue;
             }
+            let category = category(limit.window_minutes);
+            let length = limit
+                .window_minutes
+                .and_then(|minutes| minutes.checked_mul(60))
+                .filter(|seconds| (1..=MAX_WINDOW).contains(seconds));
+            let bucket = if codex {
+                "Codex".to_owned()
+            } else {
+                format!("Other limit {other}")
+            };
+            let duration = category
+                .map(str::to_owned)
+                .or_else(|| length.map(|seconds| format!("{}m", seconds / 60)))
+                .or_else(|| fallback.map(str::to_owned));
+            let label =
+                duration.map_or_else(|| bucket.clone(), |duration| format!("{bucket} {duration}"));
+            extras.push(Extra {
+                label,
+                window: window(limit, record, length, read_clock, &mut diagnostics),
+            });
         }
     }
     extras.sort_by(|a, b| {
