@@ -7,7 +7,9 @@ Usage: install-macos.sh [--prefix ABSOLUTE_DIRECTORY] [--replace] [--dry-run] [-
 
 Build and install larp and the unsigned LarpCC settings app on macOS.
 The binary defaults to ~/.local/bin/larp. The app goes to ~/Applications/LarpCC.app.
-Use --replace to replace an unrecognized larp and keep a backup.
+Use --replace to replace an unrecognized larp.
+Replaced files and bundles are kept in timestamped backup directories.
+The installer verifies both installed targets and prints any backup paths.
 Use --dry-run to print the plan without building or installing.
 See the README for manual installation and uninstall instructions.
 EOF
@@ -218,49 +220,62 @@ require_directory() {
 mkdir "$lock" || fail "Another installation may be running. If none is active, remove the empty lock at $lock."
 bin_stage=''
 app_stage=''
+bin_backup=''
+app_backup=''
 publishing_bin=''
 publishing_app=''
-committed=false
+published=false
 
 clean_target() {
-  local stage="$1" target="$2" parent="$3" publishing="$4" kind="$5" name="${2##*/}" backup
+  local stage="$1" target="$2" parent="$3" publishing="$4" backup_dir="$5" name="${2##*/}" backup
   [[ -n "$stage" ]] || return 0
-  backup="$stage/previous/$name"
-  if ! "$committed"; then
-    if [[ -n "$publishing" && ! -e "$stage/$name" ]]; then
-      [[ "$(stat -f '%d:%i' "$target")" == "$publishing" ]] || return 1
-      mv -fh "$target" "$stage/" || return 1
-    fi
+  if "$published"; then
+    rmdir "$stage"
+    return
+  fi
+  if [[ -n "$publishing" && ! -e "$stage/$name" ]]; then
+    [[ "$(stat -f '%d:%i' "$target")" == "$publishing" ]] || return 1
+    mv -fh "$target" "$stage/" || return 1
+  fi
+  if [[ -n "$backup_dir" ]]; then
+    backup="$backup_dir/$name"
     if [[ -e "$backup" || -L "$backup" ]]; then
       [[ ! -e "$target" && ! -L "$target" ]] &&
-        mv -nh "$backup" "$parent/" && [[ ! -e "$backup" && ! -L "$backup" ]] || return 1
+        mv -nh "$backup" "$parent/" || return 1
     fi
-  elif [[ -e "$backup" || -L "$backup" ]]; then
-    if [[ "$kind" == binary ]]; then
-      if ! owned_binary_digest "$backup" >/dev/null; then
-        printf 'Kept previous CLI at %q\n' "$backup" >&2
-        return 0
-      fi
-    elif ! owned_app "$backup"; then
-      printf 'Kept previous app at %q\n' "$backup" >&2
-      return 0
-    fi
+    rmdir "$backup_dir" || return 1
   fi
   rm -rf "$stage"
 }
 
+print_backups() {
+  if [[ -n "$bin_backup" ]]; then printf 'CLI backup: %q\n' "$bin_backup/larp"; fi
+  if [[ -n "$app_backup" ]]; then printf 'App backup: %q\n' "$app_backup/LarpCC.app"; fi
+  if [[ -n "$bin_backup" || -n "$app_backup" ]]; then
+    printf 'Move the timestamped backup directories to the Trash when you no longer need them.\n'
+  fi
+}
+
 cleanup() {
+  local cleanup_failed=false
   if [[ -n "$bin_stage" ]]; then
-    if ! check_prefix || ! clean_target "$bin_stage" "$binary" "$prefix" "$publishing_bin" binary; then
+    if ! check_prefix || ! clean_target "$bin_stage" "$binary" "$prefix" "$publishing_bin" "$bin_backup"; then
       printf 'CLI cleanup failed. Look for %q in the original directory.\n' "${bin_stage##*/}" >&2
+      cleanup_failed=true
     fi
   fi
   if check_applications; then
-    clean_target "$app_stage" "$app" "$applications" "$publishing_app" app ||
-      printf 'App cleanup failed. Recover files from %q\n' "$app_stage" >&2
-    rmdir "$lock"
+    if ! clean_target "$app_stage" "$app" "$applications" "$publishing_app" "$app_backup"; then
+      printf 'App cleanup failed. Look for %q in the original directory.\n' "${app_stage##*/}" >&2
+      cleanup_failed=true
+    fi
+    rmdir "$lock" || cleanup_failed=true
   else
-    printf 'App directory changed. The install lock and any staged files remain in the original directory.\n' >&2
+    printf 'App directory changed. The install lock and any staged files remain in the moved directory.\n' >&2
+    cleanup_failed=true
+  fi
+  if "$cleanup_failed" && ! "$published"; then
+    print_backups >&2
   fi
 }
 trap cleanup EXIT
@@ -283,22 +298,24 @@ hash="$(digest "$bin_stage/larp")"
 xattr -w "$marker" "$hash" "$bin_stage/larp"
 ditto apps/macos/dist/LarpCC.app "$app_stage/LarpCC.app"
 
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_target() {
-  local target="$1" kind="$2" stage="$3" before="$4" current
-  mkdir "$stage/previous"
+  local target="$1" kind="$2" before="$3" current backup_dir
   current="$(target_state "$target" "$kind")"
   if ! "$replace" && [[ "$current" != "$before" ]]; then
     fail "Installation target changed during the build: $target"
   fi
   if [[ -n "$current" ]]; then
-    mv -fh "$target" "$stage/previous/"
+    backup_dir="$(mktemp -d "$target.backup-$timestamp.XXXXXXXX")"
+    if [[ "$kind" == binary ]]; then bin_backup="$backup_dir"; else app_backup="$backup_dir"; fi
+    mv -fh "$target" "$backup_dir/"
   fi
 }
 
 require_directory check_prefix "$prefix"
-backup_target "$binary" binary "$bin_stage" "$bin_before"
+backup_target "$binary" binary "$bin_before"
 require_directory check_applications "$applications"
-backup_target "$app" app "$app_stage" "$app_before"
+backup_target "$app" app "$app_before"
 
 publishing_bin="$(stat -f '%d:%i' "$bin_stage/larp")"
 require_directory check_prefix "$prefix"
@@ -308,9 +325,28 @@ publishing_app="$(stat -f '%d:%i' "$app_stage/LarpCC.app")"
 require_directory check_applications "$applications"
 mv -nh "$app_stage/LarpCC.app" "$applications/"
 [[ ! -e "$app_stage/LarpCC.app" ]] || fail "Installation target appeared: $app"
-committed=true
+published=true
+
+app_executable="$app/Contents/MacOS/LarpCC"
+verified=true
+if [[ ! -x "$binary" || "$(owned_binary_digest "$binary")" != "$hash" ]]; then
+  printf 'FAILED to verify the installed CLI at %q\n' "$binary" >&2
+  verified=false
+fi
+if ! owned_app "$app" ||
+  [[ "$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist" 2>/dev/null)" != LarpCC ||
+     -L "$app/Contents/MacOS" || -L "$app_executable" || ! -f "$app_executable" || ! -x "$app_executable" ]]; then
+  printf 'FAILED to verify the installed app at %q\n' "$app" >&2
+  verified=false
+fi
+if ! "$verified"; then
+  print_backups >&2
+  printf 'If an install directory moved, look for its backup in the moved directory.\n' >&2
+  exit 1
+fi
 
 printf 'Installed %q and %q\n' "$binary" "$app"
+print_backups
 printf 'If larp is missing from PATH, add this to your shell configuration:\n'
 printf '  export PATH=%q:"$PATH"\n' "$prefix"
 printf 'If macOS blocks your self-built app due to quarantine, run:\n'

@@ -24,9 +24,13 @@ Use `--prefix /absolute/path/to/bin` to choose another directory for `larp`. The
 installation paths must be free of symlinks. The installer recognizes a previous
 `larp` by its matching SHA-256 extended attribute. To replace any other file
 named `larp`, move it aside or explicitly pass `--replace`. The installer keeps
-an unrecognized file it replaces and prints the backup path. Add the chosen
-directory to `PATH` if needed. In LarpCC, use **General → larp executable →
-Choose…** to select the installed binary.
+every replaced binary and app in timestamped backup directories beside the
+install targets. It verifies both installed targets before reporting success
+and prints the backup paths even if verification fails. Move those directories
+to the Trash when you no longer need them.
+
+Add the chosen directory to `PATH` if needed. In LarpCC, use **General → larp
+executable → Choose…** to select the installed binary.
 
 To build and install manually with the default paths, run these commands from
 the repository root.
@@ -63,6 +67,12 @@ the quarantine attribute for that bundle.
 ```sh
 xattr -dr com.apple.quarantine "$HOME/Applications/LarpCC.app"
 ```
+
+### Known limitations
+
+The installer assumes no other process modifies the install destinations while
+it runs. Wait for the installer to finish before moving, editing, or replacing
+either target or its parent directory.
 
 ### Uninstall
 
