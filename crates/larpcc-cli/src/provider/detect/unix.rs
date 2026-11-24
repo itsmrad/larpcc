@@ -10,7 +10,7 @@ use self::{
 use crate::{
     launch::admission::{ROWS, checked_artifact_from},
     platform::{CheckedObject, FileIdentity, removal::Entries},
-    provider::evidence,
+    provider::{evidence, version},
     registry::{Error, Provider, Registry, display},
 };
 use serde_json::{Value, json};
@@ -543,6 +543,15 @@ impl Scan {
                     .as_ref()
                     .ok()
                     .map(|item| evidence::hex(&item.sha256));
+                let size = artifact.as_ref().map_or(c.size, |item| item.size);
+                let (version, diagnostic) = if artifact
+                    .as_ref()
+                    .is_ok_and(|item| version::approved_candidate(c.provider, item.sha256))
+                {
+                    (None, "version_probe_unavailable")
+                } else {
+                    (Some("unapproved"), "version_unapproved")
+                };
                 let bind_reason = artifact.as_ref().err().map(|error| match error {
                     Error::InvalidExecutable { reason, .. } | Error::Unsafe { reason, .. } => {
                         reason.as_str()
@@ -554,7 +563,7 @@ impl Scan {
                     "path": display::path(&c.path),
                     "resolved_path": display::path(&c.resolved),
                     "identity": {"kind":"unix","dev":dev.to_string(),"ino":ino.to_string()},
-                    "size": c.size.to_string(),
+                    "size": size.to_string(),
                     "install_kind": c.kind.label(),
                     "bindable": artifact.is_ok(),
                     "bind_reason": bind_reason,
@@ -562,8 +571,8 @@ impl Scan {
                     "bound": c.bound,
                     "sha256": sha256,
                     "cdhash": Value::Null,
-                    "version": "unapproved",
-                    "version_diagnostic": "version_unapproved",
+                    "version": version,
+                    "version_diagnostic": diagnostic,
                 })
             })
             .collect();

@@ -1564,7 +1564,7 @@
         "version": {
           "anyOf": [
             {
-              "type": "string"
+              "const": "unapproved"
             },
             {
               "type": "null"
@@ -1572,16 +1572,9 @@
           ]
         },
         "version_diagnostic": {
-          "anyOf": [
-            {
-              "enum": [
-                "version_unapproved",
-                "version_probe_failed"
-              ]
-            },
-            {
-              "type": "null"
-            }
+          "enum": [
+            "version_unapproved",
+            "version_probe_unavailable"
           ]
         }
       },

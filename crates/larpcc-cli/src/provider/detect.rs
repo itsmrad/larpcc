@@ -26,7 +26,9 @@ pub(crate) fn human(data: &Value) -> String {
         let provider = row["provider"].as_str().unwrap_or_default();
         let path = row["path"].as_str().unwrap_or_default();
         let kind = row["install_kind"].as_str().unwrap_or_default();
-        let version = row["version"].as_str().unwrap_or("unknown");
+        let version = row["version"]
+            .as_str()
+            .unwrap_or("version probe unavailable");
         let bindable = if row["bindable"] == true {
             "bindable"
         } else {

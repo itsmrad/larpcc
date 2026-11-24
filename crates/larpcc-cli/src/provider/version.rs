@@ -64,6 +64,17 @@ fn table() -> Vec<VersionDescriptor> {
     DESCRIPTORS.to_vec()
 }
 
+#[cfg(unix)]
+pub(crate) fn approved_candidate(provider: Provider, sha256: [u8; 32]) -> bool {
+    table().iter().any(|descriptor| {
+        descriptor.provider == provider
+            && descriptor.os == std::env::consts::OS
+            && descriptor.arch == std::env::consts::ARCH
+            && descriptor.sha256 == sha256
+            && well_formed(descriptor)
+    })
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Detection {
     // Only the Unix probe produces a version; Windows never spawns (known limitation).

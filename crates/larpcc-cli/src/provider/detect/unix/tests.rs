@@ -261,3 +261,58 @@ fn stage19_recheck_refuses_ancestor_retarget_into_denied_subtree() {
     assert_eq!(observed["skipped"][0]["path"], display::path(&candidate));
     assert_eq!(observed["skipped"][0]["reason"], "inside provider home");
 }
+
+#[cfg(feature = "synthetic-launch")]
+#[test]
+fn stage19_matches_exact_descriptor_and_keeps_execution_closed() {
+    use sha2::{Digest, Sha256};
+    use version::{VersionDescriptor, synthetic_descriptors};
+
+    let temp = private_dir();
+    let path = temp.path().join("codex");
+    private_executable(&path);
+    let descriptor = VersionDescriptor {
+        provider: Provider::Codex,
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        sha256: Sha256::digest(fs::read(&path).unwrap()).into(),
+        argv: &["--version"],
+        home_env: version::home_env(Provider::Codex),
+        prefix: "codex ",
+        suffix: "",
+        evidence: "synthetic Stage 19 fixture",
+    };
+    let result = |descriptor| {
+        synthetic_descriptors(vec![descriptor]);
+        let mut scan = scan(temp.path());
+        scan.offer(Provider::Codex, path.clone(), Kind::Native, None);
+        scan.results(Vec::new())["executables"][0].clone()
+    };
+    let matched = result(descriptor.clone());
+    assert_eq!(matched["version"], Value::Null);
+    assert_eq!(matched["version_diagnostic"], "version_probe_unavailable");
+    for descriptor in [
+        VersionDescriptor {
+            os: "other-os",
+            ..descriptor.clone()
+        },
+        VersionDescriptor {
+            arch: "other-arch",
+            ..descriptor.clone()
+        },
+        VersionDescriptor {
+            sha256: [0; 32],
+            ..descriptor.clone()
+        },
+        VersionDescriptor {
+            provider: Provider::Claude,
+            home_env: version::home_env(Provider::Claude),
+            ..descriptor
+        },
+    ] {
+        let unmatched = result(descriptor);
+        assert_eq!(unmatched["version"], "unapproved");
+        assert_eq!(unmatched["version_diagnostic"], "version_unapproved");
+    }
+    assert!(!temp.path().join("managed").exists());
+}

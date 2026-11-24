@@ -168,6 +168,10 @@ limits made the result partial. Field meanings, ordering, exclusions and the
 separate explicit bind step are defined in
 [Stage 19](../stages/19-onboarding-detect.md). The registry revision is checked
 before discovery. Windows and remote requests return `unsupported` with exit 2.
+An unmatched executable has `version:"unapproved"` and
+`version_diagnostic:"version_unapproved"`. An exact Stage 08 descriptor
+match has `version:null` and `version_diagnostic:"version_probe_unavailable"`.
+Detection does not execute either candidate.
 
 Space-separated command paths map to dotted `command` values. Existing profile
 and provider mutations and all stage 04–09 metadata mutations use the common
