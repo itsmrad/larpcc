@@ -81,6 +81,12 @@ enum CcAction {
         #[command(subcommand)]
         command: SkillsCommand,
     },
+    /// Manage reference-only MCP definitions and per-profile switches
+    #[command(arg_required_else_help = true, disable_help_subcommand = true)]
+    Mcp {
+        #[command(subcommand)]
+        command: crate::share::mcp::cli::McpCommand,
+    },
     #[command(
         about = "Manage native provider bindings",
         arg_required_else_help = true,
@@ -376,7 +382,7 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
     let host_revision_present = has_option("--expected-host-revision");
     let expected_present =
         has_option("--expected-revision") || profile_id_present || host_revision_present;
-    let cli = match Cli::try_parse_from(args) {
+    let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(mut error) => {
             use clap::error::ErrorKind;
@@ -410,7 +416,12 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
                 }
                 return json_error("parse", "usage", "Invalid command or arguments.", 2);
             }
-            if profile_id_present || host_revision_present {
+            if profile_id_present
+                || host_revision_present
+                || (!informational
+                    && error.kind() != ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                    && is_mcp_invocation(&args))
+            {
                 return json_or_usage(false, "parse", "usage", "Invalid command or arguments.");
             }
             escape_error_values(&mut error);
@@ -534,6 +545,18 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
             {
                 Ok(data) => write_output(
                     render::skills(&data).as_bytes(),
+                    &mut io::stdout().lock(),
+                    &mut io::stderr().lock(),
+                ),
+                Err(error) => operational_error(error),
+            };
+        }
+        CcAction::Mcp { command } => {
+            return match Registry::locate()
+                .and_then(|r| r.expecting(expected).mcp(command.into_action()))
+            {
+                Ok(data) => write_output(
+                    crate::share::mcp::cli::human(&data).as_bytes(),
                     &mut io::stdout().lock(),
                     &mut io::stderr().lock(),
                 ),
@@ -664,6 +687,31 @@ fn status(
     }
 }
 
+fn is_mcp_invocation(args: &[std::ffi::OsString]) -> bool {
+    let mut args = args.iter().skip(1);
+    let mut commands = ["cc", "mcp"].into_iter();
+    while let Some(arg) = args.next() {
+        if arg == "--expected-revision" {
+            args.next();
+            continue;
+        }
+        if arg == "--json"
+            || arg
+                .to_str()
+                .is_some_and(|s| s.starts_with("--expected-revision="))
+        {
+            continue;
+        }
+        if commands.next().is_none_or(|command| arg != command) {
+            return false;
+        }
+        if commands.len() == 0 {
+            return true;
+        }
+    }
+    false
+}
+
 // Clap echoes user values independently of the domain parser's escaped message.
 fn escape_error_values(error: &mut clap::Error) {
     use clap::error::ContextValue;
@@ -746,7 +794,7 @@ pub(super) fn operational_error(error: Error) -> ExitCode {
     }
     if matches!(
         error,
-        Error::AlreadyBound { .. } | Error::InvalidVersionLabel
+        Error::AlreadyBound { .. } | Error::InvalidVersionLabel | Error::McpInvalid
     ) {
         ExitCode::from(2)
     } else {

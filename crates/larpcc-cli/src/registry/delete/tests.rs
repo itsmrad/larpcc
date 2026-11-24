@@ -72,6 +72,161 @@ fn references(base: &Path, registry: &Registry, label: &ProfileName) {
         .unwrap();
 }
 
+fn enable_mcp(registry: &Registry) {
+    use crate::share::mcp::cli::{McpAction, Target};
+
+    registry
+        .mcp(McpAction::Add {
+            name: "files".into(),
+            command: None,
+            args: vec![],
+            env_refs: vec![],
+            url: Some("https://docs.example.com/mcp".into()),
+            header_refs: vec![],
+        })
+        .unwrap();
+    registry
+        .mcp(McpAction::Switch {
+            name: name("files"),
+            target: Target::All,
+            enabled: true,
+        })
+        .unwrap();
+}
+
+#[test]
+fn stage04_delete_recovery_stage07_mcp_cleanup() {
+    use crate::share::mcp::cli::McpAction;
+    use serde_json::{Value, json};
+
+    for phase in [
+        None,
+        Some("delete mcp render"),
+        Some("delete mcp manifest"),
+        Some("delete mcp"),
+        Some("delete registry"),
+    ] {
+        let (_temp, registry) = fixture();
+        let label = name("claude-work");
+        let profile = registry.add(label.clone(), Provider::Claude).unwrap();
+        let keep = registry.add(name("codex-45"), Provider::Codex).unwrap();
+        enable_mcp(&registry);
+        let root = registry.root();
+        let catalog = root.join("mcp.json");
+        let before: Value = serde_json::from_slice(&fs::read(&catalog).unwrap()).unwrap();
+        let render = mcp::render_path(root, keep.profile.id, Provider::Codex);
+        let keep_bytes = fs::read(&render).unwrap();
+        if let Some(phase) = phase {
+            interrupted(phase, || registry.delete_profile(label.clone(), false));
+            assert!(matches!(
+                registry.mcp(McpAction::List),
+                Err(Error::RecoveryRequired)
+            ));
+            assert!(matches!(
+                registry.mcp(McpAction::Sync),
+                Err(Error::RecoveryRequired)
+            ));
+            assert_eq!(
+                registry.delete_profile(label, true).unwrap(),
+                profile.profile.id
+            );
+        } else {
+            assert_eq!(
+                registry.delete_profile(label, false).unwrap(),
+                profile.profile.id
+            );
+        }
+        assert!(!crate::share::pending(root));
+        assert!(!profile.state_dir.parent().unwrap().exists());
+        assert_eq!(fs::read(&render).unwrap(), keep_bytes);
+        let after: Value = serde_json::from_slice(&fs::read(&catalog).unwrap()).unwrap();
+        assert_eq!(after["revision"], before["revision"].as_u64().unwrap() + 1);
+        assert_eq!(
+            after["servers"][0]["switches"],
+            json!([{"profile_id":2,"enabled":true}])
+        );
+        let matrix = registry.mcp(McpAction::Matrix).unwrap();
+        assert_eq!(matrix["profiles"].as_array().unwrap().len(), 1);
+        assert_eq!(matrix["profiles"][0]["name"], "codex-45");
+        assert_eq!(matrix["rows"][0]["enabled"], json!([true]));
+        let list = registry.mcp(McpAction::List).unwrap();
+        assert_eq!(
+            list["servers"][0]["switches"],
+            json!([{"profile_id":"2","enabled":true}])
+        );
+    }
+}
+
+#[test]
+fn stage04_delete_recovery_stage07_mcp_drift_keeps_tombstone() {
+    for edit_catalog in [false, true] {
+        let (_temp, registry) = fixture();
+        let label = name("claude-work");
+        let profile = registry.add(label.clone(), Provider::Claude).unwrap();
+        enable_mcp(&registry);
+        let root = registry.root();
+        interrupted("delete tombstone", || {
+            registry.delete_profile(label.clone(), false)
+        });
+        let path = if edit_catalog {
+            root.join("mcp.json")
+        } else {
+            mcp::render_path(root, profile.profile.id, Provider::Claude)
+        };
+        let original = fs::read(&path).unwrap();
+        let mut edited: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        let edited = if edit_catalog {
+            // A formatting-only edit must also survive recovery untouched.
+            serde_json::to_vec_pretty(&edited).unwrap()
+        } else {
+            edited["version"] = serde_json::json!(99);
+            serde_json::to_vec(&edited).unwrap()
+        };
+        fs::write(&path, &edited).unwrap();
+        assert!(matches!(
+            registry.delete_profile(label.clone(), true),
+            Err(Error::Drift)
+        ));
+        assert!(crate::share::pending(root));
+        assert!(profile.state_dir.exists());
+        assert_eq!(fs::read(&path).unwrap(), edited);
+        let data = store::load_unchecked(root).unwrap();
+        assert_eq!(data.profiles[0].state, Some(ProfileState::Deleting));
+        fs::write(&path, original).unwrap();
+        registry.delete_profile(label, true).unwrap();
+    }
+}
+
+#[test]
+fn stage04_delete_stage07_without_mcp_entries_keeps_catalog() {
+    use crate::share::mcp::cli::McpAction;
+
+    let (_temp, registry) = fixture();
+    let label = name("claude-work");
+    registry.add(label.clone(), Provider::Claude).unwrap();
+    enable_mcp(&registry);
+    registry
+        .mcp(McpAction::Remove {
+            name: name("files"),
+        })
+        .unwrap();
+    let catalog = registry.root().join("mcp.json");
+    let bytes = fs::read(&catalog).unwrap();
+    let identity = platform::inspect(&catalog, ObjectKind::File)
+        .unwrap()
+        .unwrap()
+        .identity;
+    registry.delete_profile(label, false).unwrap();
+    assert_eq!(fs::read(&catalog).unwrap(), bytes);
+    assert_eq!(
+        platform::inspect(&catalog, ObjectKind::File)
+            .unwrap()
+            .unwrap()
+            .identity,
+        identity
+    );
+}
+
 #[test]
 fn stage04_delete_recovery() {
     for phase in [
@@ -118,6 +273,7 @@ fn stage04_delete_recovery() {
                 .exists()
         );
         assert!(!crate::share::pending(registry.root()));
+        assert!(!registry.root().join("mcp.json").exists());
         assert_eq!(store::load(registry.root()).unwrap().next_id, 2);
     }
 }
