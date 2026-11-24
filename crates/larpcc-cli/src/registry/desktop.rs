@@ -1,6 +1,6 @@
 use super::{Error, ProfileName, ProfileState, Provider, Registry, model::DesktopBinding, store};
 use crate::{
-    desktop::{self, CheckedDirectory, CheckedSnapshot},
+    desktop::{self, CheckedApp, CheckedDirectory, CheckedSnapshot, SignatureCache},
     launch::admission::{AuthGuard, acquire_auth_guard},
     platform::{self, ObjectKind},
 };
@@ -37,7 +37,21 @@ impl Registry {
     pub(crate) fn desktop_target(
         &self,
         name: &ProfileName,
-    ) -> Result<(CheckedSnapshot, desktop::CheckedApp, AuthGuard), Error> {
+    ) -> Result<(CheckedSnapshot, CheckedApp, AuthGuard), Error> {
+        self.desktop_target_with(name, |provider, path, cached| {
+            desktop::validate_binding(provider, path, cached, false)
+        })
+    }
+
+    pub(super) fn desktop_target_with(
+        &self,
+        name: &ProfileName,
+        validate: impl FnOnce(
+            Provider,
+            &Path,
+            Option<&SignatureCache>,
+        ) -> Result<(CheckedApp, Option<SignatureCache>), Error>,
+    ) -> Result<(CheckedSnapshot, CheckedApp, AuthGuard), Error> {
         let (id, revision) = {
             let (data, _lock) = store::snapshot(self.root(), self.expected)?;
             store::require_v3(&data)?;
@@ -88,12 +102,7 @@ impl Registry {
             })?;
         let provider = p.provider;
         let recorded_version = b.recorded_version.clone();
-        let (app, cache) = desktop::validate_binding(
-            p.provider,
-            &b.path,
-            data.desktop_signature_cache.as_ref(),
-            false,
-        )?;
+        let (app, cache) = validate(provider, &b.path, data.desktop_signature_cache.as_ref())?;
         if cache != data.desktop_signature_cache {
             data.desktop_signature_cache = cache;
             let bytes = store::serialize(&data)?;

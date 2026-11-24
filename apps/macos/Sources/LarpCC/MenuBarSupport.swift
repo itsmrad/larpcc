@@ -19,6 +19,54 @@ enum MenuBarPreferences {
 
 // MARK: - Store helpers
 
+/// A menu bar window can hide while its SwiftUI view remains mounted.
+struct UsageWindowVisibility: NSViewRepresentable {
+    let store: AppStore
+    let usageView: AppStore.UsageView
+
+    func makeNSView(context: Context) -> Observer {
+        Observer(store: store, usageView: usageView)
+    }
+
+    func updateNSView(_ view: Observer, context: Context) {}
+
+    static func dismantleNSView(_ view: Observer, coordinator: ()) {
+        view.stopObserving()
+    }
+
+    final class Observer: NSView {
+        private weak var store: AppStore?
+        private let usageView: AppStore.UsageView
+        private var observation: AnyCancellable?
+
+        init(store: AppStore, usageView: AppStore.UsageView) {
+            self.store = store
+            self.usageView = usageView
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { return nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observation = window.map { window in
+                NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: window)
+                    .sink { [weak self] _ in self?.updateVisibility() }
+            }
+            updateVisibility()
+        }
+
+        func stopObserving() {
+            observation = nil
+            store?.setUsageView(usageView, visible: false)
+        }
+
+        private func updateVisibility() {
+            store?.setUsageView(usageView, visible: window?.occlusionState.contains(.visible) == true)
+        }
+    }
+}
+
 extension AppStore {
     /// D14: opening the panel re-reads Local usage. Live waits for the user or the opt-in interval.
     func menuBarPanelOpened() {

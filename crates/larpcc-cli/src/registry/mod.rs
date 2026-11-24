@@ -5,6 +5,7 @@ mod desktop;
 pub mod display;
 mod error;
 mod json;
+pub(crate) mod mcp;
 mod model;
 pub(crate) use model::parse_recorded_version;
 mod paths;

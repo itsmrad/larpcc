@@ -14,7 +14,15 @@ enum UsagePreferences {
         let stored = UsageSource(rawValue: UserDefaults.standard.string(forKey: sourceKey) ?? "") ?? .local
         return stored == .live && UserDefaults.standard.bool(forKey: consentKey) ? .live : .local
     }
-    static var intervalMinutes: Int { UserDefaults.standard.integer(forKey: intervalKey) }
+    static func supportedInterval(_ minutes: Int) -> Int {
+        intervals.contains(minutes) ? minutes : 0
+    }
+    static var intervalMinutes: Int { supportedInterval(UserDefaults.standard.integer(forKey: intervalKey)) }
+
+    static func liveUnavailable(isFixture: Bool) -> String {
+        isFixture ? "Live usage isn't available in this build yet; sample data is shown."
+                  : "Live usage isn't available in this build yet."
+    }
 }
 
 // MARK: - General › Usage
@@ -38,13 +46,16 @@ struct UsageSettingsSection: View {
             } label: {
                 Text("Usage source")
                 Text(source == UsageSource.live.rawValue && consented
-                     ? "Live asks the provider through larp for current usage."
+                     ? UsagePreferences.liveUnavailable(isFixture: store.isFixture)
                      : "Local uses only data the official apps already saved on this Mac.")
                     .foregroundStyle(SettingsTypography.supportingInk)
             }
             .pickerStyle(.segmented)
             if source == UsageSource.live.rawValue && consented {
-                Picker(selection: $interval) {
+                Picker(selection: Binding(
+                    get: { UsagePreferences.supportedInterval(interval) },
+                    set: { interval = $0 }
+                )) {
                     ForEach(UsagePreferences.intervals, id: \.self) { minutes in
                         Text(minutes == 0 ? "Off" : "Every \(minutes) min").tag(minutes)
                     }
@@ -58,15 +69,21 @@ struct UsageSettingsSection: View {
                         .disabled(store.usageLoading || store.snapshot == nil)
                 } label: {
                     Text("Live usage")
-                    UsageUpdatedText(report: store.usage.values.first, loading: store.usageLoading)
+                    if !store.usageLoading, let error = store.usageError {
+                        Text(error).foregroundStyle(SettingsTypography.supportingInk)
+                    } else {
+                        UsageUpdatedText(report: store.usage.values.first, loading: store.usageLoading)
+                    }
                 }
+            } else if !store.usageLoading, let error = store.usageError {
+                Text(error).foregroundStyle(SettingsTypography.supportingInk)
             }
         } header: {
             Text("Usage")
         }
         .onChange(of: interval) { _, _ in store.scheduleLiveRefresh() }
         .sheet(isPresented: $confirmingLive) {
-            LiveUsageConsentSheet {
+            LiveUsageConsentSheet(isFixture: store.isFixture) {
                 consented = true
                 select(.live)
             }
@@ -82,6 +99,7 @@ struct UsageSettingsSection: View {
 
 /// One-time confirmation before Live usage. Cancel keeps Local.
 struct LiveUsageConsentSheet: View {
+    let isFixture: Bool
     let onEnable: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -94,9 +112,11 @@ struct LiveUsageConsentSheet: View {
                 Text("Turn on live usage?")
                     .font(.headline)
             }
-            Text("Live mode reads each profile's sign-in token on this Mac to ask Anthropic/OpenAI for current usage. This may break the providers' terms and could lead to account restrictions. Local mode uses only data the official apps already saved.")
+            Text("LIVE usage reads this profile's sign-in token from its local credential store and sends it to the provider's usage endpoint. This may break the provider's terms of service, and LarpCC can't rule out account restrictions. LIVE is unverified against real accounts. LOCAL mode, the default, never reads tokens and makes no network requests.")
                 .fixedSize(horizontal: false, vertical: true)
-            Text("LarpCC itself never reads tokens; only larp does, and only while Live is on. You can switch back to Local in General at any time.")
+            Text("For Claude profiles, macOS will ask whether larp may read the Claude Code sign-in item in your Keychain. Allow lets it read once. Always Allow lets larp read that item from now on without asking. Deny keeps LIVE from working for that profile. LarpCC never chooses for you.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text(UsagePreferences.liveUnavailable(isFixture: isFixture))
                 .font(.callout)
                 .foregroundStyle(SettingsTypography.supportingInk)
                 .fixedSize(horizontal: false, vertical: true)

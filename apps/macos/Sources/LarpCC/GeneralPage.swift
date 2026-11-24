@@ -17,6 +17,11 @@ struct GeneralPage: View {
             + "window frames, title bars and the menu bar follow macOS."
     }
 
+    private var executablePlaceholder: String {
+        if store.isFixture { return "None — showing sample data that resets on restart." }
+        return store.busy ? "Checking the selected executable…" : "No executable selected."
+    }
+
     var body: some View {
         Form {
             Section("System") {
@@ -56,7 +61,7 @@ struct GeneralPage: View {
                     }
                 } label: {
                     Text("larp executable")
-                    Text(store.selectedPath ?? (store.isFixture ? "None — showing sample data that resets on restart." : "Checking the selected executable…"))
+                    Text(store.selectedPath ?? executablePlaceholder)
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .textSelection(.enabled)

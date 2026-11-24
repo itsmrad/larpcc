@@ -112,11 +112,15 @@ extension EnvironmentValues {
 enum ThemePreference {
     static var osMajor: Int { ProcessInfo.processInfo.operatingSystemVersion.majorVersion }
 
-    /// `--theme=tahoe|sequoia|sonoma` (screenshots) wins over the stored setting.
+    /// Debug screenshots can override the stored theme with `--theme=tahoe|sequoia|sonoma`.
     static var launchOverride: Theme? {
-        CommandLine.arguments.first { $0.hasPrefix("--theme=") }
+        #if DEBUG
+        return CommandLine.arguments.first { $0.hasPrefix("--theme=") }
             .flatMap { Theme(rawValue: String($0.dropFirst("--theme=".count))) }
             .flatMap { ThemeChoice(rawValue: $0.rawValue)?.isAvailable(osMajor: osMajor) == true ? $0 : nil }
+        #else
+        return nil
+        #endif
     }
 
     static func resolve(_ stored: String?) -> Theme {
