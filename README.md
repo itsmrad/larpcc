@@ -19,10 +19,13 @@ Use macOS 14 or newer with Rust 1.89 or newer and Apple's Swift build tools
 ./scripts/install-macos.sh
 ```
 
-The installer replaces `~/.local/bin/larp` and `~/Applications/LarpCC.app`.
-Use `--prefix /absolute/path/to/bin` to choose another directory for `larp`.
-Add the chosen directory to `PATH` if needed. In LarpCC, use **General → larp
-executable → Choose…** to select the installed binary.
+The installer uses `~/.local/bin/larp` and `~/Applications/LarpCC.app`.
+Use `--prefix /absolute/path/to/bin` to choose another directory for `larp`. The
+installation paths must be free of symlinks. The installer recognizes a previous
+`larp` by its matching SHA-256 extended attribute. To replace any other file
+named `larp`, move it aside or explicitly pass `--replace`. Add the chosen
+directory to `PATH` if needed. In LarpCC, use **General → larp executable →
+Choose…** to select the installed binary.
 
 To build and install manually with the default paths, run these commands from
 the repository root.
@@ -31,7 +34,18 @@ the repository root.
 cargo build --release --locked --bin larp --target-dir "$PWD/target"
 ./apps/macos/scripts/bundle.sh
 mkdir -p -m 0755 "$HOME/.local/bin" "$HOME/Applications"
-install -m 0755 target/release/larp "$HOME/.local/bin/larp"
+```
+
+For a manual upgrade, move the existing `larp` aside first. The following
+commands require an unused destination and mark the new binary for future
+installer upgrades.
+
+```sh
+larp_bin="$HOME/.local/bin/larp"
+test ! -e "$larp_bin" && test ! -L "$larp_bin" &&
+  install -m 0755 target/release/larp "$larp_bin" &&
+  larp_hash=$(shasum -a 256 < "$larp_bin") &&
+  xattr -w dev.larpcc.installer.sha256 "${larp_hash%% *}" "$larp_bin"
 ```
 
 Quit any running LarpCC settings app. If you already installed LarpCC, move the
