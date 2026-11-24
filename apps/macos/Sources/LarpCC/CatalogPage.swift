@@ -158,19 +158,23 @@ struct CatalogPage: View {
 
     private func profileSwitch(_ item: CatalogItem, profile: Profile) -> some View {
         let enabled = item.profileIDs.contains(profile.id)
-        // An inactive CLI surface cannot use a skill. A saved fixture switch can still be cleared.
-        let reason = kind == .skill && !profile.cliEnabled && !enabled ? "Command line is off" : nil
+        let skillUnavailable = kind == .skill && !profile.cliEnabled
         return LabeledContent {
-            Toggle(isOn: Binding(
-                get: { enabled },
-                set: { store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: $0)) }
-            )) {
-                Text("\(profile.name), \(item.id)")
+            if skillUnavailable && !enabled {
+                Text("Command line is off")
+                    .foregroundStyle(SettingsTypography.supportingInk)
+            } else {
+                // Keep an existing sample switch clearable after the CLI surface is turned off.
+                Toggle(isOn: Binding(
+                    get: { enabled },
+                    set: { store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: $0)) }
+                )) {
+                    Text("\(profile.name), \(item.id)")
+                }
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
             }
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .disabledReason(reason)
         } label: {
             Label {
                 Text(profile.name)
@@ -180,8 +184,8 @@ struct CatalogPage: View {
             } icon: {
                 ProviderGlyph(provider: profile.provider, size: 14)
             }
-            if let reason {
-                Text(reason).foregroundStyle(SettingsTypography.supportingInk)
+            if skillUnavailable && enabled {
+                Text("Command line is off").foregroundStyle(SettingsTypography.supportingInk)
             }
         }
     }
