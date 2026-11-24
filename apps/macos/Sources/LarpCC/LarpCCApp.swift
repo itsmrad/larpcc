@@ -13,11 +13,13 @@ struct LarpCCApp: App {
         }
         #if DEBUG
         MenuBarSnapshot.runIfRequested()
+        SettingsSnapshot.runIfRequested()
         #endif
     }
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
+                .themed()
                 .onAppear { fitWindowOnScreen() }
                 .background { UsageWindowVisibility(store: store, usageView: .settings) }
         }
@@ -35,8 +37,10 @@ struct LarpCCApp: App {
         MenuBarExtra(isInserted: MenuBarDockPolicy.insertion($menuBarShown)) {
             MenuBarPanel(store: store)
                 .background { UsageWindowVisibility(store: store, usageView: .menuBar) }
+                .themed()
         } label: {
             MenuBarLabel(store: store)
+                .themed()
         }
         .menuBarExtraStyle(.window)
     }

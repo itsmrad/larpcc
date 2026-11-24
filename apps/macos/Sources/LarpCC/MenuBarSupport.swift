@@ -3,19 +3,6 @@ import AppKit
 import Combine
 import LarpModel
 
-enum MenuBarInk {
-    static let criticalInk = adaptiveInk(light: (0.65, 0.10, 0.12), dark: (1, 0.62, 0.61))
-    static let warningInk = adaptiveInk(light: (0.54, 0.30, 0.06), dark: (1, 0.73, 0.45))
-    static let supportingInk = adaptiveInk(light: (0.35, 0.35, 0.35), dark: (0.76, 0.76, 0.76))
-
-    private static func adaptiveInk(light: (CGFloat, CGFloat, CGFloat), dark: (CGFloat, CGFloat, CGFloat)) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let (red, green, blue) = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-            return NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
-        })
-    }
-}
-
 // MARK: - Preferences (UserDefaults; never sent anywhere)
 
 enum MenuBarPreferences {
@@ -166,6 +153,7 @@ struct MenuBarSettingsSection: View {
             Toggle(isOn: $shown) {
                 Text("Show in menu bar")
                 Text("Usage limits, resets and quick actions, one click away.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
             Picker("Menu bar shows", selection: Binding(
                 get: { MenuBarMode(rawValue: mode) ?? .tightest },
@@ -221,6 +209,19 @@ enum MenuBarSnapshot {
             .flatMap { Double($0.dropFirst("--menubar-screen-height=".count)) }.map { CGFloat($0) }
     }
 
+    /// `--menubar-live-snapshots=<abs dir>`: whenever the running status item or panel receives
+    /// a theme, it writes `<dir>/<n>-<view>-<theme>.png` from that live environment. This checks
+    /// that a Settings theme change reaches the menu bar without a relaunch.
+    @MainActor private static var liveCount = 0
+    @MainActor static func recordLive(_ view: String, theme: Theme, image: () -> NSImage?) {
+        let prefix = "--menubar-live-snapshots="
+        guard let dir = CommandLine.arguments.first(where: { $0.hasPrefix(prefix) })?.dropFirst(prefix.count),
+              dir.hasPrefix("/"), let tiff = image().flatMap({ $0.tiffRepresentation }),
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+        liveCount += 1
+        try? png.write(to: URL(fileURLWithPath: "\(dir)/\(liveCount)-\(view)-\(theme.rawValue).png"))
+    }
+
     /// `--menubar-notice=<text>`: shows that text as the panel's notice, for overflow checks.
     static var notice: String? {
         CommandLine.arguments.first { $0.hasPrefix("--menubar-notice=") }.map { String($0.dropFirst("--menubar-notice=".count)) }
@@ -245,7 +246,7 @@ enum MenuBarSnapshot {
 
     @MainActor private static func renderStatus(_ store: AppStore, to path: String) -> Bool {
         let rings = MenuBarLabel.rings(store, codexProfileID: "", claudeProfileID: "")
-        guard let image = MenuBarLabel.templateImage(rings) else { return false }
+        guard let image = MenuBarLabel.templateImage(rings, weight: ThemePreference.current.tokens.statusWeight) else { return false }
         func bar(_ dark: Bool) -> some View {
             Image(nsImage: image).renderingMode(.template)
                 .foregroundStyle(dark ? Color.white : Color.black.opacity(0.85))
@@ -280,7 +281,8 @@ enum MenuBarSnapshot {
                                                             snapshotSelectedID: selected)
             .environment(\.colorScheme, dark ? .dark : .light)
             .environment(\._colorSchemeContrast, accessible ? .increased : .standard)
-            .environment(\._accessibilityReduceTransparency, accessible))
+            .environment(\._accessibilityReduceTransparency, accessible)
+            .environment(\.theme, ThemePreference.current))
         renderer.scale = 2
         var png: Data?
         let name: NSAppearance.Name = accessible ? (dark ? .accessibilityHighContrastDarkAqua : .accessibilityHighContrastAqua)

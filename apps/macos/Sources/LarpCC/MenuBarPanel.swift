@@ -7,6 +7,7 @@ import LarpModel
 /// One ring per provider: the session left, with the provider mark inside and the percent beside it.
 struct MenuBarLabel: View {
     @ObservedObject var store: AppStore
+    @Environment(\.theme) private var theme
     @AppStorage(MenuBarPreferences.modeKey) private var mode = MenuBarMode.tightest.rawValue
     @AppStorage(MenuBarPreferences.codexProfileKey) private var codexProfileID = ""
     @AppStorage(MenuBarPreferences.claudeProfileKey) private var claudeProfileID = ""
@@ -17,7 +18,7 @@ struct MenuBarLabel: View {
         let profiles = store.snapshot?.profiles ?? []
         let rings = Self.rings(store, codexProfileID: codexProfileID, claudeProfileID: claudeProfileID)
         Group {
-            if mode != MenuBarMode.icon.rawValue, !rings.isEmpty, let image = Self.templateImage(rings) {
+            if mode != MenuBarMode.icon.rawValue, !rings.isEmpty, let image = Self.templateImage(rings, weight: theme.tokens.statusWeight) {
                 Image(nsImage: image)
             } else {
                 Image(systemName: MenuBarSummary.symbolName(leftPercent:
@@ -28,6 +29,14 @@ struct MenuBarLabel: View {
             (["LarpCC"] + rings.map { "\($0.provider.title) session, \(Int($0.left.rounded())) percent left" })
                 .joined(separator: ", "))
         .onAppear { MenuBarDockPolicy.install() }
+        #if DEBUG
+        .onChange(of: theme, initial: true) { _, theme in
+            MenuBarSnapshot.recordLive("status", theme: theme) {
+                Self.templateImage(Self.rings(store, codexProfileID: codexProfileID, claudeProfileID: claudeProfileID),
+                                   weight: theme.tokens.statusWeight)
+            }
+        }
+        #endif
     }
 
     @MainActor static func rings(_ store: AppStore, codexProfileID: String, claudeProfileID: String) -> [Ring] {
@@ -39,13 +48,13 @@ struct MenuBarLabel: View {
         }
     }
 
-    @MainActor static func templateImage(_ rings: [Ring]) -> NSImage? {
+    @MainActor static func templateImage(_ rings: [Ring], weight: Font.Weight) -> NSImage? {
         let content = HStack(spacing: 7) {
             ForEach(rings.indices, id: \.self) { index in
                 HStack(spacing: 3) {
                     StatusRing(provider: rings[index].provider, left: rings[index].left)
                     Text("\(Int(rings[index].left.rounded()))%")
-                        .font(.system(size: 12, weight: .medium).monospacedDigit())
+                        .font(.system(size: 12, weight: weight).monospacedDigit())
                         .foregroundStyle(.black)
                 }
             }
@@ -85,14 +94,12 @@ private struct StatusRing: View {
 
 // MARK: - Panel
 
-/// The panel follows the Settings window: profile cards are drawn like its grouped form
-/// sections (12 pt corners, measured from Settings), and the footer like menu items.
+/// The panel follows the theme's Settings window: profile cards are drawn like its grouped
+/// form sections (`sectionBox`), and the footer like menu items.
 private enum PanelMetrics {
     static let inset: CGFloat = 8
-    static let cardRadius: CGFloat = 12
-    /// Menu items sit 5 pt inside the panel with a 6 pt highlight.
+    /// Menu items sit 5 pt inside the panel.
     static let menuInset: CGFloat = 5
-    static let menuRowRadius: CGFloat = 6
 }
 
 struct MenuBarPanel: View {
@@ -103,6 +110,7 @@ struct MenuBarPanel: View {
     var snapshotSelectedID: String? = nil
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
     @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
     @AppStorage(UsagePreferences.consentKey) private var consented = false
     @FocusState private var hasKeyboardFocus: Bool
@@ -146,6 +154,7 @@ struct MenuBarPanel: View {
         return items + [.settings, .quit]
     }
     /// Glass needs a live window; the offscreen snapshot and Reduce Transparency use opaque cards.
+    private var tokens: ThemeTokens { theme.tokens }
     private var highlighted: Item? {
         let item = isSnapshot ? snapshotSelectedID.map(Item.profile) : selection
         return item.flatMap { items.contains($0) ? $0 : nil }
@@ -174,9 +183,9 @@ struct MenuBarPanel: View {
             // The Settings page's own translucent material, so the wallpaper shows through the
             // panel the same way (opaque with Reduce Transparency). Snapshots use a sampled colour.
             if isSnapshot {
-                panelSnapshotBackground
+                PanelSnapshotBackground(theme: theme)
             } else {
-                MenuBarMaterial(material: .windowBackground).accessibilityHidden(true)
+                MenuBarMaterial(material: tokens.panelMaterial).accessibilityHidden(true)
             }
         }
         .background {
@@ -210,6 +219,17 @@ struct MenuBarPanel: View {
             return .handled
         }
         .onExitCommand(perform: closePanel)
+        #if DEBUG
+        .onChange(of: theme, initial: true) { _, theme in
+            guard !isSnapshot else { return }
+            MenuBarSnapshot.recordLive("panel", theme: theme) {
+                let renderer = ImageRenderer(content: MenuBarPanel(store: store, isSnapshot: true)
+                    .environment(\.theme, theme))
+                renderer.scale = 2
+                return renderer.nsImage
+            }
+        }
+        #endif
         .onAppear {
             guard !isSnapshot else { return }
             // Like a menu, every opening starts with nothing selected or expanded.
@@ -240,7 +260,7 @@ struct MenuBarPanel: View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("LarpCC").font(.system(size: 13, weight: .bold))
-                Text(statusLine).foregroundStyle(MenuBarInk.supportingInk)
+                Text(statusLine).foregroundStyle(SettingsTypography.supportingInk)
             }
             Spacer(minLength: 8)
             if store.usageLoading || store.busy {
@@ -305,7 +325,7 @@ struct MenuBarPanel: View {
                 ScrollView { content }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(idealHeight: listHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: tokens.sectionRadius, style: .continuous))
                     .onChange(of: selection) { _, item in
                         if let item { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(item) } }
                     }
@@ -459,10 +479,10 @@ struct MenuBarPanel: View {
             .font(.system(size: 13))
             .foregroundStyle(selected ? text : .primary)
             .padding(.horizontal, 9)
-            .frame(height: 24)
+            .frame(height: tokens.menuRowHeight)
             .opacity(enabled ? 1 : 0.45)
             .background {
-                RoundedRectangle(cornerRadius: PanelMetrics.menuRowRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: tokens.menuRowRadius, style: .continuous)
                     .fill(selected ? Color(nsColor: .selectedContentBackgroundColor) : .clear)
             }
             .contentShape(Rectangle())
@@ -578,7 +598,7 @@ private struct MenuBarWindowSizer: NSViewRepresentable {
 // MARK: - Cards
 
 private extension View {
-    /// A profile card drawn like a Settings form section: a faint fill with 12 pt corners.
+    /// A profile card drawn like the theme's Settings form section (`sectionBox`).
     /// The selection is an outline, as Settings groups never tint.
     func panelCard(highlighted: Bool) -> some View {
         modifier(PanelCard(highlighted: highlighted))
@@ -588,12 +608,13 @@ private extension View {
 private struct PanelCard: ViewModifier {
     let highlighted: Bool
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.theme) private var theme
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: PanelMetrics.cardRadius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: theme.tokens.sectionRadius, style: .continuous)
         let strong = contrast == .increased
         content
-            .background(shape.fill(Color.primary.opacity(0.03)))
+            .sectionBox(theme.tokens)
             .overlay {
                 if highlighted {
                     shape.strokeBorder(Color.primary.opacity(strong ? 0.85 : 0.35), lineWidth: strong ? 2 : 1)
@@ -640,11 +661,23 @@ private func isDark(_ appearance: NSAppearance) -> Bool {
     return match == .darkAqua || match == .accessibilityHighContrastDarkAqua
 }
 
-/// Offscreen snapshots cannot draw the material; they use the Settings page colour sampled
-/// over a desktop on macOS 26 (dark: lightly tinted by the wallpaper).
-private let panelSnapshotBackground = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor(srgbRed: 0.106, green: 0.129, blue: 0.137, alpha: 1) : .white
-})
+/// Offscreen snapshots cannot draw the material; they use its colour sampled over a desktop
+/// on macOS 26: the Settings page (Tahoe) or the sidebar (Sequoia, Sonoma).
+private struct PanelSnapshotBackground: View {
+    let theme: Theme
+
+    var body: some View {
+        let tahoe = theme == .tahoe
+        Color(nsColor: NSColor(name: nil) { appearance in
+            switch (isDark(appearance), tahoe) {
+            case (true, true): return NSColor(srgbRed: 0.106, green: 0.129, blue: 0.137, alpha: 1)
+            case (false, true): return .white
+            case (true, false): return NSColor(srgbRed: 0.157, green: 0.2, blue: 0.204, alpha: 1)
+            case (false, false): return NSColor(srgbRed: 0.882, green: 0.906, blue: 0.91, alpha: 1)
+            }
+        })
+    }
+}
 
 // MARK: - Profile card
 
@@ -655,6 +688,7 @@ private struct MenuBarProfileSummary: View {
     let source: UsageSource
     let now: Date
     let expanded: Bool
+    @Environment(\.theme) private var theme
 
     private var kinds: [UsageWindowKind] { UsageWindowKind.allCases.filter { $0.window(in: report) != nil } }
 
@@ -666,7 +700,9 @@ private struct MenuBarProfileSummary: View {
                     ProfileRing(provider: profile.provider, session: report?.fiveHour)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.name).font(.system(size: 13)).lineLimit(1)
-                        Text(subtitle).font(.system(size: 11)).foregroundStyle(MenuBarInk.supportingInk).monospacedDigit()
+                        Text(subtitle).font(.system(size: theme.tokens.descriptionSize))
+                            .foregroundStyle(SettingsTypography.supportingInk)
+                            .monospacedDigit()
                     }
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.down")
@@ -694,7 +730,7 @@ private struct MenuBarProfileSummary: View {
             CardRow {
                 Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
                     .font(.system(size: 11))
-                    .foregroundStyle(MenuBarInk.supportingInk)
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -720,7 +756,7 @@ private struct MenuBarProfileSummary: View {
     private func meterRow(_ kind: UsageWindowKind, _ window: UsageWindow) -> some View {
         let level = UsageLevel(leftPercent: window.leftPercent)
         return GridRow {
-            Text(kind.title).foregroundStyle(MenuBarInk.supportingInk)
+            Text(kind.title).foregroundStyle(SettingsTypography.supportingInk)
             UsageMeter(leftPercent: window.leftPercent, level: level)
             Text("\(Int(window.leftPercent.rounded()))%")
                 .fontWeight(.semibold)
@@ -729,7 +765,7 @@ private struct MenuBarProfileSummary: View {
             // Fixed widths keep every card's meter the same length.
             Label(resetText(window), systemImage: "clock")
                 .labelStyle(ResetLabelStyle())
-                .foregroundStyle(MenuBarInk.supportingInk)
+                .foregroundStyle(SettingsTypography.supportingInk)
                 .frame(width: 58, alignment: .trailing)
         }
         .monospacedDigit()
@@ -832,13 +868,22 @@ private struct ResetLabelStyle: LabelStyle {
 private struct UsageMeter: View {
     let leftPercent: Double
     let level: UsageLevel
+    @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var fill: Color {
+        if level == .critical && theme != .tahoe && colorScheme == .dark {
+            return Color(red: 1, green: 0.53, blue: 0.49)
+        }
+        return level.tint ?? Color.primary.opacity(0.7)
+    }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.12))
                 Capsule()
-                    .fill(level.tint ?? Color.primary.opacity(0.7))
+                    .fill(fill)
                     .frame(width: max(leftPercent > 0 ? 4 : 0, proxy.size.width * leftPercent / 100))
             }
         }
@@ -862,8 +907,8 @@ private extension UsageLevel {
     var textTint: Color? {
         switch self {
         case .normal: return nil
-        case .low: return MenuBarInk.warningInk
-        case .critical: return MenuBarInk.criticalInk
+        case .low: return SettingsTypography.warningInk
+        case .critical: return SettingsTypography.criticalInk
         }
     }
 }

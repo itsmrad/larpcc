@@ -56,6 +56,52 @@ references are never displayed or logged. The bundled frozen schema validates
 required fields, enums, numeric strings and rejects unknown fields before typed
 decoding; the workflow checks its bytes against the merged source contract.
 
+## Themes
+
+General › System › Theme picks the look of LarpCC’s own content: **Automatic**
+(the default), **Tahoe**, **Sequoia** or **Sonoma**. Automatic matches the
+running macOS (26 and later Tahoe, 15 Sequoia, 14 Sonoma). The setting is
+stored in UserDefaults with the other view preferences, is separate from
+Light/Dark/System, and restyles the open Settings window, the menu bar panel
+and the status item at once. Tahoe needs Liquid Glass, so on macOS 14 and 15
+it reads “Tahoe — Requires macOS 26” and can’t be chosen; a stored Tahoe falls
+back to Automatic there.
+
+- **Tahoe** is the macOS 26 design: the floating glass sidebar and the
+  system’s grouped forms (12 pt sections, no border).
+- **Sequoia** has an edge-to-edge sidebar on the sidebar material with a
+  hairline and a search field at its top, and grouped sections with 10 pt
+  corners and hairline borders on a light grey page.
+- **Sonoma** is like Sequoia with denser sidebar rows and 8 pt sections.
+
+The menu bar panel follows the theme’s Settings window so the two match. Its
+background is the translucent material that shows the wallpaper in that
+Settings window (the page material in Tahoe, the sidebar material in Sequoia
+and Sonoma). Its cards are drawn with the same section box as that theme’s
+forms (`sectionBox`: radius, fill, hairline), descriptions use the form’s
+size, and the footer items use that release’s menu-item height and highlight
+radius.
+
+macOS draws the window frame, title bar and toolbar controls, traffic lights,
+standard controls such as switches and pop-ups, and the menu bar itself. Those
+follow the running macOS, not the theme. On macOS 14 and 15 the system already
+draws grouped forms in that release’s style, so LarpCC draws its own sections
+only when an earlier look runs on macOS 26. Each theme keeps Reduce
+Transparency (materials and glass turn opaque) and Increase Contrast (firm
+borders on cards and the selection). Low and nearly-out percentages use
+appearance-aware text colors. The selected card is outlined, and the text
+colors reach 4.5:1 on the sampled card backgrounds. Tahoe leaves sidebar density
+to the system setting. Sequoia and Sonoma set their own.
+
+For screenshots in debug builds, `--theme=tahoe|sequoia|sonoma` overrides the setting
+for one launch. Settings, the panel and the status item all read
+the one stored setting through `.themed()`, so a change shows at once, even in
+a panel that is already open. `ThemePropagationTests` checks that a change
+reaches a view under `.themed()`; that the three scene roots use it was checked
+live with `--menubar-live-snapshots`. In debug
+builds, `--menubar-live-snapshots=<abs dir>` makes the running status item and
+panel write a PNG each time their theme changes, to check that live.
+
 ## Menu bar
 
 The item is on by default under General › Menu Bar. For Codex and Claude it
@@ -133,6 +179,28 @@ with `screencapture -x -o -l <windowID>`. Link debug builds the way
 `scripts/bundle.sh` does (`-Xlinker -platform_version …`); otherwise macOS
 draws the app in its compatibility style with small window corners.
 
+### Snapshot CI
+
+Every pull request that touches `apps/macos` runs the **macOS Snapshots**
+workflow. It calls `scripts/snapshots.sh`, which builds a debug app (linked
+like `scripts/bundle.sh`) and renders, with sample data only, every Settings
+page (`settings-<page>-<theme>-<appearance>.png`, one per sample profile too),
+the menu bar panel collapsed, expanded, selected, on a short screen and with
+accessibility settings (`panel-<variant>-<theme>-<appearance>.png`), and the
+status item (`status-item-<theme>-lightdark.png`) in Tahoe, Sequoia and Sonoma,
+light and dark. `index.md` lists the files and which macOS drew them.
+
+```sh
+gh run list --workflow 'macOS Snapshots' --branch <branch>
+gh run download <run id> -n snapshots -D /tmp/snapshots
+```
+
+Locally on a Mac: `scripts/snapshots.sh /tmp/snapshots` (it opens and closes
+the Settings window once per page). In debug builds,
+`--settings-snapshot=<abs path.png>` with `--page=`, `--theme=` and
+`--appearance=` captures the real Settings window (`screencapture -l`, or an
+in-process bitmap with `--settings-snapshot-method=cache`) and exits.
+
 ### Native Mac checklist
 
 - **A. Status item** Confirm the Codex ring before the Claude ring in sample
@@ -167,6 +235,10 @@ draws the app in its compatibility style with small window corners.
   the status item in light and dark. Compare the panel corner with the
   previous release. Check Increase Contrast and Reduce Transparency with the
   accessibility snapshot or the system settings.
+- **J. Themes** Switch Theme between Automatic, Tahoe, Sequoia and Sonoma with
+  Settings and the panel open, and confirm both restyle at once in light and
+  dark. Check the sidebar search and title placement in Sequoia and Sonoma,
+  and that Tahoe reads “Requires macOS 26” on macOS 14 or 15.
 
 From this directory:
 
