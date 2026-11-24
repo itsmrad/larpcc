@@ -66,6 +66,8 @@ fn table() -> Vec<VersionDescriptor> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Detection {
+    // Only the Unix probe produces a version; Windows never spawns (known limitation).
+    #[cfg_attr(not(unix), allow(dead_code))]
     Detected(String),
     /// No reviewed descriptor matches provider, OS, architecture and digest.
     Unapproved,
