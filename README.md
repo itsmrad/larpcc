@@ -7,7 +7,7 @@ not use them to share or resell accounts. LarpCC cannot guarantee that a provide
 will not restrict or suspend an account. Use it at your own risk and follow each
 provider's terms.
 
-**Provider CLI execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]`, human `status NAME` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. Binding a path does not qualify a provider, version, installation or account-isolation claim. On macOS, desktop dispatch has a separate admission gate for the official ChatGPT.app.
+**Provider CLI execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. `larp cc status NAME` reads profile metadata and reports the account as `not_qualified` while qualification rows are empty, without running the provider. Binding a path does not qualify a provider, version, installation or account-isolation claim. On macOS, desktop dispatch has a separate admission gate for the official ChatGPT.app.
 
 ## Install on macOS (local, unsigned)
 
@@ -189,9 +189,10 @@ Help and version exit 0. Usage errors and rebinds missing `--replace` exit 2; lo
 [JSON envelope](docs/contracts/cli-v1.md) to stdout, with empty stderr and exit
 0/1/2. Errors contain fixed safe messages, without supplied values or raw OS
 errors. Help/version work without root IO. JSON run/login/logout refuse
-`json_native_io` before root IO; JSON status is local metadata only, with
-`native_auth: not_observed`. It never queries an account. Unsupported future
-commands remain parser errors.
+`json_native_io` before root IO. JSON `status NAME` returns a `status.account`
+summary. Use `status NAME --no-account` for the local metadata-only `status`
+response with `native_auth: not_observed`. Unsupported future commands remain
+parser errors.
 
 Registry commands accept `--expected-revision REV`. The registry lock protects
 comparison before name resolution or mutation effects; a stale revision returns
