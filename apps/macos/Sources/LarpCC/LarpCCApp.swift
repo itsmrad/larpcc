@@ -13,6 +13,7 @@ struct LarpCCApp: App {
         }
         #if DEBUG
         MenuBarSnapshot.runIfRequested()
+        SettingsSnapshot.runIfRequested()
         #endif
     }
     var body: some Scene {
