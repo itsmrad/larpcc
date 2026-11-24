@@ -1797,5 +1797,91 @@
       "code": "statusline_unverifiable",
       "message": "LarpCC could not confirm that this profile has no statusLine."
     }
+  },
+  {
+    "schema": 1,
+    "command": "doctor",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "profile": {
+        "id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "state": "active",
+        "surfaces": {
+          "cli": {
+            "enabled": true,
+            "path": "/fixture/root/profiles/2/cli",
+            "state": "ok"
+          },
+          "desktop": {
+            "enabled": false,
+            "path": "/fixture/root/profiles/2/desktop",
+            "state": "ok"
+          }
+        },
+        "aliases": [
+          {
+            "name": "codex-45",
+            "profile_id": "2",
+            "surface": "cli",
+            "path": "/fixture/root/bin/codex-45",
+            "state": "ok"
+          }
+        ],
+        "desktop_binding": {
+          "path": null,
+          "recorded_version": null,
+          "detected_version": null,
+          "state": "unbound",
+          "qualified": false
+        }
+      },
+      "detected_versions": [
+        {
+          "provider": "codex",
+          "surface": "cli",
+          "binding": {
+            "path": "/fixture/vendor/codex",
+            "recorded_version": "1.2.3",
+            "detected_version": null,
+            "state": "ok",
+            "qualified": false
+          }
+        }
+      ],
+      "native_auth": "not_observed",
+      "native_rows": [],
+      "diagnostics": [
+        {
+          "code": "version_unapproved",
+          "message": "No reviewed version probe matches the codex executable."
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "provider.evidence",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "provider": "codex",
+      "path": "/fixture/vendor/codex",
+      "resolved_path": "/fixture/vendor/codex-native/codex",
+      "identity": {
+        "kind": "unix",
+        "dev": "16777230",
+        "ino": "4242"
+      },
+      "owner_uid": "501",
+      "mode": "0755",
+      "size": "1048576",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+      "cdhash": null,
+      "os": "macos",
+      "arch": "aarch64"
+    }
   }
 ]

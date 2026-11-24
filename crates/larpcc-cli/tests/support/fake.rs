@@ -211,7 +211,91 @@ fn run() -> io::Result<u32> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0))
 }
+// Stage 08 version modes. The probe env is clean, so the mode comes from the invented
+// descriptor's exact argv. The record is written next to this executable, outside the
+// probe home, so tests can assert the child env and that cleanup removed the home.
+fn version_mode(mode: &str) -> io::Result<u32> {
+    use std::io::Read;
+    let mut stdin = [0u8; 1];
+    let stdin_eof = matches!(io::stdin().read(&mut stdin), Ok(0));
+    let env: serde_json::Map<_, _> = std::env::vars_os()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                serde_json::Value::String(v.to_string_lossy().into_owned()),
+            )
+        })
+        .collect();
+    let record = serde_json::json!({
+        "args": std::env::args().skip(1).collect::<Vec<_>>(),
+        "pid": std::process::id(),
+        "cwd": std::env::current_dir()?.to_string_lossy(),
+        "stdin_eof": stdin_eof,
+        "env": env,
+    });
+    let exe = std::env::current_exe()?;
+    std::fs::write(
+        exe.with_extension(format!("probe-{mode}")),
+        serde_json::to_vec(&record)?,
+    )?;
+    // Leave state in both throwaway homes so cleanup has to remove real trees.
+    for key in ["HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"] {
+        if let Some(home) = std::env::var_os(key) {
+            let dir = std::path::Path::new(&home).join("written").join("nested");
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("state"), b"synthetic probe state\n")?;
+        }
+    }
+    let line = b"invented-cli 1.2.3 (fixture)\n";
+    let mut out = io::stdout().lock();
+    match mode {
+        "ok" => out.write_all(line)?,
+        "stderr" => {
+            out.write_all(line)?;
+            io::stderr().write_all(b"noise\n")?;
+        }
+        "nonzero" => {
+            out.write_all(line)?;
+            return Ok(3);
+        }
+        "oversize" => out.write_all(&[b'x'; 8192])?,
+        // Both streams near the combined cap at once (2 x 2100 > 4096).
+        "split" => {
+            out.write_all(&[b'x'; 2100])?;
+            io::stderr().write_all(&[b'x'; 2100])?;
+        }
+        "grammar" => out.write_all(b"invented-cli 1.2 (fixture)\n")?,
+        "lines" => {
+            out.write_all(line)?;
+            out.write_all(b"second\n")?;
+        }
+        "sleep" => std::thread::sleep(std::time::Duration::from_secs(30)),
+        #[cfg(unix)]
+        "stuck" => {
+            use std::os::unix::fs::PermissionsExt;
+            let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+            let stuck = home.join("stuck");
+            std::fs::create_dir(&stuck)?;
+            std::fs::write(stuck.join("file"), b"x")?;
+            std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o500))?;
+            out.write_all(line)?;
+        }
+        _ => return Err(io::Error::other("unknown synthetic version mode")),
+    }
+    out.flush()?;
+    Ok(0)
+}
 fn main() -> ExitCode {
+    if let Some(mode) = std::env::args_os().nth(1).and_then(|a| {
+        a.to_str()?
+            .strip_prefix("invented-version-")
+            .map(str::to_owned)
+    }) {
+        return match version_mode(&mode) {
+            Ok(code) => std::process::exit(code as i32),
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
     #[cfg(windows)]
     if std::env::var_os("LARPCC_FAKE_MODE").as_deref()
         == Some(std::ffi::OsStr::new("prepare-parent"))
