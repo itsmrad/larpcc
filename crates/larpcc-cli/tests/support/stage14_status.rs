@@ -313,6 +313,8 @@ fn stage14_json_contract() {
     assert_eq!(actual["data"]["provider_version"], "0.0.14-fixture");
     example["revision"] = actual["revision"].clone();
     example["data"]["provider_version"] = actual["data"]["provider_version"].clone();
+    // Stage 11 widens the fixture; this CLI still has no local usage reader.
+    example["data"]["usage"] = Value::Null;
     example["data"]["profile"]["id"] = "1".into();
     example["data"]["profile"]["aliases"] = serde_json::json!([]);
     for surface in ["cli", "desktop"] {
