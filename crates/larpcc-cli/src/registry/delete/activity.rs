@@ -192,6 +192,25 @@ fn scan(
 }
 
 #[cfg(any(test, target_os = "macos"))]
+fn resolved_profile_dir(dir: &[u8]) -> Result<Option<Vec<u8>>, ScanError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        // A different spelling cannot establish that the directory is unrelated.
+        let resolved = Path::new(std::ffi::OsStr::from_bytes(dir))
+            .canonicalize()
+            .map_err(|_| ScanError::Busy)?;
+        Ok(Some(resolved.as_os_str().as_bytes().to_vec()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        // shortcut: non-unix tests compare the raw spelling; upgrade when delete scans processes there.
+        Ok(None)
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
 fn scan_without_path(
     table: &impl ProcessTable,
     pid: i32,
@@ -210,25 +229,34 @@ fn scan_without_path(
         .stamp(pid, Some(before.start))
         .map_err(|_| ScanError::Busy)?
     else {
+        // The later stamp proved this PID exited or was reused.
         return Ok(());
     };
-    let Some(args) = args? else {
-        return Ok(());
-    };
-    let dir = user_data_dir(&args)?;
-    if after.exiting || dir.is_some_and(|dir| expected.contains(dir)) {
+    if after.exiting {
         return Err(ScanError::Busy);
     }
-    #[cfg(target_os = "macos")]
-    if let Some(dir) = dir {
-        use std::os::unix::ffi::OsStrExt;
-        // A different spelling cannot establish that the directory is unrelated.
-        let resolved = Path::new(std::ffi::OsStr::from_bytes(dir))
-            .canonicalize()
-            .map_err(|_| ScanError::Busy)?;
-        if expected.contains(resolved.as_os_str().as_bytes()) {
-            return Err(ScanError::Busy);
-        }
+    let Some(args) = args? else {
+        // ESRCH or missing argv does not clear a process that is still this start time.
+        return Err(ScanError::Busy);
+    };
+    let dir = user_data_dir(&args)?;
+    if dir.is_some_and(|dir| expected.contains(dir)) {
+        return Err(ScanError::Busy);
+    }
+    let Some(dir) = dir else {
+        return Ok(());
+    };
+    let Some(resolved) = resolved_profile_dir(dir)? else {
+        return Ok(());
+    };
+    let Some(again) = table
+        .stamp(pid, Some(before.start))
+        .map_err(|_| ScanError::Busy)?
+    else {
+        return Ok(());
+    };
+    if again.exiting || expected.contains(&resolved) {
+        return Err(ScanError::Busy);
     }
     Ok(())
 }
@@ -266,6 +294,19 @@ fn scan_candidate(
     };
     let dir = user_data_dir(&args).map_err(|_| ScanError::CandidateUncertain)?;
     if dir.is_some_and(|dir| expected.contains(dir)) {
+        return Err(ScanError::Busy);
+    }
+    let Some(dir) = dir else {
+        return Ok(());
+    };
+    let Some(resolved) = resolved_profile_dir(dir)? else {
+        return Ok(());
+    };
+    // The filesystem resolve sits between identity checks. Recheck before clearing.
+    if !same_process(table, pid, before, path)? {
+        return Ok(());
+    }
+    if expected.contains(&resolved) {
         return Err(ScanError::Busy);
     }
     Ok(())
@@ -345,7 +386,8 @@ mod tests {
         path: Option<&'static str>,
         paths: RefCell<VecDeque<io::Result<Option<PathBuf>>>>,
         stamps: RefCell<VecDeque<Option<Stamp>>>,
-        args: Option<&'static [u8]>,
+        args: Option<Vec<u8>>,
+        expected: Option<Vec<u8>>,
         argv_missing: bool,
         reads: Cell<usize>,
         listings: Cell<usize>,
@@ -353,7 +395,7 @@ mod tests {
     }
 
     impl Fixture {
-        fn candidate(stamps: &[Option<StartTime>], args: Option<&'static [u8]>) -> Self {
+        fn candidate(stamps: &[Option<StartTime>], args: Option<&[u8]>) -> Self {
             Self {
                 path: Some(HELPER),
                 paths: RefCell::default(),
@@ -368,7 +410,8 @@ mod tests {
                         })
                         .collect(),
                 ),
-                args,
+                args: args.map(Vec::from),
+                expected: None,
                 argv_missing: false,
                 reads: Cell::new(0),
                 listings: Cell::new(0),
@@ -387,7 +430,10 @@ mod tests {
         ) -> Result<(), ScanError> {
             scan(
                 self,
-                &HashSet::from([TARGET.as_bytes().to_vec()]),
+                &HashSet::from([self
+                    .expected
+                    .clone()
+                    .unwrap_or_else(|| TARGET.as_bytes().to_vec())]),
                 uncertain,
                 deadline,
             )
@@ -435,7 +481,7 @@ mod tests {
             if self.argv_missing {
                 return Ok(None);
             }
-            let args = self.args.ok_or(Error::AuthBusy)?;
+            let args = self.args.as_deref().ok_or(Error::AuthBusy)?;
             let mut packet = 2i32.to_ne_bytes().to_vec();
             packet.extend_from_slice(b"/fixture/Helper\0\0Helper\0");
             packet.extend_from_slice(args);
@@ -487,8 +533,20 @@ mod tests {
             assert_eq!(table.scan(|| Ok(())), Err(ScanError::CandidateUncertain));
             assert_eq!(table.reads.get(), 1);
         }
-        let table = Fixture::candidate(&stable, Some(b"--user-data-dir=/fixture/desktop-other\0"));
-        assert_eq!(table.scan(|| Ok(())), Ok(()));
+        // A real directory keeps this an unrelated success once spelling is resolved.
+        #[cfg(unix)]
+        {
+            let other = tempfile::tempdir().unwrap();
+            let unrelated = directory_arg(other.path());
+            let table = Fixture::candidate(&[Some((10, 0)); 4], Some(&unrelated));
+            assert_eq!(table.scan(|| Ok(())), Ok(()));
+        }
+        #[cfg(not(unix))]
+        {
+            let table =
+                Fixture::candidate(&stable, Some(b"--user-data-dir=/fixture/desktop-other\0"));
+            assert_eq!(table.scan(|| Ok(())), Ok(()));
+        }
     }
 
     #[test]
@@ -660,13 +718,149 @@ mod tests {
             ),
             (Some(matching), Some((11, 0)), false, Ok(())),
             (None, None, false, Ok(())),
-            (None, start, true, Ok(())),
+            (None, None, true, Ok(())),
+            (None, Some((11, 0)), true, Ok(())),
+            // ESRCH with the same live stamp is not proof the process is gone.
+            (None, start, true, Err(ScanError::Busy)),
         ] {
             let table = Fixture {
                 path: None,
                 paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
                 argv_missing,
                 ..Fixture::candidate(&[start, after], args)
+            };
+            assert_eq!(table.scan(|| Ok(())), expected);
+            assert_eq!(table.reads.get(), 1);
+            assert!(table.stamps.borrow().is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    fn path_bytes(path: &Path) -> Vec<u8> {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+
+    #[cfg(unix)]
+    fn directory_arg(path: &Path) -> Vec<u8> {
+        let mut arg = b"--user-data-dir=".to_vec();
+        arg.extend(path_bytes(path));
+        arg.push(0);
+        arg
+    }
+
+    #[test]
+    fn stage04_delete_live_enoent_without_argv_stays_busy() {
+        for exiting in [false, true] {
+            let table = Fixture {
+                path: None,
+                paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+                argv_missing: true,
+                ..Fixture::candidate(&[], None)
+            };
+            table.stamps.borrow_mut().extend([
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting: false,
+                }),
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting,
+                }),
+            ]);
+            assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
+            assert_eq!(table.reads.get(), 1);
+            assert!(table.stamps.borrow().is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_signed_candidate_resolves_directory_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let desktop = root.path().join("desktop");
+        std::fs::create_dir(&desktop).unwrap();
+        let link = root.path().join("alias");
+        std::os::unix::fs::symlink(&desktop, &link).unwrap();
+        let slash = root.path().join("desktop-slash");
+        std::fs::create_dir(&slash).unwrap();
+        let mut slash_arg = directory_arg(&slash);
+        slash_arg.pop();
+        slash_arg.extend(b"/\0");
+        for (arg, expected) in [
+            (
+                directory_arg(&link),
+                path_bytes(&desktop.canonicalize().unwrap()),
+            ),
+            (slash_arg, path_bytes(&slash.canonicalize().unwrap())),
+        ] {
+            let table = Fixture {
+                expected: Some(expected),
+                ..Fixture::candidate(&[Some((10, 0)); 4], Some(&arg))
+            };
+            assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
+            assert_eq!(table.reads.get(), 1);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_rechecks_identity_after_resolving_a_signed_candidate() {
+        let other = tempfile::tempdir().unwrap();
+        let arg = directory_arg(other.path());
+        let table = Fixture {
+            paths: RefCell::new(VecDeque::from([
+                Ok(Some(HELPER.into())),
+                Ok(Some(HELPER.into())),
+                Ok(Some(HELPER.into())),
+                Ok(Some("/Applications/Other.app/Contents/MacOS/Other".into())),
+            ])),
+            ..Fixture::candidate(&[Some((10, 0)); 4], Some(&arg))
+        };
+        assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
+        assert!(table.paths.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_unresolvable_signed_directory_stays_busy() {
+        let table = Fixture::candidate(
+            &[Some((10, 0)); 3],
+            Some(b"--user-data-dir=/fixture/desktop-missing\0"),
+        );
+        assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
+        assert_eq!(table.reads.get(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_enoent_resolution_rechecks_the_start_time_before_clearing() {
+        let other = tempfile::tempdir().unwrap();
+        let arg = directory_arg(other.path());
+        for exiting in [false, true] {
+            let table = Fixture {
+                path: None,
+                paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+                ..Fixture::candidate(&[], Some(&arg))
+            };
+            table.stamps.borrow_mut().extend([
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting: false,
+                }),
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting: false,
+                }),
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting,
+                }),
+            ]);
+            let expected = if exiting {
+                Err(ScanError::Busy)
+            } else {
+                Ok(())
             };
             assert_eq!(table.scan(|| Ok(())), expected);
             assert_eq!(table.reads.get(), 1);

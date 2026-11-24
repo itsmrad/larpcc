@@ -106,21 +106,26 @@ or safety failure. On macOS enumerate current-user processes. When the executabl
 path is available, read arguments only for executables inside Claude.app or
 ChatGPT.app bundle contents. Keep the official main-app signature requirements
 and verify nested helpers against the corresponding vendor team signature. An
-exact profile `--user-data-dir` argument match refuses deletion. Skip a process
-that exits or whose PID is reused during the scan, and skip denied path lookups
-that have yet to identify a candidate.
+exact profile `--user-data-dir` argument match refuses deletion. Signed
+candidates and the `ENOENT` fallback use the same directory comparison: resolve
+the argument and compare that filesystem object, so absolute symlinks, trailing
+slashes, and `/var` versus `/private/var` cannot hide a match. A malformed or
+unresolvable directory argument refuses deletion. Re-check process identity
+after that resolution, and only then clear a directory that is not the profile.
+Skip a process that exits or whose PID is reused during the scan, and skip
+denied path lookups that have yet to identify a candidate.
 
 If the initial path lookup returns `ENOENT`, as can happen after a running
-executable is unlinked, read its bounded argument vector and compare the process
-start time before and after the read. Skip an exited or reused PID, including
-`ESRCH` from the argument lookup. A matching directory, unreadable or malformed
-arguments, or an inconclusive process identity refuses deletion. Before clearing
-a nonmatching absolute directory argument, resolve its filesystem spelling:
-symlinks, `/var` versus `/private/var`, and trailing slashes must not hide a
-profile match. An unresolvable directory argument refuses deletion. A valid
-argument vector without a matching directory clears the process. Other
-unresolved initial path errors, failed or oversized enumeration, and failed
-signature validation of a live candidate also refuse deletion.
+executable is unlinked, read its bounded argument vector between process
+start-time probes. Skip the process only when the probe after the read shows
+that it exited or its PID was reused. `ESRCH` or missing arguments do not prove
+that on their own: a matching live stamp, including one with the exiting flag
+set, refuses deletion. A matching directory, unreadable or malformed arguments,
+or an inconclusive process identity also refuses deletion. A valid argument
+vector whose resolved directory is not the profile, confirmed against that same
+live stamp, clears the process. Other unresolved initial path errors, failed or
+oversized enumeration, and failed signature validation of a live candidate also
+refuse deletion.
 
 If the only blockers are live candidates that are mid-exit or whose liveness,
 path, or arguments could not be read conclusively, wait 150 ms and scan again.
