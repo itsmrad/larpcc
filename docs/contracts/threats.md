@@ -50,6 +50,14 @@ Standard 8-4-4-4-12 hex GUIDs and lowercase hex and Nix base32 hashes can be use
 in command paths. The finite shape list leaves other secret formats possible,
 so callers must provide only known non-secret paths.
 
+## Desktop dispatch
+
+| Threat | Control and remaining exposure |
+|---|---|
+| Writes to the default Codex home | D34 repeated the exact ChatGPT.app launch after stopping all processes using `~/.codex` and establishing a quiet baseline. The metadata diff for `~/.codex` was empty and `lsof` found no open files there. ChatGPT.app started its own CodexCLI app-server with `CODEX_HOME=<T>/cli`. Profile state went to `<T>/cli` (343 entries) and the Chromium profile at `<T>/desktop`. |
+| Shared runtime files | ChatGPT.app extracts Node runtime binaries into `~/.cache/codex-runtimes`, a shared directory outside `CODEX_HOME` isolation. The cache holds only runtime binaries. `profile delete` leaves the shared cache in place. |
+| Stale nested signature verdict | Bind validates nested code and resources. On open, the cached verdict is keyed by executable and Info.plist metadata and the code directory hash. Changes limited to nested code or resources can leave the key unchanged and go undetected on a cache hit. |
+
 ## Remote
 
 These controls apply to [Stage 13 SSH requests](../stages/13-remote-hosts.md).
