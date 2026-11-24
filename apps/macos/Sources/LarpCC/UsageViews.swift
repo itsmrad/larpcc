@@ -141,9 +141,17 @@ struct UsageSection: View {
     var body: some View {
         let report = store.usage[profile.id]
         Section {
+            if let label = report?.planLabel {
+                LabeledContent("Plan", value: label)
+                    .foregroundStyle(SettingsTypography.supportingInk)
+            }
             if let window = report?.fiveHour { UsageWindowRow(title: "5-hour window", window: window) }
             if let window = report?.weekly { UsageWindowRow(title: "Weekly window", window: window) }
-            if report?.fiveHour == nil && report?.weekly == nil {
+            let extra = report?.extra ?? []
+            ForEach(extra.indices, id: \.self) { index in
+                UsageWindowRow(title: extra[index].label, window: extra[index].window)
+            }
+            if report == nil {
                 if store.usageLoading {
                     Text("Reading usage…")
                         .foregroundStyle(SettingsTypography.supportingInk)
@@ -184,7 +192,7 @@ struct UsageSection: View {
 
 /// "Limit resets" row; always shown, with wording shared with the menu bar.
 struct ResetAvailabilityRow: View {
-    let credits: Int?
+    let credits: UsageResetCredits?
     var body: some View {
         LabeledContent {
             Text(ResetAvailability.text(credits: credits))
@@ -192,7 +200,7 @@ struct ResetAvailabilityRow: View {
                 .foregroundStyle(SettingsTypography.supportingInk)
         } label: {
             Text("Limit resets")
-            if let credits, credits > 0 {
+            if credits?.state == .available {
                 Text("Each one resets a window early.")
                     .foregroundStyle(SettingsTypography.supportingInk)
             }
@@ -210,22 +218,35 @@ private struct UsageWindowRow: View {
                 VStack(alignment: .leading, spacing: SettingsSpacing.tight) {
                     Text(title)
                         .font(SettingsTypography.heading)
-                    if let resetsAt = window.resetsAt {
+                    if let reason = window.reason {
+                        Text(reason.text)
+                            .font(SettingsTypography.supporting)
+                            .foregroundStyle(SettingsTypography.supportingInk)
+                    } else if let resetsAt = window.resetsAt {
                         TimelineView(.everyMinute) { context in
-                            Text(resetsAt > context.date ? "Resets in \(UsageTime.span(resetsAt.timeIntervalSince(context.date)))" : "Reset time passed. Refresh usage.")
+                            Text(resetsAt > context.date ? "Resets in \(UsageTime.span(resetsAt.timeIntervalSince(context.date)))" : "Reset due")
                         }
                         .font(SettingsTypography.supporting)
                         .foregroundStyle(SettingsTypography.supportingInk)
                     }
                 }
                 Spacer()
-                Text("\(Int(window.leftPercent.rounded()))% left")
-                    .monospacedDigit()
-                    .foregroundStyle(window.leftPercent < 10 ? SettingsTypography.criticalInk : Color.primary)
+                if let left = window.leftPercent {
+                    Text("\(Int(left.rounded()))% left")
+                        .monospacedDigit()
+                        .foregroundStyle(left < 10 ? SettingsTypography.criticalInk : Color.primary)
+                }
             }
-            ProgressView(value: window.leftPercent, total: 100)
-                .tint(window.levelColor)
-                .accessibilityHidden(true)
+            if let left = window.leftPercent {
+                ProgressView(value: left, total: 100)
+                    .tint(usageColor(left))
+                    .accessibilityHidden(true)
+            }
+            if let pace = UsagePace.text(window) {
+                Text(pace)
+                    .font(SettingsTypography.supporting)
+                    .foregroundStyle(SettingsTypography.supportingInk)
+            }
         }
         .padding(.vertical, SettingsSpacing.tight)
         .accessibilityElement(children: .combine)
@@ -251,13 +272,11 @@ struct UsageUpdatedText: View {
     }
 }
 
-extension UsageWindow {
-    var levelColor: Color {
-        switch leftPercent {
-        case ..<10: return .red
-        case ..<25: return .orange
-        default: return .green
-        }
+private func usageColor(_ leftPercent: Double) -> Color {
+    switch UsageLevel(leftPercent: leftPercent) {
+    case .critical: return .red
+    case .low: return .orange
+    case .normal: return .green
     }
 }
 

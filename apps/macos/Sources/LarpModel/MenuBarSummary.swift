@@ -9,11 +9,10 @@ public enum MenuBarMode: String, Sendable, CaseIterable {
     public var title: String { self == .icon ? "Icon only" : "Session usage" }
 }
 
-/// The two rolling usage windows and their lengths.
+/// The two primary rolling usage windows.
 public enum UsageWindowKind: String, Sendable, CaseIterable {
     case fiveHour, weekly
     public var title: String { self == .fiveHour ? "5-hour" : "Weekly" }
-    public var length: TimeInterval { self == .fiveHour ? 5 * 3600 : 7 * 86_400 }
     public func window(in report: UsageReport?) -> UsageWindow? {
         self == .fiveHour ? report?.fiveHour : report?.weekly
     }
@@ -37,12 +36,16 @@ public enum UsageLevel: Sendable, Equatable {
 
 /// Limit-reset credits wording. Never blank.
 public enum ResetAvailability {
-    public static func text(credits: Int?) -> String {
-        guard let credits, credits >= 0 else { return "Reset info not available" }
-        switch credits {
-        case 0: return "No resets available"
-        case 1: return "1 reset available"
-        default: return "\(credits) resets available"
+    public static func text(credits: UsageResetCredits?) -> String {
+        guard let credits else { return "Reset info not available" }
+        switch credits.state {
+        case .none: return "No resets available"
+        case .unsupported, .notRecorded: return "Reset info not available"
+        case .available:
+            guard let count = credits.count else { return "Reset info not available" }
+            let available = count == 1 ? "1 reset available" : "\(count) resets available"
+            guard credits.expiresState == .recorded, let expiresAt = credits.expiresAt else { return available }
+            return "\(available) · Expires \(expiresAt.formatted(date: .abbreviated, time: .shortened))"
         }
     }
 }
@@ -82,46 +85,29 @@ public enum ResetCountdown {
     }
 }
 
-/// Elapsed-time pace: how much would be left if usage were spread evenly over the window.
+/// Formats the pace supplied by the CLI at this window's capture time.
 public enum UsagePace {
-    /// Percentage points of slack on either side of even pace.
-    public static let margin = 5.0
-    public static let outOfDate = "Out of date — refresh"
-
-    /// True once the window's reset time has passed: the saved numbers describe a window that has ended.
-    public static func isOutOfDate(_ window: UsageWindow, now: Date) -> Bool {
-        window.resetsAt.map { $0 <= now } ?? false
-    }
-
-    /// Compares quota left with time left and projects exhaustion at the average rate, as of the
-    /// moment the sample was taken (`capturedAt`), so an older sample never drifts. Without a
-    /// capture time there is no pace. After the reset time has passed the estimate is out of date.
-    public static func text(_ window: UsageWindow, kind: UsageWindowKind, capturedAt: Date?, now: Date,
-                            spoken: Bool = false) -> String? {
-        if isOutOfDate(window, now: now) { return spoken ? "out of date, refresh" : outOfDate }
-        guard let capturedAt, let remaining = window.resetsAt?.timeIntervalSince(capturedAt),
-              remaining > 0, remaining < kind.length else { return nil }
-        let elapsed = kind.length - remaining
-        let left = window.leftPercent
-        let delta = left - remaining / kind.length * 100
-        let used = 100 - left
-
+    public static func text(_ window: UsageWindow, spoken: Bool = false) -> String? {
+        guard let pace = window.pace else { return nil }
+        let delta = pace.reservePercent
         let status: String
-        if abs(delta) <= margin {
+        if abs(delta) <= 5 {
             status = "On pace"
         } else {
             let amount = Int(abs(delta).rounded())
             let unit = spoken ? " percent" : "%"
             status = "\(amount)\(unit) in \(delta > 0 ? "reserve" : "deficit")"
         }
-        let timeToEmpty = used > 0 ? left / (used / elapsed) : .infinity
         let projection: String
-        if timeToEmpty < remaining {
-            let span = timeToEmpty == 0 ? (spoken ? "0 minutes" : "0m")
-                : (spoken ? UsageSpan.spoken(timeToEmpty) : UsageSpan.compact(timeToEmpty))
+        if pace.lastsUntilReset == true {
+            projection = "Lasts until reset"
+        } else if let runsOut = pace.runsOutAt, let captured = window.capturedAt {
+            let seconds = runsOut.timeIntervalSince(captured)
+            let span = seconds <= 0 ? (spoken ? "0 minutes" : "0m")
+                : (spoken ? UsageSpan.spoken(seconds) : UsageSpan.compact(seconds))
             projection = "Runs out in \(span)"
         } else {
-            projection = "Lasts until reset"
+            return status
         }
         return status + (spoken ? ", " : " · ") + projection
     }
@@ -135,7 +121,7 @@ public enum MenuBarSummary {
                                           usage: [String: UsageReport]) -> Double? {
         let candidates = orderedProfiles(profiles, usage: usage, provider: provider)
         let profile = candidates.first { $0.id == chosenProfileID }
-            ?? candidates.first { usage[$0.id]?.fiveHour != nil }
+            ?? candidates.first { usage[$0.id]?.fiveHour?.leftPercent != nil }
         return profile.flatMap { usage[$0.id]?.fiveHour?.leftPercent }
     }
 
@@ -174,17 +160,18 @@ public enum MenuBarSummary {
         }
     }
 
-    /// VoiceOver text for one window row, e.g.
-    /// "5-hour window, 62 percent left, resets in 2 hours 13 minutes, low".
-    public static func spokenRow(kind: UsageWindowKind, window: UsageWindow, capturedAt: Date?, now: Date) -> String {
-        var parts = ["\(kind.title) window", "\(Int(window.leftPercent.rounded())) percent left"]
-        if !UsagePace.isOutOfDate(window, now: now) {
-            parts.append(ResetCountdown.spoken(resetsAt: window.resetsAt, now: now))
+    /// VoiceOver text for a meter or its unavailable state.
+    public static func spokenRow(title: String, window: UsageWindow, now: Date) -> String {
+        var parts = [title]
+        if let left = window.leftPercent {
+            parts.append("\(Int(left.rounded())) percent left")
+            if let resetsAt = window.resetsAt {
+                parts.append(ResetCountdown.spoken(resetsAt: resetsAt, now: now))
+            }
+            if let word = UsageLevel(leftPercent: left).word { parts.append(word.lowercased()) }
         }
-        if let word = UsageLevel(leftPercent: window.leftPercent).word { parts.append(word.lowercased()) }
-        if let pace = UsagePace.text(window, kind: kind, capturedAt: capturedAt, now: now, spoken: true) {
-            parts.append(pace)
-        }
+        if let reason = window.reason { parts.append(reason.text) }
+        if let pace = UsagePace.text(window, spoken: true) { parts.append(pace) }
         return parts.joined(separator: ", ")
     }
 }

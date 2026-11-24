@@ -418,7 +418,7 @@ struct MenuBarPanel: View {
             }
             .id(item)
             if isExpanded {
-                MenuBarProfileDetail(report: report, now: now) {
+                MenuBarProfileDetail(report: report) {
                     if profile.desktopEnabled {
                         detailButton(.openDesktop(profile.id), title: "Open \(profile.provider.desktopApp)",
                                      enabled: canOpenDesktop(profile))
@@ -690,7 +690,13 @@ private struct MenuBarProfileSummary: View {
     let expanded: Bool
     @Environment(\.theme) private var theme
 
-    private var kinds: [UsageWindowKind] { UsageWindowKind.allCases.filter { $0.window(in: report) != nil } }
+    private var windows: [(title: String, window: UsageWindow)] {
+        let primary: [(String, UsageWindow)] = UsageWindowKind.allCases.compactMap { kind in
+            kind.window(in: report).map { (kind.title, $0) }
+        }
+        let extra = report?.extra ?? []
+        return primary + extra.prefix(expanded ? extra.count : 2).map { ($0.label, $0.window) }
+    }
 
     var body: some View {
         // Rows like a Settings form section: title and description, then the meters, then credits.
@@ -705,6 +711,12 @@ private struct MenuBarProfileSummary: View {
                             .monospacedDigit()
                     }
                     Spacer(minLength: 8)
+                    if let label = report?.planLabel {
+                        Text(label)
+                            .font(.system(size: theme.tokens.descriptionSize))
+                            .foregroundStyle(SettingsTypography.supportingInk)
+                            .lineLimit(1)
+                    }
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.tertiary)
@@ -712,14 +724,13 @@ private struct MenuBarProfileSummary: View {
                         .accessibilityHidden(true)
                 }
             }
-            if !kinds.isEmpty {
+            let windows = self.windows
+            if !windows.isEmpty {
                 CardSeparator()
                 CardRow {
                     Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
-                        ForEach(kinds, id: \.self) { kind in
-                            if let window = kind.window(in: report) {
-                                meterRow(kind, window)
-                            }
+                        ForEach(windows.indices, id: \.self) { index in
+                            meterRow(windows[index].title, windows[index].window)
                         }
                     }
                     .font(.system(size: 11))
@@ -742,48 +753,59 @@ private struct MenuBarProfileSummary: View {
 
     private var subtitle: String {
         guard let report else { return source == .local ? "No usage saved yet" : "Not refreshed yet" }
-        if kinds.isEmpty { return "No limits reported" }
+        if windows.isEmpty { return "No limits reported" }
         let sourceTitle = report.source.title
-        if kinds.contains(where: { kind in kind.window(in: report).map { UsagePace.isOutOfDate($0, now: now) } ?? false }) {
-            return "\(UsagePace.outOfDate) · \(sourceTitle)"
-        }
         guard let captured = report.capturedAt else { return sourceTitle }
         let age = now.timeIntervalSince(captured)
         if age < 60 { return "Updated just now · \(sourceTitle)" }
         return "Updated \(UsageSpan.compact(age, roundingUp: false)) ago · \(sourceTitle)"
     }
 
-    private func meterRow(_ kind: UsageWindowKind, _ window: UsageWindow) -> some View {
-        let level = UsageLevel(leftPercent: window.leftPercent)
-        return GridRow {
-            Text(kind.title).foregroundStyle(SettingsTypography.supportingInk)
-            UsageMeter(leftPercent: window.leftPercent, level: level)
-            Text("\(Int(window.leftPercent.rounded()))%")
-                .fontWeight(.semibold)
-                .foregroundStyle(level.textTint ?? .primary)
-                .frame(width: 32, alignment: .trailing)
-            // Fixed widths keep every card's meter the same length.
-            Label(resetText(window), systemImage: "clock")
-                .labelStyle(ResetLabelStyle())
-                .foregroundStyle(SettingsTypography.supportingInk)
-                .frame(width: 58, alignment: .trailing)
+    @ViewBuilder
+    private func meterRow(_ title: String, _ window: UsageWindow) -> some View {
+        if let left = window.leftPercent {
+            let level = UsageLevel(leftPercent: left)
+            GridRow {
+                Text(title).foregroundStyle(SettingsTypography.supportingInk)
+                UsageMeter(leftPercent: left, level: level)
+                Text("\(Int(left.rounded()))%")
+                    .fontWeight(.semibold)
+                    .foregroundStyle(level.textTint ?? .primary)
+                    .frame(width: 32, alignment: .trailing)
+                if let resetsAt = window.resetsAt {
+                    let seconds = resetsAt.timeIntervalSince(now)
+                    Label(seconds > 0 ? UsageSpan.compact(seconds) : "Reset due", systemImage: "clock")
+                        .labelStyle(ResetLabelStyle())
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                        .frame(width: 58, alignment: .trailing)
+                } else {
+                    Color.clear.frame(width: 58, height: 0)
+                }
+            }
+            .monospacedDigit()
+            if let reason = window.reason {
+                GridRow {
+                    Color.clear.frame(width: 0, height: 0)
+                    Text(reason.text)
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                        .gridCellColumns(3)
+                }
+            }
+        } else {
+            GridRow {
+                Text(title).foregroundStyle(SettingsTypography.supportingInk)
+                Text(window.reason?.text ?? "Not available")
+                    .foregroundStyle(SettingsTypography.supportingInk)
+                    .gridCellColumns(3)
+            }
         }
-        .monospacedDigit()
-    }
-
-    /// Time to reset; a dash when unknown or already past (the subtitle then says the data is out of date).
-    private func resetText(_ window: UsageWindow) -> String {
-        guard let left = window.resetsAt?.timeIntervalSince(now), left > 0 else { return "—" }
-        return UsageSpan.compact(left)
     }
 
     private var spokenSummary: String {
         var parts = [profile.name, profile.provider.title, subtitle]
-        for kind in kinds {
-            if let window = kind.window(in: report) {
-                parts.append(MenuBarSummary.spokenRow(kind: kind, window: window,
-                                                      capturedAt: report?.capturedAt, now: now))
-            }
+        if let label = report?.planLabel { parts.append(label) }
+        for (title, window) in windows {
+            parts.append(MenuBarSummary.spokenRow(title: title, window: window, now: now))
         }
         parts.append(ResetAvailability.text(credits: report?.resetCredits))
         return parts.joined(separator: ", ")
@@ -793,16 +815,18 @@ private struct MenuBarProfileSummary: View {
 /// Shown inside a card after a click or Space: pace and actions.
 private struct MenuBarProfileDetail<Actions: View>: View {
     let report: UsageReport?
-    let now: Date
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            let paces = self.paces
             if !paces.isEmpty {
                 CardSeparator()
                 CardRow {
                     Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 4) {
-                        ForEach(paces, id: \.kind) { line("\($0.kind.title) pace", $0.text) }
+                        ForEach(paces.indices, id: \.self) { index in
+                            line("\(paces[index].title) pace", paces[index].text)
+                        }
                     }
                     .font(.system(size: 11))
                 }
@@ -813,11 +837,12 @@ private struct MenuBarProfileDetail<Actions: View>: View {
     }
 
     /// Pace as of the sample's capture time.
-    private var paces: [(kind: UsageWindowKind, text: String)] {
-        UsageWindowKind.allCases.compactMap { kind in
-            kind.window(in: report)
-                .flatMap { UsagePace.text($0, kind: kind, capturedAt: report?.capturedAt, now: now) }
-                .map { (kind, $0) }
+    private var paces: [(title: String, text: String)] {
+        let primary: [(String, String)] = UsageWindowKind.allCases.compactMap { kind in
+            kind.window(in: report).flatMap { UsagePace.text($0) }.map { (kind.title, $0) }
+        }
+        return primary + (report?.extra ?? []).compactMap { extra in
+            UsagePace.text(extra.window).map { (extra.label, $0) }
         }
     }
 
@@ -836,11 +861,10 @@ private struct ProfileRing: View {
     let session: UsageWindow?
 
     var body: some View {
-        let left = session?.leftPercent ?? 0
         ZStack {
             Circle().fill(Color.primary.opacity(0.07))
             Circle().strokeBorder(Color.primary.opacity(0.1), lineWidth: 2)
-            if session != nil {
+            if let left = session?.leftPercent {
                 Circle()
                     .inset(by: 1)
                     .trim(from: 0, to: left / 100)

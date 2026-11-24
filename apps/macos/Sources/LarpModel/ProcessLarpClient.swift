@@ -111,9 +111,16 @@ public actor ProcessLarpClient: LarpClient {
         displayed = state
         return state
     }
-    /// Not wired until the `larp cc usage` contract merges.
     public func usage(source: UsageSource) async throws -> [String: UsageReport] {
-        throw ClientError.commandUnavailable
+        guard source == .local else { throw ClientError.commandUnavailable }
+        let output = try await transport.run(["cc", "usage", "--local", "--json"], mutation: false)
+        try Task.checkCancellation()
+        let envelope = try CLIContract.decode(output.stdout, exit: output.status)
+        if envelope.command == "parse", !envelope.ok { throw ClientError.commandUnavailable }
+        guard envelope.command == "usage" else { throw ClientError.invalidResponse }
+        guard envelope.ok else { throw ClientError.operationRefused }
+        guard case let .usage(usage) = envelope.data else { throw ClientError.invalidResponse }
+        return try usage.localReports()
     }
     /// Display-only: `<root>/profiles/<id>/cli` yields `<root>`. Never used as a path.
     static func dataFolder(cliPath: String, id: String) -> String? {
