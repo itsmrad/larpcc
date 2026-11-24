@@ -8,6 +8,7 @@ let package = Package(
     targets: [
         .target(name: "LarpModel", resources: [.copy("Resources/cli-v1.schema.json")]),
         .executableTarget(name: "LarpCC", dependencies: ["LarpModel"]),
-        .testTarget(name: "LarpModelTests", dependencies: ["LarpModel"], resources: [.copy("Resources/cli-v1.examples.json")])
+        .testTarget(name: "LarpModelTests", dependencies: ["LarpModel"], resources: [.copy("Resources/cli-v1.examples.json")]),
+        .testTarget(name: "LarpCCTests", dependencies: ["LarpCC", "LarpModel"])
     ]
 )
