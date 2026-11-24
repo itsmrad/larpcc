@@ -36,22 +36,12 @@ struct IconTile: View {
     let symbol: String
     let color: Color
     var size: CGFloat = 20
-    @Environment(\.theme) private var theme
-
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: size * 0.56, weight: .semibold))
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(
-                RoundedRectangle(cornerRadius: size * theme.tokens.iconTileRadius, style: .continuous)
-                    .fill(color.gradient)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: size * theme.tokens.iconTileRadius, style: .continuous)
-                    .strokeBorder(.black.opacity(0.08), lineWidth: 0.5)
-            )
+            .modifier(IconTileSurface(color: color, size: size))
             .accessibilityHidden(true)
     }
 }
@@ -64,6 +54,7 @@ extension Provider {
 struct ProviderGlyph: View {
     let provider: Provider
     var size: CGFloat = 16
+    var columnWidth: CGFloat? = nil
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
@@ -71,7 +62,7 @@ struct ProviderGlyph: View {
         ProviderMark(provider: provider)
             .fill(prominence == .increased ? Color.white : Color(nsColor: .labelColor))
             .frame(width: size, height: size)
-            .frame(width: size + 4, height: size + 4)
+            .frame(width: columnWidth ?? size + 4, height: columnWidth ?? size + 4)
             .accessibilityLabel(provider.title)
     }
 }
@@ -85,16 +76,25 @@ struct ProviderTile: View {
         ProviderMark(provider: provider)
             .fill(.white)
             .padding(size * 0.2)
-            .frame(width: size, height: size)
-            .background(
-                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                    .fill(provider.tileColor)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
-            )
+            .modifier(IconTileSurface(color: provider.tileColor, size: size))
             .accessibilityHidden(true)
+    }
+}
+
+private struct IconTileSurface: ViewModifier {
+    let color: Color
+    let size: CGFloat
+    @Environment(\.theme) private var theme
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: size * theme.tokens.iconTileRadius)
+        content
+            .frame(width: size, height: size)
+            .background(shape.fill(color.gradient))
+            .overlay {
+                shape.strokeBorder(.primary.opacity(contrast == .increased ? 0.45 : 0.12), lineWidth: 0.5)
+            }
     }
 }
 
@@ -109,6 +109,8 @@ struct DesktopAppIcon: View {
         if FileManager.default.fileExists(atPath: path) {
             Image(nsImage: NSWorkspace.shared.icon(forFile: path))
                 .resizable()
+                .interpolation(.high)
+                .scaledToFit()
                 .frame(width: size + 4, height: size + 4)
                 .padding(-2)
                 .accessibilityHidden(true)
@@ -137,8 +139,16 @@ extension Readiness {
 
 struct StatusDot: View {
     let color: Color
+    @Environment(\.colorSchemeContrast) private var contrast
+
     var body: some View {
-        Circle().fill(color).frame(width: 7, height: 7).accessibilityHidden(true)
+        Circle()
+            .fill(color)
+            .overlay {
+                if contrast == .increased { Circle().strokeBorder(.primary, lineWidth: 0.75) }
+            }
+            .frame(width: 7, height: 7)
+            .accessibilityHidden(true)
     }
 }
 
@@ -206,16 +216,37 @@ struct RowLabel<Icon: View>: View {
     }
 }
 
-/// Unavailable state shown inside the detail pane.
+/// Fills the available detail area for empty, unavailable, and failed states.
+/// Provide a short title, an SF Symbol name, and a message that explains the next step.
+/// Supply `retry` when the operation can be retried in place.
 struct UnavailablePane: View {
     let title: String
     let symbol: String
     let message: String
+    var retry: (() -> Void)? = nil
+
     var body: some View {
         ContentUnavailableView {
             Label(title, systemImage: symbol)
         } description: {
             Text(message)
+        } actions: {
+            if let retry { Button("Retry", action: retry) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Fills the available detail area while its content loads. The title describes the work.
+struct LoadingPane: View {
+    let title: String
+
+    var body: some View {
+        ContentUnavailableView {
+            VStack(spacing: SettingsSpacing.control) {
+                ProgressView().controlSize(.small).accessibilityHidden(true)
+                Text(title)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

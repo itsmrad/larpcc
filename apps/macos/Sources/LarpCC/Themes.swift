@@ -4,6 +4,22 @@ import LarpModel
 
 // MARK: - Tokens
 
+enum SettingsSpacing {
+    static let tight: CGFloat = 4
+    static let inline: CGFloat = 8
+    static let control: CGFloat = 12
+    static let inset: CGFloat = 16
+    static let page: CGFloat = 20
+}
+
+enum SettingsTypography {
+    static let title: Font = .title2.weight(.semibold)
+    static let heading: Font = .headline
+    static let body: Font = .body
+    static let supporting: Font = .callout
+    static let caption: Font = .caption
+}
+
 /// The few values that differ between themes. Views read these instead of branching on the theme.
 /// The menu bar panel uses the same values as that theme's Settings window, so the two match.
 struct ThemeTokens {
@@ -31,6 +47,12 @@ struct ThemeTokens {
     let sidebarRowSize: SidebarRowSize?
     /// Page icon tile corner radius as a fraction of its size.
     let iconTileRadius: CGFloat
+    /// The icon column aligns colored tiles and template provider marks.
+    let sidebarIconSize: CGFloat
+    /// Insets inside classic form groups on macOS 26.
+    let formRowInset: CGFloat
+    let formRowVerticalInset: CGFloat
+    let formSectionSpacing: CGFloat
     /// LarpCC draws the grouped form sections itself (earlier looks on macOS 26), or leaves
     /// them to the system.
     let drawsFormSections: Bool
@@ -43,17 +65,20 @@ extension Theme {
             return ThemeTokens(sectionRadius: 12, sectionFill: 0.03, sectionBorder: false, descriptionSize: 11,
                                panelMaterial: .windowBackground, menuRowRadius: 6, menuRowHeight: 24,
                                statusWeight: .medium, floatingSidebar: true, sidebarRowSize: nil,
-                               iconTileRadius: 0.26, drawsFormSections: false)
+                               iconTileRadius: 0.26, sidebarIconSize: 20, formRowInset: 10,
+                               formRowVerticalInset: 8, formSectionSpacing: 24, drawsFormSections: false)
         case .sequoia:
             return ThemeTokens(sectionRadius: 10, sectionFill: 0.035, sectionBorder: true, descriptionSize: 12,
                                panelMaterial: .sidebar, menuRowRadius: 5, menuRowHeight: 22,
                                statusWeight: .regular, floatingSidebar: false, sidebarRowSize: .medium,
-                               iconTileRadius: 0.24, drawsFormSections: true)
+                               iconTileRadius: 0.24, sidebarIconSize: 20, formRowInset: 10,
+                               formRowVerticalInset: 8, formSectionSpacing: 22, drawsFormSections: true)
         case .sonoma:
             return ThemeTokens(sectionRadius: 8, sectionFill: 0.035, sectionBorder: true, descriptionSize: 12,
                                panelMaterial: .sidebar, menuRowRadius: 4, menuRowHeight: 22,
                                statusWeight: .regular, floatingSidebar: false, sidebarRowSize: .small,
-                               iconTileRadius: 0.22, drawsFormSections: true)
+                               iconTileRadius: 0.22, sidebarIconSize: 18, formRowInset: 10,
+                               formRowVerticalInset: 7, formSectionSpacing: 20, drawsFormSections: true)
         }
     }
 }
@@ -99,6 +124,20 @@ private struct Themed: ViewModifier {
 
 extension View {
     func themed() -> some View { modifier(Themed()) }
+
+    /// Animates a local state change with the Settings timing and honors Reduce Motion.
+    func settingsAnimation<Value: Equatable>(value: Value) -> some View {
+        modifier(SettingsAnimation(value: value))
+    }
+}
+
+private struct SettingsAnimation<Value: Equatable>: ViewModifier {
+    let value: Value
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: value)
+    }
 }
 
 // MARK: - Forms
@@ -140,37 +179,45 @@ private struct ThemedFormStyle: ViewModifier {
 @available(macOS 15, *)
 private struct ClassicFormStyle: FormStyle {
     let tokens: ThemeTokens
+    @Environment(\.colorSchemeContrast) private var contrast
 
     func makeBody(configuration: Configuration) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: tokens.formSectionSpacing) {
                 ForEach(sections: configuration.content) { section in
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: SettingsSpacing.inline) {
                         if !section.header.isEmpty {
                             VStack(alignment: .leading, spacing: 0) { section.header }
-                                .font(.headline)
-                                .padding(.horizontal, 10)
+                                .font(SettingsTypography.heading)
+                                .padding(.horizontal, tokens.formRowInset)
                         }
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(Array(section.content.enumerated()), id: \.element.id) { index, row in
-                                if index > 0 { Divider().padding(.horizontal, 10) }
+                                if index > 0 { Divider().padding(.horizontal, tokens.formRowInset) }
                                 row
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, tokens.formRowInset)
+                                    .padding(.vertical, tokens.formRowVerticalInset)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
                         .sectionBox(tokens)
+                        .overlay {
+                            if contrast == .increased {
+                                RoundedRectangle(cornerRadius: tokens.sectionRadius)
+                                    .strokeBorder(.primary.opacity(0.5), lineWidth: 1)
+                                    .allowsHitTesting(false)
+                            }
+                        }
                         if !section.footer.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) { section.footer }
-                                .font(.callout)
+                            VStack(alignment: .leading, spacing: SettingsSpacing.tight) { section.footer }
+                                .font(SettingsTypography.supporting)
                                 .foregroundStyle(.secondary)
-                                .padding(.horizontal, 10)
+                                .padding(.horizontal, tokens.formRowInset)
                         }
                     }
                 }
             }
-            .padding(20)
+            .padding(SettingsSpacing.page)
         }
         .labeledContentStyle(ClassicRowStyle())
         .toggleStyle(ClassicToggleStyle())
@@ -189,7 +236,7 @@ private struct FormRowLabel<Label: View>: View {
                     if index == 0 {
                         part
                     } else {
-                        part.font(.callout).foregroundStyle(.secondary)
+                        part.font(SettingsTypography.supporting).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -200,9 +247,9 @@ private struct FormRowLabel<Label: View>: View {
 @available(macOS 15, *)
 private struct ClassicRowStyle: LabeledContentStyle {
     func makeBody(configuration: Configuration) -> some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: SettingsSpacing.control) {
             FormRowLabel(label: configuration.label)
-            Spacer(minLength: 12)
+            Spacer(minLength: SettingsSpacing.control)
             configuration.content
         }
     }
@@ -211,9 +258,9 @@ private struct ClassicRowStyle: LabeledContentStyle {
 @available(macOS 15, *)
 private struct ClassicToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: SettingsSpacing.control) {
             FormRowLabel(label: configuration.label).accessibilityHidden(true)
-            Spacer(minLength: 12)
+            Spacer(minLength: SettingsSpacing.control)
             // The real switch keeps the label for VoiceOver; the drawn label is for the eye only.
             Toggle(isOn: configuration.$isOn) { configuration.label }
                 .labelsHidden()
