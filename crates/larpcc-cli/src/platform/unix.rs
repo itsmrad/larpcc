@@ -464,18 +464,14 @@ fn executable_policy(
     let invalid = |reason: &str| unsafe_path(path, reason);
     let mut handles = Vec::new();
     let resolved = resolve(path, &mut 0, &mut handles, ancestry, false)?;
-    // Identity, not spelling: case variants, firmlinks and bind mounts of the root are the root.
+    // Identity, not spelling: case variants and firmlinks of the root are the root.
     let parent = resolved.parent().unwrap_or(Path::new("/"));
-    let inside = match DirId::within(parent, root) {
-        // Nothing exists inside a root that does not exist yet.
-        Err(e)
-            if e.kind() == io::ErrorKind::NotFound
-                && fs::symlink_metadata(root)
-                    .is_err_and(|m| m.kind() == io::ErrorKind::NotFound) =>
-        {
-            false
-        }
-        result => result.map_err(|e| io_error("inspect", root, e))?,
+    let inside = match DirId::open_dir(root) {
+        // Nothing exists inside a root that does not exist yet; later errors all refuse.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        root_dir => root_dir
+            .and_then(|r| r.contains(parent))
+            .map_err(|e| io_error("inspect", root, e))?,
     };
     if inside {
         return Err(invalid("is inside the Larp CC data directory"));
@@ -526,7 +522,16 @@ fn executable_policy(
     }
     Ok((resolved, identity(&opened)))
 }
-/// A directory held open with O_DIRECTORY|O_NOFOLLOW and identified by (st_dev, st_ino).
+// Search-only handles: walking needs only traversal, not read permission (a 0711 `/`).
+#[cfg(target_os = "macos")]
+const SEARCH: libc::c_int = libc::O_SEARCH;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SEARCH: libc::c_int = libc::O_PATH | libc::O_DIRECTORY;
+// ponytail: other Unixes fall back to read handles, which need read permission on each directory.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+const SEARCH: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY;
+
+/// A directory held open (search-only, O_DIRECTORY|O_NOFOLLOW) and identified by (st_dev, st_ino).
 /// Comparisons keep every handle open until decided. Callers must treat any error as a denial.
 pub struct DirId {
     file: File,
@@ -534,45 +539,60 @@ pub struct DirId {
 }
 impl DirId {
     pub fn open_dir(path: &Path) -> io::Result<Self> {
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(path)
-            .and_then(Self::held)
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+        // SAFETY: NUL-terminated path; no file is created.
+        Self::held(unsafe {
+            libc::open(path.as_ptr(), SEARCH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        })
     }
-    fn held(file: File) -> io::Result<Self> {
+    fn parent(&self) -> io::Result<Self> {
+        use std::os::fd::AsRawFd;
+        let flags = SEARCH | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: live directory fd and a static NUL-terminated name.
+        Self::held(unsafe { libc::openat(self.file.as_raw_fd(), c"..".as_ptr(), flags) })
+    }
+    fn held(fd: libc::c_int) -> io::Result<Self> {
+        use std::os::fd::FromRawFd;
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a successful open returned a new owned fd.
+        let file = unsafe { File::from_raw_fd(fd) };
         let meta = file.metadata()?;
         Ok(Self {
             id: (meta.dev(), meta.ino()),
             file,
         })
     }
-    fn parent(&self) -> io::Result<Self> {
-        use std::os::fd::{AsRawFd, FromRawFd};
-        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-        // SAFETY: live directory fd and a static NUL-terminated name.
-        let fd = unsafe { libc::openat(self.file.as_raw_fd(), c"..".as_ptr(), flags) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
+    pub fn identity(&self) -> FileIdentity {
+        FileIdentity::Unix {
+            dev: self.id.0,
+            ino: self.id.1,
         }
-        // SAFETY: successful openat returned a new owned fd.
-        Self::held(unsafe { File::from_raw_fd(fd) })
     }
     pub fn same_directory(a: &Path, b: &Path) -> io::Result<bool> {
         let (a, b) = (Self::open_dir(a)?, Self::open_dir(b)?);
         Ok(a.id == b.id)
     }
-    /// Whether `dir` is `ancestor` or below it, walking `..` by handle up to `/`.
-    pub fn within(dir: &Path, ancestor: &Path) -> io::Result<bool> {
-        let ancestor = Self::open_dir(ancestor)?;
+    /// Walks `..` from `dir` until this directory (inside) or the process root (outside).
+    /// Device and mount changes are deliberately allowed: on macOS the walk from
+    /// /opt/homebrew or /Users crosses the Data/System volume boundary. Residual: a Linux
+    /// bind mount of a directory below the root, mounted outside it, walks `..` up the
+    /// mount point's ancestors and never meets the root; creating one needs privilege.
+    pub fn contains(&self, dir: &Path) -> io::Result<bool> {
+        let top = Self::open_dir(Path::new("/"))?;
         let mut current = Self::open_dir(dir)?;
         for _ in 0..4096 {
-            if current.id == ancestor.id {
+            if current.id == self.id {
                 return Ok(true);
+            }
+            if current.id == top.id {
+                return Ok(false);
             }
             let parent = current.parent()?;
             if parent.id == current.id {
-                return Ok(false);
+                return Err(io::Error::other("`..` stopped before the root directory"));
             }
             current = parent;
         }
@@ -683,12 +703,15 @@ pub(crate) fn open_larp_artifact(path: &Path, root: &Path) -> Result<(File, File
 pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, PathBuf), Error> {
     let path = std::env::current_exe().map_err(|e| io_error("inspect", root, e))?;
     let path = fs::canonicalize(&path).map_err(|e| io_error("resolve", &path, e))?;
-    let (file, identity) = open_artifact_policy(&path, root, Own::Require, Ancestry::Strict)
-        .map_err(|error| match error {
-            Error::NamespaceUnverified => Error::AliasImageUnverified,
-            error => error,
-        })?;
+    let (file, identity) = open_running_larp(&path, root)?;
     Ok((file, identity, path))
+}
+/// `path` must reach the running Larp image through the trusted executable pipeline.
+pub(crate) fn open_running_larp(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
+    open_artifact_policy(path, root, Own::Require, Ancestry::Strict).map_err(|error| match error {
+        Error::NamespaceUnverified => Error::AliasImageUnverified,
+        error => error,
+    })
 }
 fn open_artifact_policy(
     path: &Path,
@@ -1346,12 +1369,31 @@ mod tests {
         assert!(DirId::open_dir(&link).is_err());
         assert!(DirId::same_directory(&bin, &link.join("bin")).unwrap());
         assert!(DirId::open_dir(&bin.join("tool")).is_err());
-        assert!(DirId::within(&bin, &root).unwrap());
-        assert!(DirId::within(&root, &root).unwrap());
-        assert!(!DirId::within(&root, &bin).unwrap());
-        assert!(!DirId::within(&temporary.path().join("outside"), &root).unwrap());
-        assert!(DirId::within(&bin, Path::new("/")).unwrap());
-        assert!(DirId::within(&bin, &temporary.path().join("missing")).is_err());
+        let within = |dir: &Path, ancestor: &Path| DirId::open_dir(ancestor)?.contains(dir);
+        assert!(within(&bin, &root).unwrap());
+        assert!(within(&root, &root).unwrap());
+        assert!(!within(&root, &bin).unwrap());
+        assert!(!within(&temporary.path().join("outside"), &root).unwrap());
+        assert!(within(&bin, Path::new("/")).unwrap());
+        assert!(within(&bin, &temporary.path().join("missing")).is_err());
+        // Once the root is held, a missing directory refuses instead of reading as outside.
+        assert!(within(&temporary.path().join("missing"), &root).is_err());
+    }
+    #[test]
+    fn dir_id_walks_directories_it_may_search_but_not_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let (temporary, root) = containment_fixture();
+        let sealed = root.join("sealed");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(sealed.join("inner"))
+            .unwrap();
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o300)).unwrap();
+        let result = DirId::open_dir(&root).and_then(|r| r.contains(&sealed.join("inner")));
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.unwrap());
+        drop(temporary);
     }
     fn inside(path: &Path, root: &Path) -> bool {
         matches!(executable(path, root),
