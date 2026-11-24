@@ -190,6 +190,16 @@ fn load(root: &Path) -> Result<Settings, Error> {
         .map_or_else(|| Ok(Settings::default()), |bytes| parse_settings(&bytes))
 }
 
+fn read_journal(root: &Path) -> Option<Journal> {
+    // Other transaction kinds retain their existing explicit recovery paths.
+    let bytes = read(root, JOURNAL, 1024).ok()??;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub(super) fn journal_pending(root: &Path) -> bool {
+    crate::share::pending(root) && read_journal(root).is_some()
+}
+
 /// Runs while acquiring the existing registry lock, before its caller checks a revision.
 pub(super) fn recover(root: &Path) -> Result<(), Error> {
     if !crate::share::pending(root) {
@@ -197,15 +207,11 @@ pub(super) fn recover(root: &Path) -> Result<(), Error> {
         retire(root, STAGED_JOURNAL).map_err(|_| Error::RecoveryRequired)?;
         return Ok(());
     }
-    // Other transaction kinds retain their existing explicit recovery paths.
-    let Ok(Some(bytes)) = read(root, JOURNAL, 1024) else {
-        return Ok(());
-    };
-    let Ok(Journal::UsageSettings {
+    let Some(Journal::UsageSettings {
         base,
         target,
         sha256,
-    }) = serde_json::from_slice(&bytes)
+    }) = read_journal(root)
     else {
         return Ok(());
     };

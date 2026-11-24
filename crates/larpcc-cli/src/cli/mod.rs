@@ -29,8 +29,6 @@ use std::{
     disable_help_subcommand = true
 )]
 struct Cli {
-    #[arg(long, global = true, hide = true)]
-    remote_request: bool,
     /// Emit one local metadata JSON envelope
     #[arg(long, global = true)]
     json: bool,
@@ -43,6 +41,8 @@ struct Cli {
     /// Require a routing revision for remote status
     #[arg(long, global = true, hide = true, allow_hyphen_values = true)]
     expected_host_revision: Option<std::ffi::OsString>,
+    #[arg(long, global = true, hide = true)]
+    remote_request: bool,
     #[command(subcommand)]
     command: RootAction,
 }

@@ -119,7 +119,13 @@ impl Registry {
         let _ancestors = crate::platform::anchor(self.root())?.ancestors;
         let mut held = store::fixed(self.root())?;
         held.extend(_ancestors);
-        let data = store::load(self.root())?;
+        // Direct admission normally reads without a lock. Recover Stage 11's
+        // journal under the lock before using the profile snapshot.
+        let (data, _recovery_lock) = if usage::journal_pending(self.root()) {
+            store::snapshot(self.root(), self.expected)?
+        } else {
+            (store::load(self.root())?, None)
+        };
         self.observed.set(Some(data.revision));
         let profile = data
             .profiles
