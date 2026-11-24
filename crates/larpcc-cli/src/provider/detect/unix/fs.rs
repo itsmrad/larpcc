@@ -1,4 +1,10 @@
-use crate::platform::removal::{open_dir, stat_at};
+use crate::{
+    platform::{
+        CheckedObject, detection,
+        removal::{open_dir, stat_at},
+    },
+    registry::Error,
+};
 use std::{
     collections::VecDeque,
     ffi::{CStr, CString, OsStr, OsString},
@@ -15,6 +21,7 @@ pub(super) struct Entry {
     pub path: PathBuf,
     pub stat: libc::stat,
     pub directory: Option<File>,
+    pub object: Option<Result<CheckedObject, Error>>,
 }
 
 impl Entry {
@@ -46,6 +53,23 @@ pub(super) fn walk(
     allow: impl Fn(&Path) -> bool,
     open_leaf_directory: bool,
 ) -> io::Result<Entry> {
+    walk_inner(path, allow, open_leaf_directory, None)
+}
+
+pub(super) fn walk_executable(
+    path: &Path,
+    allow: impl Fn(&Path) -> bool,
+    managed_root: &Path,
+) -> io::Result<Entry> {
+    walk_inner(path, allow, false, Some(managed_root))
+}
+
+fn walk_inner(
+    path: &Path,
+    allow: impl Fn(&Path) -> bool,
+    open_leaf_directory: bool,
+    managed_root: Option<&Path>,
+) -> io::Result<Entry> {
     if !path.is_absolute() || path.as_os_str().len() > 4096 || !allow(Path::new("/")) {
         return Err(io::ErrorKind::InvalidInput.into());
     }
@@ -54,6 +78,7 @@ pub(super) fn walk(
     let mut remaining = components(path);
     let mut hops = 0;
     let mut steps = 0;
+    let mut trust = Ok(());
     loop {
         let dir = directories.last().expect("root retained");
         let Some(part) = remaining.pop_front() else {
@@ -62,6 +87,7 @@ pub(super) fn walk(
                 path: resolved,
                 stat,
                 directory: open_leaf_directory.then(|| directories.pop().expect("root retained")),
+                object: None,
             });
         };
         steps += 1;
@@ -85,6 +111,9 @@ pub(super) fn walk(
         let stat = stat_at(dir, &name)?.ok_or(io::ErrorKind::NotFound)?;
         match stat.st_mode & libc::S_IFMT {
             libc::S_IFLNK => {
+                if managed_root.is_some() && trust.is_ok() {
+                    trust = detection::check_link(&resolved, &stat);
+                }
                 hops += 1;
                 if hops > 40 {
                     return Err(io::ErrorKind::InvalidData.into());
@@ -105,13 +134,37 @@ pub(super) fn walk(
                 if (stat.st_dev, stat.st_ino) != (confirmed.st_dev, confirmed.st_ino) {
                     return Err(io::ErrorKind::PermissionDenied.into());
                 }
+                if managed_root.is_some() && trust.is_ok() {
+                    trust = detection::check_directory(&resolved, &opened);
+                }
                 directories.push(opened);
             }
             _ if remaining.is_empty() => {
+                let object = managed_root
+                    .filter(|_| {
+                        stat.st_mode & libc::S_IFMT == libc::S_IFREG && stat.st_mode & 0o111 != 0
+                    })
+                    .map(|root| {
+                        trust?;
+                        if path.starts_with(root) || resolved.starts_with(root) {
+                            return Err(Error::Unsafe {
+                                path: path.to_owned(),
+                                reason: "is inside the Larp CC data directory".into(),
+                            });
+                        }
+                        let file =
+                            detection::open_regular(dir, &name).map_err(|source| Error::Io {
+                                action: "open executable",
+                                path: path.to_owned(),
+                                source,
+                            })?;
+                        detection::check_executable(&resolved, file, &stat)
+                    });
                 return Ok(Entry {
                     path: resolved,
                     stat,
                     directory: None,
+                    object,
                 });
             }
             _ => return Err(io::ErrorKind::NotADirectory.into()),
@@ -127,92 +180,4 @@ fn components(path: &Path) -> VecDeque<OsString> {
             _ => None,
         })
         .collect()
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn confined_bundle(root: &Path, allow: impl Fn(&Path) -> bool) -> bool {
-    let guarded = |p: &Path| (p.starts_with(root) || root.starts_with(p)) && allow(p);
-    let Ok(entry) = walk(root, guarded, true) else {
-        return false;
-    };
-    let Some(directory) = entry.directory else {
-        return false;
-    };
-    confined_directory(
-        root,
-        root,
-        &directory,
-        &guarded,
-        0,
-        &mut 8_192,
-        &mut (2 * 1024 * 1024 * 1024),
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn confined_directory(
-    root: &Path,
-    path: &Path,
-    directory: &File,
-    allowed: &impl Fn(&Path) -> bool,
-    depth: usize,
-    entries_left: &mut usize,
-    bytes_left: &mut u64,
-) -> bool {
-    use crate::platform::removal::Entries;
-
-    let Ok(mut entries) = Entries::open(directory) else {
-        return false;
-    };
-    loop {
-        let name = match entries.next() {
-            Ok(Some(name)) => name,
-            Ok(None) => return true,
-            Err(_) => return false,
-        };
-        if *entries_left == 0 || depth == 32 {
-            return false;
-        }
-        *entries_left -= 1;
-        let child = path.join(OsStr::from_bytes(name.to_bytes()));
-        if !allowed(&child) {
-            return false;
-        }
-        let Ok(Some(stat)) = stat_at(directory, &name) else {
-            return false;
-        };
-        match stat.st_mode & libc::S_IFMT {
-            libc::S_IFDIR => {
-                let Ok(child_dir) = open_dir(directory, &name) else {
-                    return false;
-                };
-                if !confined_directory(
-                    root,
-                    &child,
-                    &child_dir,
-                    allowed,
-                    depth + 1,
-                    entries_left,
-                    bytes_left,
-                ) {
-                    return false;
-                }
-            }
-            libc::S_IFLNK => {
-                if !walk(&child, allowed, false).is_ok_and(|entry| entry.path.starts_with(root)) {
-                    return false;
-                }
-            }
-            libc::S_IFREG => {
-                let Ok(size) = u64::try_from(stat.st_size) else {
-                    return false;
-                };
-                let Some(remaining) = bytes_left.checked_sub(size) else {
-                    return false;
-                };
-                *bytes_left = remaining;
-            }
-            _ => return false,
-        }
-    }
 }

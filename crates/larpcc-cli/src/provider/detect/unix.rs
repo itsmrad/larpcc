@@ -8,9 +8,9 @@ use self::{
     paths::{Exclusions, Kind},
 };
 use crate::{
-    launch::admission::ROWS,
-    platform::{FileIdentity, removal::Entries},
-    provider::{evidence, version},
+    launch::admission::{ROWS, checked_artifact_from},
+    platform::{CheckedObject, FileIdentity, removal::Entries},
+    provider::evidence,
     registry::{Error, Provider, Registry, display},
 };
 use serde_json::{Value, json};
@@ -27,7 +27,6 @@ const MAX_CANDIDATES: usize = 48;
 const MAX_DIRECTORIES: usize = 160;
 const MAX_ENTRIES: usize = 2048;
 const SCAN_TIME: Duration = Duration::from_secs(10);
-const PROBE_TIME: Duration = Duration::from_secs(7);
 
 pub(super) fn collect(registry: &Registry, provider: Option<Provider>) -> Result<Value, Error> {
     let home = absolute_env("HOME");
@@ -41,6 +40,7 @@ pub(super) fn collect(registry: &Registry, provider: Option<Provider>) -> Result
         checked: HashSet::new(),
         candidates: Vec::new(),
         skipped: BTreeSet::new(),
+        managed_root: registry.root().to_owned(),
     };
     let mut protected = Vec::new();
     for name in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
@@ -84,29 +84,8 @@ pub(super) fn collect(registry: &Registry, provider: Option<Provider>) -> Result
             }
         }
     }
-    for path in &protected {
-        scan.exclusions.insert(path);
-    }
     for path in protected {
-        scan.exclude_alias(&path);
-    }
-    if let Some(home) = &home {
-        // Inspect names in the user's home only to account for renamed or
-        // symlinked provider roots. No provider directory is opened.
-        let hidden = |name: &OsStr| {
-            let name = name.as_bytes().to_ascii_lowercase();
-            name.starts_with(b".claude") || name.starts_with(b".codex")
-        };
-        if let Some(names) = scan.directory_names(home, hidden) {
-            for path in names {
-                scan.exclude_alias(&path);
-            }
-        } else {
-            scan.limited.set(true);
-        }
-    }
-    if scan.limited.get() {
-        return Err(Error::ForbiddenSource);
+        scan.exclusions.insert(&path);
     }
     let allowed = |path: &Path| scan.exclusions.allows(path);
     if [
@@ -123,10 +102,19 @@ pub(super) fn collect(registry: &Registry, provider: Option<Provider>) -> Result
         return Err(Error::ForbiddenSource);
     }
     // Registry path resolution must obey the same exclusions as search roots.
-    match walk(registry.root(), allowed, false) {
-        Ok(_) => (),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-        Err(_) => return Err(Error::ForbiddenSource),
+    for prefix in registry.root().ancestors() {
+        match walk(prefix, allowed, false) {
+            Ok(entry) => {
+                let tail = registry
+                    .root()
+                    .strip_prefix(prefix)
+                    .map_err(|_| Error::ForbiddenSource)?;
+                scan.managed_root = entry.path.join(tail);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(Error::ForbiddenSource),
+        }
     }
     let first = provider.unwrap_or(Provider::Claude);
     let mut bindings = vec![(first, registry.binding_path(first)?)];
@@ -158,7 +146,7 @@ pub(super) fn collect(registry: &Registry, provider: Option<Provider>) -> Result
         }
     }
     let desktop = scan.desktop_apps(&bindings, home.as_deref());
-    let result = scan.results(registry.root(), desktop)?;
+    let result = scan.results(desktop);
     snapshot.binding_path(first)?;
     Ok(result)
 }
@@ -191,6 +179,7 @@ struct Candidate {
     size: u64,
     kind: Kind,
     bound: bool,
+    object: Option<Result<CheckedObject, Error>>,
 }
 
 struct Scan {
@@ -202,26 +191,10 @@ struct Scan {
     checked: HashSet<(Provider, PathBuf)>,
     candidates: Vec<Candidate>,
     skipped: BTreeSet<(&'static str, PathBuf)>,
+    managed_root: PathBuf,
 }
 
 impl Scan {
-    fn exclude_alias(&mut self, protected: &Path) {
-        // Look up the root itself without opening it. Never make an exception
-        // for an ancestor or a component reached below another protected root.
-        let protected = paths::normalize(protected);
-        let Some((parent, name)) = protected.parent().zip(protected.file_name()) else {
-            return;
-        };
-        let Ok(parent) = walk(parent, |p| self.allow(p), false) else {
-            return;
-        };
-        let leaf = parent.path.join(name);
-        let guard = |p: &Path| self.time_left() && (p == leaf || self.exclusions.allows(p));
-        if let Ok(entry) = walk(&leaf, guard, false) {
-            self.exclusions.insert(&entry.path);
-        }
-    }
-
     fn time_left(&self) -> bool {
         let time_left = Instant::now() < self.deadline;
         if !time_left {
@@ -290,14 +263,17 @@ impl Scan {
         if !self.time_left() || super::super::lexical(&path).is_err() {
             return;
         }
-        let Some(entry) = self.locate(provider, &path) else {
-            return;
-        };
-        if !entry.executable() || !self.checked.insert((provider, path.clone())) {
-            return;
-        }
         if self.candidates.len() == MAX_CANDIDATES {
             self.limited.set(true);
+            return;
+        }
+        if !self.checked.insert((provider, path.clone())) {
+            return;
+        }
+        let Some(entry) = self.locate(provider, &path, true) else {
+            return;
+        };
+        if !entry.executable() {
             return;
         }
         let identity = stat_identity(&entry.stat);
@@ -313,24 +289,23 @@ impl Scan {
             identity,
             size: u64::try_from(entry.stat.st_size).unwrap_or_default(),
             kind,
+            object: entry.object,
         });
     }
 
-    fn locate(&mut self, provider: Provider, path: &Path) -> Option<fs::Entry> {
+    fn locate(&mut self, provider: Provider, path: &Path, executable: bool) -> Option<fs::Entry> {
         let inside_home = Cell::new(self.exclusions.inside_provider_home(path));
+        let guard = |part: &Path| {
+            let inside = self.exclusions.inside_provider_home(part);
+            inside_home.set(inside);
+            !inside && self.allow(part)
+        };
         let entry = if inside_home.get() {
             None
+        } else if executable {
+            fs::walk_executable(path, guard, &self.managed_root).ok()
         } else {
-            walk(
-                path,
-                |part| {
-                    let inside = self.exclusions.inside_provider_home(part);
-                    inside_home.set(inside);
-                    !inside && self.allow(part)
-                },
-                false,
-            )
-            .ok()
+            walk(path, guard, true).ok()
         };
         if inside_home.get() {
             if self.skipped.len() < MAX_CANDIDATES {
@@ -456,18 +431,18 @@ impl Scan {
                         Provider::Codex => "ChatGPT.app",
                     };
                     let path = directory.join(name);
-                    let Some(entry) = self.locate(provider, &path) else {
+                    let Some(entry) = self.locate(provider, &path, false) else {
                         continue;
                     };
-                    if entry.stat.st_mode & libc::S_IFMT == libc::S_IFDIR
+                    if let Some(directory) = entry.directory
                         && seen.insert(stat_identity(&entry.stat))
                     {
-                        let confined = fs::confined_bundle(&entry.path, |p| self.allow(p));
                         rows.push(crate::desktop::detect_app(
                             provider,
                             &path,
                             &entry.path,
-                            confined,
+                            &directory,
+                            |part| self.allow(part),
                         ));
                     }
                 }
@@ -481,30 +456,52 @@ impl Scan {
         }
     }
 
-    fn results(mut self, root: &Path, desktop_apps: Vec<Value>) -> Result<Value, Error> {
+    fn results(mut self, desktop_apps: Vec<Value>) -> Value {
         let candidates = std::mem::take(&mut self.candidates);
         let mut rows = Vec::new();
-        for candidate in candidates {
+        for mut candidate in candidates {
             if !self.time_left() {
                 break;
             }
-            let artifact =
-                evidence::collect_candidate(candidate.provider, &candidate.path, root, &|p| {
-                    self.allow(p)
-                })
-                .and_then(|e| {
-                    if e.matches(&candidate.resolved, &candidate.identity) {
-                        Ok(e)
-                    } else {
-                        Err(Error::ArtifactInvalid)
-                    }
+            let deadline = self.deadline;
+            let artifact = candidate
+                .object
+                .take()
+                .unwrap_or(Err(Error::ArtifactInvalid))
+                .and_then(|initial| {
+                    let mut held = Some(initial);
+                    checked_artifact_from(
+                        || {
+                            let object = if let Some(initial) = held.take() {
+                                initial
+                            } else {
+                                let fresh = self
+                                    .locate(candidate.provider, &candidate.path, true)
+                                    .ok_or(Error::ArtifactInvalid)?;
+                                if fresh.path != candidate.resolved {
+                                    return Err(Error::ArtifactInvalid);
+                                }
+                                fresh.object.ok_or(Error::ArtifactInvalid)??
+                            };
+                            Ok((object.file, object.identity))
+                        },
+                        |_| {},
+                        || Instant::now() < deadline,
+                    )
                 });
+            self.time_left();
+            if self
+                .skipped
+                .contains(&(candidate.provider.as_str(), candidate.path.clone()))
+            {
+                continue;
+            }
             let qualified = artifact.as_ref().is_ok_and(|e| {
                 ROWS.iter().any(|row| {
                     row.provider == candidate.provider
                         && row.os == std::env::consts::OS
                         && row.arch == std::env::consts::ARCH
-                        && row.sha256 == e.digest()
+                        && row.sha256 == e.sha256
                 })
             });
             rows.push((candidate, qualified, artifact));
@@ -538,52 +535,21 @@ impl Scan {
                 &b.path,
             ))
         });
-        let executables: Result<Vec<_>, Error> = rows
+        let executables: Vec<_> = rows
             .into_iter()
             .map(|(c, qualified, artifact)| {
-                let detection = match artifact.as_ref().map(evidence::Evidence::digest) {
-                    Ok(digest) if version::approved(c.provider, digest) => {
-                        let probe_guard = |path: &Path| {
-                            if self.deadline.saturating_duration_since(Instant::now()) < PROBE_TIME
-                            {
-                                self.limited.set(true);
-                                return false;
-                            }
-                            self.allow(path)
-                        };
-                        if probe_guard(&c.path) {
-                            version::detect_candidate(
-                                c.provider,
-                                &c.path,
-                                root,
-                                digest,
-                                &probe_guard,
-                            )?
-                        } else {
-                            version::Detection::Failed
-                        }
-                    }
-                    _ => version::Detection::Unapproved,
-                };
-                let (version, diagnostic) = match detection {
-                    version::Detection::Detected(v) => (Some(v), None),
-                    version::Detection::Unapproved => {
-                        (Some("unapproved".into()), Some("version_unapproved"))
-                    }
-                    version::Detection::Failed => (None, Some("version_probe_failed")),
-                };
                 let FileIdentity::Unix { dev, ino } = c.identity;
-                let evidence = artifact
+                let sha256 = artifact
                     .as_ref()
-                    .map(evidence::Evidence::json)
-                    .unwrap_or(Value::Null);
+                    .ok()
+                    .map(|item| evidence::hex(&item.sha256));
                 let bind_reason = artifact.as_ref().err().map(|error| match error {
                     Error::InvalidExecutable { reason, .. } | Error::Unsafe { reason, .. } => {
                         reason.as_str()
                     }
                     _ => "executable evidence could not be verified",
                 });
-                Ok(json!({
+                json!({
                     "provider": c.provider,
                     "path": display::path(&c.path),
                     "resolved_path": display::path(&c.resolved),
@@ -594,21 +560,21 @@ impl Scan {
                     "bind_reason": bind_reason,
                     "qualified": qualified,
                     "bound": c.bound,
-                    "sha256": evidence["sha256"],
-                    "cdhash": evidence["cdhash"],
-                    "version": version,
-                    "version_diagnostic": diagnostic,
-                }))
+                    "sha256": sha256,
+                    "cdhash": Value::Null,
+                    "version": "unapproved",
+                    "version_diagnostic": "version_unapproved",
+                })
             })
             .collect();
-        Ok(json!({
-            "executables": executables?,
+        json!({
+                "executables": executables,
             "desktop_apps": desktop_apps,
             "skipped": self.skipped.iter().map(|(provider, path)| {
                 json!({"provider": provider, "path": display::path(path), "reason": "inside provider home"})
             }).collect::<Vec<_>>(),
             "limited": self.limited.get(),
-        }))
+        })
     }
 }
 

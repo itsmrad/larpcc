@@ -161,6 +161,14 @@ this command yet, and its decoder fails closed on it.
 
 ## Command map and examples
 
+`provider detect [--provider claude|codex] [--json]` adds the
+`provider.detect` read envelope. The result reports candidate executables,
+desktop bundles, paths skipped for entering a provider home, and whether scan
+limits made the result partial. Field meanings, ordering, exclusions and the
+separate explicit bind step are defined in
+[Stage 19](../stages/19-onboarding-detect.md). The registry revision is checked
+before discovery. Windows and remote requests return `unsupported` with exit 2.
+
 Space-separated command paths map to dotted `command` values. Existing profile
 and provider mutations and all stage 04–09 metadata mutations use the common
 `changed,profile_id,name,warnings` result (null where no profile/name applies).

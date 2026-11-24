@@ -33,6 +33,7 @@ fn scan(path: &Path) -> Scan {
         checked: HashSet::new(),
         candidates: Vec::new(),
         skipped: BTreeSet::new(),
+        managed_root: path.join("managed"),
     }
 }
 
@@ -84,12 +85,12 @@ fn stage19_guard_stops_before_lookup_inside_vendor_roots() {
     assert!(!guard.allows(&home.join(".local/share/claude/account-data")));
     let mut scan = scan(home);
     scan.exclusions = guard;
-    assert!(scan.locate(Provider::Codex, &escaped).is_none());
+    assert!(scan.locate(Provider::Codex, &escaped, true).is_none());
     assert!(
-        scan.locate(Provider::Codex, &home.join(".codex/bin/codex"))
+        scan.locate(Provider::Codex, &home.join(".codex/bin/codex"), true)
             .is_none()
     );
-    let data = scan.results(&home.join("managed"), Vec::new()).unwrap();
+    let data = scan.results(Vec::new());
     let skipped = data["skipped"].as_array().unwrap();
     assert_eq!(skipped.len(), 2);
     assert!(
@@ -100,17 +101,39 @@ fn stage19_guard_stops_before_lookup_inside_vendor_roots() {
 }
 
 #[test]
-fn stage19_symlinked_provider_root_excludes_its_target_spelling() {
+fn stage19_configured_provider_root_is_excluded_before_walk() {
     let temp = private_dir();
     let path = temp.path();
     let real = path.join("private-state");
     fs::create_dir(&real).unwrap();
-    let alias = path.join(".codex-45");
-    symlink(&real, &alias).unwrap();
     let mut scan = scan(path);
-    scan.exclude_alias(&alias);
+    scan.exclusions.insert(&real);
     assert!(!scan.exclusions.allows(&real));
     assert!(!scan.exclusions.allows(&real.join("bin/codex")));
+    assert!(
+        scan.locate(Provider::Codex, &real.join("bin/codex"), true)
+            .is_none()
+    );
+}
+
+#[test]
+fn stage19_skipped_path_matches_frozen_detection_fixture() {
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/contracts/cli-v1.examples.json"
+    )))
+    .unwrap();
+    let expected = fixture
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|example| example["command"] == "provider.detect")
+        .unwrap();
+    let path = Path::new("/fixture/.codex/bin/codex");
+    let mut scan = scan(Path::new("/fixture"));
+    assert!(scan.locate(Provider::Codex, path, true).is_none());
+    let data = scan.results(Vec::new());
+    assert_eq!(&data, &expected["data"]);
 }
 
 #[test]
@@ -158,7 +181,7 @@ fn stage19_deduplicates_bound_install_and_reports_untrusted_candidate() {
         Some(&bound),
     );
     scan.offer(Provider::Claude, bound.clone(), Kind::Unknown, Some(&bound));
-    let result = scan.results(&path.join("managed"), Vec::new()).unwrap();
+    let result = scan.results(Vec::new());
     let results = result["executables"].as_array().unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0]["path"], display::path(&bound));
@@ -173,20 +196,19 @@ fn stage19_deduplicates_bound_install_and_reports_untrusted_candidate() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn stage19_bundle_signature_preflight_rejects_external_resource_links() {
+fn stage19_bundle_plist_refuses_symlinked_contents() {
     let temp = private_dir();
     let home = temp.path();
     let root = home.join("ChatGPT.app");
-    fs::create_dir_all(root.join("Contents/Resources")).unwrap();
-    let file = root.join("Contents/Resources/real-resource");
-    fs::write(&file, b"bundle file").unwrap();
-    let link = root.join("Contents/Resources/link");
-    symlink("real-resource", &link).unwrap();
+    fs::create_dir(&root).unwrap();
+    symlink(home.join(".codex"), root.join("Contents")).unwrap();
     let guard = Exclusions::new(Some(home));
-    assert!(super::fs::confined_bundle(&root, |p| guard.allows(p)));
-    fs::remove_file(&link).unwrap();
-    symlink(home.join(".codex"), &link).unwrap();
-    assert!(!super::fs::confined_bundle(&root, |p| guard.allows(p)));
+    let directory = fs::File::open(&root).unwrap();
+    let row = crate::desktop::detect_app(Provider::Codex, &root, &root, &directory, |p| {
+        guard.allows(p)
+    });
+    assert_eq!(row["bundle_id"], Value::Null);
+    assert_eq!(row["code_requirement"], "unavailable");
 }
 
 #[test]
@@ -209,11 +231,33 @@ fn stage19_homebrew_cask_is_classified_and_retains_bind_refusal() {
     let mut scan = scan(path);
     scan.homebrew_locations(path, Provider::Claude, None);
     assert_eq!(scan.candidates.len(), 2);
-    let data = scan.results(&path.join("managed"), Vec::new()).unwrap();
+    let data = scan.results(Vec::new());
     let rows = data["executables"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["resolved_path"], display::path(&executable));
     assert_eq!(rows[0]["install_kind"], "homebrew");
     assert_eq!(rows[0]["bindable"], false);
     assert_eq!(rows[0]["bind_reason"], "has a foreign-writable ancestor");
+}
+
+#[test]
+fn stage19_recheck_refuses_ancestor_retarget_into_denied_subtree() {
+    let temp = private_dir();
+    let home = temp.path();
+    let bin = home.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let candidate = bin.join("codex");
+    private_executable(&candidate);
+    let mut scan = scan(home);
+    scan.offer(Provider::Codex, candidate.clone(), Kind::Unknown, None);
+    assert!(scan.candidates[0].object.as_ref().unwrap().is_ok());
+
+    fs::rename(&bin, home.join("original")).unwrap();
+    // The target does not exist. A lookup before the guard would instead
+    // return NotFound and produce no skipped row.
+    symlink(home.join(".codex-denied"), &bin).unwrap();
+    let observed = scan.results(Vec::new());
+    assert_eq!(observed["executables"], json!([]));
+    assert_eq!(observed["skipped"][0]["path"], display::path(&candidate));
+    assert_eq!(observed["skipped"][0]["reason"], "inside provider home");
 }

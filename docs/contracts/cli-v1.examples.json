@@ -1883,5 +1883,23 @@
       "os": "macos",
       "arch": "aarch64"
     }
+  },
+  {
+    "schema": 1,
+    "command": "provider.detect",
+    "ok": true,
+    "revision": "0",
+    "data": {
+      "executables": [],
+      "desktop_apps": [],
+      "skipped": [
+        {
+          "provider": "codex",
+          "path": "/fixture/.codex/bin/codex",
+          "reason": "inside provider home"
+        }
+      ],
+      "limited": false
+    }
   }
 ]

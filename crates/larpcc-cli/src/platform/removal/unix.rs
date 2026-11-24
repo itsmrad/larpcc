@@ -18,7 +18,7 @@ pub(crate) struct Profiles {
     dir: File,
 }
 
-fn stat_at(parent: &File, name: &CStr) -> io::Result<Option<libc::stat>> {
+pub(crate) fn stat_at(parent: &File, name: &CStr) -> io::Result<Option<libc::stat>> {
     let mut stat = std::mem::MaybeUninit::uninit();
     // fstatat initializes the buffer on success and never follows the final component.
     if unsafe {
@@ -40,7 +40,7 @@ fn stat_at(parent: &File, name: &CStr) -> io::Result<Option<libc::stat>> {
     }
 }
 
-fn open_dir(parent: &File, name: &CStr) -> io::Result<File> {
+pub(crate) fn open_dir(parent: &File, name: &CStr) -> io::Result<File> {
     // All names are single components from a trusted derivation or readdir.
     let fd = unsafe {
         libc::openat(

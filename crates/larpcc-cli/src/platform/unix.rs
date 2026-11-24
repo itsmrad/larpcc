@@ -1,4 +1,6 @@
 use super::*;
+#[path = "unix/detection.rs"]
+pub(crate) mod detection;
 use std::{
     fs::{self, OpenOptions},
     io::{self, Read},

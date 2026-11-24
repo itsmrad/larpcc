@@ -43,12 +43,12 @@ install kind (`native`, `homebrew`, `npm`, `bun`, `unknown`), then provider and
 path. Binding remains the separate, explicit `provider bind` command.
 
 On macOS check `Claude.app` and `ChatGPT.app` under `/Applications` and
-`~/Applications`. Report bounded bundle identifier and version metadata and
-the code requirement result. Stage 09 has a reviewed requirement for ChatGPT;
-report `unavailable` for Claude until a requirement is reviewed.
-Detection uses the same macOS static code check and flags as desktop bind,
-with the same residual behavior of the system Security framework. Detection
-does not make its own network requests.
+`~/Applications`. Read bounded bundle identifier and version metadata using
+held directory descriptors. Both code requirements are `unavailable` in
+detection. Claude lacks a reviewed requirement. The existing ChatGPT static
+check and executable code-directory hash require pathname-based Security APIs,
+so detection leaves them unavailable. Explicit desktop bind retains its
+existing static check and flags. Detection makes no network requests.
 
 The success envelope uses `command:"provider.detect"` and the observed
 registry revision, including `"0"` on a fresh installation. Its data has
@@ -80,3 +80,10 @@ each approved probe. Use no installation or real account in
 tests. Cover a forbidden symlink destination, a link loop, inaccessible
 directories, duplicate spellings, a fake executable under a writable parent,
 the revision precondition and the fixed Windows response.
+
+Detection keeps the observed executable descriptor for evidence and rechecks
+the nominated spelling through the same guarded component walk. It uses the
+bind validator's owner, D41 directory mode, ACL, native-header, executable bit,
+self-image and managed-root rules. Unlike explicit bind, it refuses evidence
+when the spelling changes during the scan, and its macOS ACL check uses
+descriptors. A low-level failure is reported without a filesystem error path.

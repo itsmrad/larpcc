@@ -1,12 +1,12 @@
-//! Signed-bundle discovery for the CLI. The caller confines bundle paths before
-//! any plist or signed-resource reads.
+//! Bounded descriptor-relative bundle metadata for CLI discovery.
 use super::{
     CFDictionaryGetValue, CFGetTypeID, CFStringCreateWithBytes, CFStringGetCString,
-    CFStringGetTypeID, Owned, Ref, app_anchor, app_file, validate,
+    CFStringGetTypeID, Owned, Ref,
 };
+use crate::platform::{detection::open_regular, removal::open_dir};
 use crate::registry::{Provider, display};
 use serde_json::{Value, json};
-use std::{ffi::CStr, io::Read, path::Path, ptr};
+use std::{ffi::CStr, fs::File, io::Read, path::Path, ptr};
 
 const MAX_PLIST_BYTES: u64 = 256 * 1024;
 const UTF8: u32 = 0x08000100;
@@ -25,13 +25,14 @@ unsafe extern "C" {
     fn CFStringGetLength(value: Ref) -> isize;
 }
 
-pub(in crate::desktop) fn collect(
+pub(crate) fn collect(
     provider: Provider,
     path: &Path,
     resolved: &Path,
-    confined: bool,
+    directory: &File,
+    allow: impl Fn(&Path) -> bool,
 ) -> Value {
-    let plist = confined.then(|| read_plist(resolved)).flatten();
+    let plist = read_plist(resolved, directory, allow);
     let (bundle_id, version) = match plist {
         Some(plist) => (
             plist_string(&plist, b"CFBundleIdentifier"),
@@ -39,27 +40,25 @@ pub(in crate::desktop) fn collect(
         ),
         None => (None, None),
     };
-    let requirement = match (provider, confined) {
-        (Provider::Claude, _) | (_, false) => "unavailable",
-        (Provider::Codex, true) if validate(resolved, None, true).is_ok() => "passed",
-        (Provider::Codex, true) => "failed",
-    };
     json!({
         "provider": provider,
         "path": display::path(path),
         "resolved_path": display::path(resolved),
         "bundle_id": bundle_id,
         "version": version,
-        "code_requirement": requirement,
+        "code_requirement": "unavailable",
     })
 }
 
-fn read_plist(app: &Path) -> Option<Owned> {
-    let path = app.join("Contents/Info.plist");
-    let _ancestry = app_anchor(&path).ok()?;
-    let info = app_file(&path).ok()?;
+fn read_plist(app: &Path, directory: &File, allow: impl Fn(&Path) -> bool) -> Option<Owned> {
+    let contents = app.join("Contents");
+    if !allow(&contents) || !allow(&contents.join("Info.plist")) {
+        return None;
+    }
+    let contents = open_dir(directory, c"Contents").ok()?;
+    let info = open_regular(&contents, c"Info.plist").ok()?;
     let mut bytes = Vec::new();
-    (&info.file)
+    (&info)
         .take(MAX_PLIST_BYTES + 1)
         .read_to_end(&mut bytes)
         .ok()?;
