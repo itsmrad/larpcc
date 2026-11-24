@@ -148,6 +148,7 @@ struct UsageSection: View {
                 } else {
                     Button { store.refreshUsage() } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.borderless)
+                        .foregroundStyle(SettingsTypography.supportingInk)
                         .help("Refresh usage")
                         .accessibilityLabel("Refresh usage")
                 }
@@ -166,7 +167,9 @@ struct ResetAvailabilityRow: View {
     let credits: Int?
     var body: some View {
         LabeledContent {
-            Text(ResetAvailability.text(credits: credits)).monospacedDigit()
+            Text(ResetAvailability.text(credits: credits))
+                .monospacedDigit()
+                .foregroundStyle(SettingsTypography.supportingInk)
         } label: {
             Text("Limit resets")
             if let credits, credits > 0 {
@@ -182,10 +185,19 @@ private struct UsageWindowRow: View {
     let window: UsageWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SettingsSpacing.tight) {
+        VStack(alignment: .leading, spacing: SettingsSpacing.inline) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title)
-                    .font(SettingsTypography.heading)
+                VStack(alignment: .leading, spacing: SettingsSpacing.tight) {
+                    Text(title)
+                        .font(SettingsTypography.heading)
+                    if let resetsAt = window.resetsAt {
+                        TimelineView(.everyMinute) { context in
+                            Text(resetsAt > context.date ? "Resets in \(UsageTime.span(resetsAt.timeIntervalSince(context.date)))" : "Reset time passed. Refresh usage.")
+                        }
+                        .font(SettingsTypography.supporting)
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                    }
+                }
                 Spacer()
                 Text("\(Int(window.leftPercent.rounded()))% left")
                     .monospacedDigit()
@@ -194,13 +206,6 @@ private struct UsageWindowRow: View {
             ProgressView(value: window.leftPercent, total: 100)
                 .tint(window.levelColor)
                 .accessibilityHidden(true)
-            if let resetsAt = window.resetsAt {
-                TimelineView(.everyMinute) { context in
-                    Text(resetsAt > context.date ? "Resets in \(UsageTime.span(resetsAt.timeIntervalSince(context.date)))" : "Reset time passed. Refresh usage.")
-                }
-                .font(SettingsTypography.supporting)
-                .foregroundStyle(SettingsTypography.supportingInk)
-            }
         }
         .padding(.vertical, SettingsSpacing.tight)
         .accessibilityElement(children: .combine)

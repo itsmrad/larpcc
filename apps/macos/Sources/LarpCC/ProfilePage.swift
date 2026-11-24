@@ -27,8 +27,13 @@ struct ProfilePage: View {
                             Image(systemName: "exclamationmark.triangle.fill").symbolRenderingMode(.multicolor)
                         }
                     }
-                } else if profile.needsAttention {
-                    RowLabel("Configuration needs attention", subtitle: attentionDetail) {
+                } else if profile.needsAttention, let attentionDetail {
+                    Label {
+                        Text(attentionDetail)
+                            .font(SettingsTypography.supporting)
+                            .foregroundStyle(SettingsTypography.supportingInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .symbolRenderingMode(.multicolor)
                     }
@@ -175,14 +180,14 @@ struct ProfilePage: View {
         }
     }
 
-    private var attentionDetail: String {
-        if store.isFixture { return "Sample configuration warning." }
+    private var attentionDetail: String? {
         if profile.desktopBinding?.state == .invalid {
             return "Choose Bind in Configuration to replace the \(profile.provider.desktopApp) binding."
         }
         if profile.desktopBinding?.state == .unbound {
             return "Choose Bind in Configuration to link \(profile.provider.desktopApp)."
         }
+        if store.isFixture { return nil }
         return "In Terminal, run larp cc profile show \(profile.name) --json to check the folder, aliases and app binding."
     }
 
