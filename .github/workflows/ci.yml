@@ -91,6 +91,9 @@ jobs:
       - run: cargo +stable test --test gate --all-features --locked
       - run: cargo +stable clippy --workspace --all-targets --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked -- -D warnings
       - run: cargo +stable test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
+      - run: python crates/larpcc-cli/tests/support/stage14_check.py +stable
+        env:
+          CARGO_TARGET_DIR: ${{ env.LARPCC_TEST_PARENT }}/synthetic-target
       - run: cargo +stable test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
       - if: runner.os == 'Windows'
         name: Report bounded grandchild process timings
@@ -139,4 +142,7 @@ jobs:
         env:
           LARPCC_STAGE_FILTER: stage07_
       - run: cargo +1.89 test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
+      - run: python crates/larpcc-cli/tests/support/stage14_check.py +1.89
+        env:
+          CARGO_TARGET_DIR: ${{ env.LARPCC_TEST_PARENT }}/synthetic-target
       - run: cargo +1.89 test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked

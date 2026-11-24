@@ -1,3 +1,5 @@
+#[path = "../../src/account/mod.rs"]
+mod account;
 #[path = "../../src/aliases.rs"]
 #[allow(dead_code)]
 mod aliases;
@@ -75,6 +77,12 @@ fn main() -> std::process::ExitCode {
     }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("stage3")) {
         return stage3();
+    }
+    if let Some(digest) = std::env::var("LARPCC_STAGE14_FAKE_DIGEST")
+        .ok()
+        .and_then(|value| invented_digest(&value))
+    {
+        return cli::run_with_status_rows(&[account::synthetic_row(digest)]);
     }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("cc"))
         && std::env::args_os().nth(2).as_deref() != Some(std::ffi::OsStr::new("run"))
