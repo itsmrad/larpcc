@@ -134,8 +134,8 @@ try:
     report(b"resumed")
     os.write(master, b"\x1c" if final_signal == signal.SIGQUIT else b"\x03")
     wait_for(exited)
-    complete = True
     assert os.WIFEXITED(result) and os.WEXITSTATUS(result) == 0, result
+    complete = True
     print("real PTY stdin/out/err, foreground group, Ctrl-Z/fg, resize and Ctrl-C passed")
 finally:
     if not complete:

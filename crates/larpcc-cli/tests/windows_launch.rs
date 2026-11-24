@@ -259,7 +259,8 @@ impl Grandchild {
     /// exit code while the process is still terminating, before Windows records ExitTime.
     fn wait_exit(&self, end: Instant) {
         let remaining = end.saturating_duration_since(Instant::now());
-        let milliseconds = u32::try_from(remaining.as_millis()).unwrap_or(u32::MAX);
+        // Never u32::MAX: that is INFINITE.
+        let milliseconds = u32::try_from(remaining.as_millis()).unwrap_or(u32::MAX - 1);
         // SAFETY: retained process handle opened with SYNCHRONIZE access.
         let event = unsafe { WaitForSingleObject(self.0.as_raw_handle(), milliseconds) };
         // A timeout leaves the process running; the status assertions below report it.
