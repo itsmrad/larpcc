@@ -22,6 +22,14 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - if: runner.os == 'macOS'
+        name: Check local macOS installer
+        shell: bash
+        run: |
+          bash -n scripts/install-macos.sh
+          ./scripts/install-macos.sh --help
+          ./scripts/install-macos.sh --dry-run
+          ./scripts/install-macos.sh --prefix "$RUNNER_TEMP/custom bin" --dry-run
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - if: runner.os != 'Windows'
         run: python crates/larpcc-cli/tests/support/prepare_parent.py

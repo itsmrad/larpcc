@@ -2,7 +2,60 @@
 
 Larp CC manages named Claude Code and Codex profile records, distinct state directories, and explicit native executable bindings. Names are labels; immutable numeric IDs determine the directories. Renaming preserves both. Forgetting removes metadata and keeps the directory.
 
-**Provider execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]`, human `status NAME` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. Binding a path does not qualify a provider, version, installation or account-isolation claim.
+Use LarpCC only for your own accounts. Separate profiles are a convenience. Do
+not use them to share or resell accounts. LarpCC cannot guarantee that a provider
+will not restrict or suspend an account. Use it at your own risk and follow each
+provider's terms.
+
+**Provider CLI execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]`, human `status NAME` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. Binding a path does not qualify a provider, version, installation or account-isolation claim. On macOS, desktop dispatch has a separate admission gate for the official ChatGPT.app.
+
+## Install on macOS (local, unsigned)
+
+Use macOS 14 or newer with Rust 1.89 or newer and Apple's Swift build tools
+(Swift 5.9 or newer). From the repository root, preview and run the installer.
+
+```sh
+./scripts/install-macos.sh --dry-run
+./scripts/install-macos.sh
+```
+
+The installer replaces `~/.local/bin/larp` and `~/Applications/LarpCC.app`.
+Use `--prefix /absolute/path/to/bin` to choose another directory for `larp`.
+Add the chosen directory to `PATH` if needed. In LarpCC, use **General → larp
+executable → Choose…** to select the installed binary.
+
+To build and install manually with the default paths, run these commands from
+the repository root.
+
+```sh
+cargo build --release --locked --bin larp --target-dir "$PWD/target"
+./apps/macos/scripts/bundle.sh
+mkdir -p -m 0755 "$HOME/.local/bin" "$HOME/Applications"
+install -m 0755 target/release/larp "$HOME/.local/bin/larp"
+```
+
+Quit any running LarpCC settings app. If you already installed LarpCC, move the
+old `~/Applications/LarpCC.app` to the Trash in Finder. Then copy the new bundle.
+
+```sh
+ditto apps/macos/dist/LarpCC.app "$HOME/Applications/LarpCC.app"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+If macOS blocks your self-built unsigned app due to quarantine, you can clear
+the quarantine attribute for that bundle.
+
+```sh
+xattr -dr com.apple.quarantine "$HOME/Applications/LarpCC.app"
+```
+
+### Uninstall
+
+Quit LarpCC. Remove the `larp` file you installed from your chosen prefix and
+move the installed `~/Applications/LarpCC.app` to the Trash. Keep the profile data
+directory (`LARPCC_HOME` or `~/Library/Application Support/larpcc`).
+
+## Command-line use
 
 Requires Rust 1.89 or newer:
 
