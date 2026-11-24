@@ -122,7 +122,15 @@ fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
         ),
     }
 }
-fn failure(command: &str, error: Error) -> ExitCode {
+pub(super) fn failure(command: &str, error: Error) -> ExitCode {
+    if command == "status.account" && matches!(error, Error::AuthBusy) {
+        return json_error(
+            command,
+            "busy",
+            "Profile authentication operation is busy.",
+            1,
+        );
+    }
     let (code, message, exit) = failure_details(error);
     json_error(command, code, message, exit)
 }
@@ -141,7 +149,7 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         CcAction::Run { .. } => "run",
         CcAction::Login { .. } => "login",
         CcAction::Logout { .. } => "logout",
-        CcAction::Status { .. } => "status",
+        CcAction::Status { .. } => unreachable!(),
         CcAction::Provider {
             command: ProviderAction::List,
         } => "provider.list",
@@ -213,7 +221,7 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         CcAction::Skills {command} => r.skills(command.into_action()),
         CcAction::Mcp {command} => r.mcp(command.into_action()),
         CcAction::Alias {command} => command.execute(&r),
-        CcAction::Status {name} => r.metadata_json(command,Some(&name)),
+        CcAction::Status { .. } => unreachable!(),
         CcAction::Provider {command:ProviderAction::List} => r.metadata_json(command,None),
         CcAction::Provider {command:ProviderAction::Bind {provider,executable,replace}} => r.bind(provider,executable,replace).map(|outcome| json!({"changed":outcome != crate::registry::BindOutcome::Unchanged,"profile_id":null,"name":null,"warnings":[]})),
         CcAction::Profile {command: action} => match action {
