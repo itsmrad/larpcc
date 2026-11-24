@@ -50,6 +50,48 @@ on success/failure; cleanup failure is operational failure, never silent pass.
 Detected versions are result-local; ordinary read-only doctor does not probe or
 implicitly trust cached versions. No provider probe executed in Phase 0.
 
+### Minimal delivery (MVP, 2026-11-23)
+
+Only `doctor [PROFILE] [--detect-versions] [--json]` and `provider evidence
+PROVIDER [--json]` ship from this stage for the MVP. JSON launch and injection
+remain post-MVP. `provider::version::DESCRIPTORS` is empty. Approving the exact
+Claude Code and Codex descriptors is a later reviewed change, made from the
+`provider evidence` output gathered in stage 14 Phase 2 step 1.
+
+The probe's temporary LARPCC_HOME is `<data root>/probes/<nonce>/`, with one
+throwaway `profiles/claude-work` or `profiles/codex-45` holding `home`, `cli`
+(the fresh CLAUDE_CONFIG_DIR or CODEX_HOME) and `tmp`. The system temporary
+directory fails the trusted-ancestry checks, so it is not used. The registry
+ignores `probes/`, which is never a profile or registry entry. A tree left
+behind by a crash stays inert, never blocks list, add, delete, migrate or a
+later probe, and may be deleted by hand. Each probe removes only its own tree,
+using the checked handle-relative profile removal.
+
+The probe follows the stage 3 dispatch contract. The last step before process
+creation re-resolves the stored binding, requires the same resolved path and
+identity, and re-hashes the current bytes (bounded) against the retained
+verified handle. Any change refuses with a null version. The `/dev/null` and
+pipe descriptors and the held probe-home directory exist before that check,
+and the child enters the home with `fchdir`, so the only path lookup after the
+check is the exec itself. The `Command` carries no environment builder call;
+the child's environment is only the prepared list passed to `execve`. Rust
+std's own unavoidable pre-fork setup (its CLOEXEC error-report pipe and the
+environment read lock) still runs between the check and fork, as part of the
+stage 3 accepted residual. The child is then started by exact pathname. Path-reopen/same-user races after checks remain
+explicit. Descriptor-bound exec is not used (macOS has none), and the probe
+stays open on macOS under this documented residual.
+
+`provider evidence` selects only the requested binding from the
+revision-checked snapshot, then validates and reads only that executable. On
+macOS, the code-directory hash comes from a pathname API. Evidence therefore
+re-hashes afterwards and requires the same identity, size, SHA-256, mtime and
+ctime as the hashed handle, or it refuses the export.
+
+Known limitation: the probe runs on Unix only. Windows has no checked tree
+removal for the throwaway home, so a matching Windows descriptor yields null
+plus `version_probe_failed` and never spawns. Evidence export works on every
+platform; `owner_uid` and `mode` are null on Windows.
+
 ## Launch injection
 
 Native ROWS remains empty in this delivery, all four ordinary operations retain
