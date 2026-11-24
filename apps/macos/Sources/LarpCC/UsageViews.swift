@@ -40,6 +40,7 @@ struct UsageSettingsSection: View {
                 Text(source == UsageSource.live.rawValue && consented
                      ? "Live asks the provider through larp for current usage."
                      : "Local uses only data the official apps already saved on this Mac.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
             .pickerStyle(.segmented)
             if source == UsageSource.live.rawValue && consented {
@@ -50,6 +51,7 @@ struct UsageSettingsSection: View {
                 } label: {
                     Text("Refresh automatically")
                     Text("Off means usage updates only when you refresh.")
+                        .foregroundStyle(SettingsTypography.supportingInk)
                 }
                 LabeledContent {
                     Button("Refresh Now") { store.refreshUsage() }
@@ -96,7 +98,7 @@ struct LiveUsageConsentSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             Text("LarpCC itself never reads tokens; only larp does, and only while Live is on. You can switch back to Local in General at any time.")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SettingsTypography.supportingInk)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
@@ -119,13 +121,22 @@ struct UsageSection: View {
     var body: some View {
         let report = store.usage[profile.id]
         Section {
-            if let report {
-                if let window = report.fiveHour { UsageWindowRow(title: "5-hour window", window: window) }
-                if let window = report.weekly { UsageWindowRow(title: "Weekly window", window: window) }
-            } else {
-                Text(store.usageLoading ? "Reading usage…"
-                     : store.usageError ?? "No usage saved for this profile yet.")
-                    .foregroundStyle(.secondary)
+            if let window = report?.fiveHour { UsageWindowRow(title: "5-hour window", window: window) }
+            if let window = report?.weekly { UsageWindowRow(title: "Weekly window", window: window) }
+            if report?.fiveHour == nil && report?.weekly == nil {
+                if store.usageLoading {
+                    Text("Reading usage…")
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                } else if let error = store.usageError {
+                    RowLabel(UsagePreferences.source == .live ? "Live usage unavailable" : "Usage unavailable",
+                             subtitle: error) {
+                        Image(systemName: "exclamationmark.circle")
+                            .foregroundStyle(SettingsTypography.warningInk)
+                    }
+                } else {
+                    Text("No usage windows saved for this profile yet.")
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                }
             }
             ResetAvailabilityRow(credits: report?.resetCredits)
         } header: {
@@ -133,7 +144,7 @@ struct UsageSection: View {
                 Text("Usage")
                 Spacer()
                 if store.usageLoading {
-                    ProgressView().controlSize(.mini)
+                    ProgressView().controlSize(.mini).accessibilityLabel("Refreshing usage")
                 } else {
                     Button { store.refreshUsage() } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.borderless)
@@ -144,7 +155,7 @@ struct UsageSection: View {
         } footer: {
             if report != nil {
                 UsageUpdatedText(report: report, loading: false)
-                    .font(.footnote)
+                    .font(SettingsTypography.supporting)
             }
         }
     }
@@ -160,6 +171,7 @@ struct ResetAvailabilityRow: View {
             Text("Limit resets")
             if let credits, credits > 0 {
                 Text("Each one resets a window early.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
     }
@@ -170,26 +182,27 @@ private struct UsageWindowRow: View {
     let window: UsageWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: SettingsSpacing.tight) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title)
+                    .font(SettingsTypography.heading)
                 Spacer()
                 Text("\(Int(window.leftPercent.rounded()))% left")
                     .monospacedDigit()
-                    .foregroundStyle(window.leftPercent <= 10 ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(window.leftPercent < 10 ? SettingsTypography.criticalInk : Color.primary)
             }
             ProgressView(value: window.leftPercent, total: 100)
                 .tint(window.levelColor)
                 .accessibilityHidden(true)
             if let resetsAt = window.resetsAt {
                 TimelineView(.everyMinute) { context in
-                    Text(resetsAt > context.date ? "Resets in \(UsageTime.span(resetsAt.timeIntervalSince(context.date)))" : "Resetting now")
+                    Text(resetsAt > context.date ? "Resets in \(UsageTime.span(resetsAt.timeIntervalSince(context.date)))" : "Reset time passed. Refresh usage.")
                 }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(SettingsTypography.supporting)
+                .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, SettingsSpacing.tight)
         .accessibilityElement(children: .combine)
     }
 }
@@ -200,15 +213,15 @@ struct UsageUpdatedText: View {
     let loading: Bool
     var body: some View {
         if loading {
-            Text("Updating…").foregroundStyle(.secondary)
+            Text("Updating…").foregroundStyle(SettingsTypography.supportingInk)
         } else if let report, let captured = report.capturedAt {
             TimelineView(.everyMinute) { context in
                 let age = context.date.timeIntervalSince(captured)
                 Text("Updated \(age < 60 ? "just now" : UsageTime.span(age) + " ago") · \(report.source.title)")
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(SettingsTypography.supportingInk)
         } else {
-            Text("Not updated yet").foregroundStyle(.secondary)
+            Text("Not updated yet").foregroundStyle(SettingsTypography.supportingInk)
         }
     }
 }

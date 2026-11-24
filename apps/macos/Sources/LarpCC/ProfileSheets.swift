@@ -3,7 +3,7 @@ import LarpModel
 
 // MARK: - Profiles
 
-private let nameRule = "Lowercase letters, digits, - or _, up to 32 characters, starting with a letter."
+private let nameRule = "Start with a lowercase letter. Use up to 32 lowercase letters, digits, hyphens or underscores. The names larp, claude and codex are reserved."
 
 struct AddProfileSheet: View {
     @ObservedObject var store: AppStore
@@ -11,6 +11,7 @@ struct AddProfileSheet: View {
     @State private var name = ""
     @State private var provider = Provider.claude
     @State private var error: String?
+    @FocusState private var nameFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     private var taken: Bool { store.snapshot?.profiles.contains { $0.name == trimmed(name) } ?? false }
@@ -20,6 +21,7 @@ struct AddProfileSheet: View {
         EditSheet(title: "New Profile", confirm: "Add Profile", canConfirm: valid && !store.busy, error: $error, onConfirm: add) {
             Section {
                 TextField("Name", text: $name, prompt: Text("claude-work"))
+                    .focused($nameFocused)
                 Picker("Provider", selection: $provider) {
                     ForEach(Provider.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
@@ -27,11 +29,11 @@ struct AddProfileSheet: View {
             } header: {
                 Text("New Profile")
             } footer: {
-                Text(taken ? "A profile with that name already exists."
-                     : !trimmed(name).isEmpty && !valid ? "\(nameRule) Not larp, claude or codex." : nameRule)
-                    .foregroundStyle(.secondary)
+                Text(taken ? "A profile with that name already exists." : nameRule)
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
+        .defaultFocus($nameFocused, true)
     }
 
     private func add() {
@@ -48,6 +50,7 @@ struct RenameProfileSheet: View {
     let profile: Profile
     @State private var name: String
     @State private var error: String?
+    @FocusState private var nameFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     init(store: AppStore, profile: Profile) {
@@ -63,13 +66,15 @@ struct RenameProfileSheet: View {
         } content: {
             Section {
                 TextField("New name", text: $name)
+                    .focused($nameFocused)
             } header: {
                 Text("Rename “\(profile.name)”")
             } footer: {
-                Text(taken ? "A profile with that name already exists." : "\(nameRule) Aliases keep pointing at this profile.")
-                    .foregroundStyle(.secondary)
+                Text(taken ? "A profile with that name already exists." : "\(nameRule) Existing aliases stay with this profile.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
+        .defaultFocus($nameFocused, true)
     }
 }
 
@@ -109,6 +114,7 @@ struct BindSheet: View {
                     Text(kind == .app ? "Application" : "Executable")
                     Text(path.isEmpty ? "None chosen" : path)
                         .truncationMode(.middle)
+                        .foregroundStyle(SettingsTypography.supportingInk)
                 }
                 if kind == .app {
                     TextField("Version label", text: $version, prompt: Text("Optional, e.g. 1.2.3"))
@@ -116,14 +122,15 @@ struct BindSheet: View {
                 Toggle(isOn: $replace) {
                     Text("Replace existing binding")
                     Text("Required when \(provider.title) already has one.")
+                        .foregroundStyle(SettingsTypography.supportingInk)
                 }
             } header: {
                 Text(kind == .app ? "\(provider.desktopApp) for \(provider.title) profiles" : "\(provider.title) command-line tool")
             } footer: {
                 Text(kind == .app
-                     ? "The version label is your own note; larp doesn't verify it. Binding doesn't qualify launching."
-                     : "Larp runs this executable for \(provider.title) profiles. It is never discovered from PATH.")
-                    .foregroundStyle(.secondary)
+                     ? "This binding is shared by all \(provider.title) profiles. The optional version label is a note. Launching requires separate qualification."
+                     : "Larp uses the chosen executable for all \(provider.title) profiles.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
     }
