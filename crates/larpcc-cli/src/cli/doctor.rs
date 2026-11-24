@@ -13,7 +13,8 @@ pub(super) fn data(
     detect: bool,
 ) -> Result<Value, Error> {
     let mut data = match profile {
-        Some(name) => registry.metadata_json("status", Some(name))?,
+        // The frozen `status` metadata shape, shared with `status --no-account`.
+        Some(name) => registry.with_status_metadata(name, None, |_| Ok(()))?.0,
         None => {
             let bindings = registry.metadata_json("provider.list", None)?;
             json!({"profile":null,"detected_versions":bindings["bindings"],"native_auth":"not_observed","native_rows":[],"diagnostics":[]})
