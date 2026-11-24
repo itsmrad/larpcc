@@ -141,6 +141,9 @@ jobs:
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
         env:
           LARPCC_STAGE_FILTER: stage07_
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
+        env:
+          LARPCC_STAGE_FILTER: stage08_
       - run: cargo +1.89 test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
       - run: python crates/larpcc-cli/tests/support/stage14_check.py +1.89
         env:
