@@ -236,8 +236,7 @@ private struct ClassicFormStyle: FormStyle {
                         if !section.footer.isEmpty {
                             VStack(alignment: .leading, spacing: SettingsSpacing.tight) { section.footer }
                                 .font(SettingsTypography.supporting)
-                                // Some footer views already use the secondary style.
-                                .foregroundStyle(SettingsTypography.supportingInk, SettingsTypography.supportingInk)
+                                .foregroundStyle(.secondary)
                                 .padding(.horizontal, tokens.formRowInset)
                         }
                     }
