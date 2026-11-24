@@ -217,11 +217,7 @@ struct MenuBarPanel: View {
             expandedID = nil
             launchFeedback = nil
             hasKeyboardFocus = true
-            store.setUsageView(.menuBar, visible: true)
             store.menuBarPanelOpened()
-        }
-        .onDisappear {
-            if !isSnapshot { store.setUsageView(.menuBar, visible: false) }
         }
         // A selection or an open card whose row has gone (list emptied, profile switched off) is dropped.
         .onChange(of: items) { _, items in

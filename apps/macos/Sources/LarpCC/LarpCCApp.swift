@@ -18,11 +18,8 @@ struct LarpCCApp: App {
     var body: some Scene {
         Window("LarpCC", id: "settings") {
             SettingsView(store: store)
-                .onAppear {
-                    fitWindowOnScreen()
-                    store.setUsageView(.settings, visible: true)
-                }
-                .onDisappear { store.setUsageView(.settings, visible: false) }
+                .onAppear { fitWindowOnScreen() }
+                .background { UsageWindowVisibility(store: store, usageView: .settings) }
         }
         .defaultSize(width: 900, height: 680)
         .defaultPosition(.center)
@@ -37,6 +34,7 @@ struct LarpCCApp: App {
         }
         MenuBarExtra(isInserted: MenuBarDockPolicy.insertion($menuBarShown)) {
             MenuBarPanel(store: store)
+                .background { UsageWindowVisibility(store: store, usageView: .menuBar) }
         } label: {
             MenuBarLabel(store: store)
         }
