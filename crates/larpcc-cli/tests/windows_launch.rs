@@ -15,10 +15,11 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
-    Foundation::FILETIME,
+    Foundation::{FILETIME, WAIT_FAILED},
     System::Threading::{
         CREATE_NO_WINDOW, GetExitCodeProcess, GetProcessTimes, OpenProcess,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, TerminateProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        TerminateProcess, WaitForSingleObject,
     },
 };
 fn hex(value: &OsStr) -> String {
@@ -210,7 +211,7 @@ impl Grandchild {
         // SAFETY: open only the synthetic record's PID, no inheritance or privilege changes.
         let raw = unsafe {
             OpenProcess(
-                PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
                 0,
                 pid,
             )
@@ -253,6 +254,21 @@ impl Grandchild {
         let ticks =
             |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
         Ok((ticks(created), ticks(exited)))
+    }
+    /// Waits until the process object is signaled. GetExitCodeProcess already reports the
+    /// exit code while the process is still terminating, before Windows records ExitTime.
+    fn wait_exit(&self, end: Instant) {
+        let remaining = end.saturating_duration_since(Instant::now());
+        let milliseconds = u32::try_from(remaining.as_millis()).unwrap_or(u32::MAX);
+        // SAFETY: retained process handle opened with SYNCHRONIZE access.
+        let event = unsafe { WaitForSingleObject(self.0.as_raw_handle(), milliseconds) };
+        // A timeout leaves the process running; the status assertions below report it.
+        assert_ne!(
+            event,
+            WAIT_FAILED,
+            "process wait failed: {}",
+            io::Error::last_os_error()
+        );
     }
     fn status(&self) -> io::Result<u32> {
         let mut code = 0;
@@ -342,14 +358,9 @@ fn l07_bounded_grandchild_inherits_exact_selected_home() {
         create_file(&release, b"observe direct exit");
         let grandchild = process_record(&child_record, end);
         let child = Grandchild::open(&grandchild);
-        while Instant::now() < end {
-            if direct.status().unwrap() != 259
-                && launcher_handle.status().unwrap() != 259
-                && child.status().unwrap() != 259
-            {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
+        // Wait for each process object, not its exit code: only a signaled process has a final ExitTime.
+        for process in [&direct, &launcher_handle, &child] {
+            process.wait_exit(end);
         }
         let observed = started.elapsed();
         let (direct_created, direct_exited) = Grandchild::times(&direct.0).unwrap();
