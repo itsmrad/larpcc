@@ -84,32 +84,45 @@ pub(super) fn collect(registry: &Registry, provider: Option<Provider>) -> Result
             }
         }
     }
-    for path in protected {
-        scan.exclusions.insert(&path);
-    }
-    let allowed = |path: &Path| scan.exclusions.allows(path);
-    if [
+    scan.exclusions
+        .register(&protected, || Instant::now() < deadline)
+        .map_err(|_| Error::ForbiddenSource)?;
+    let fixed = [
         "profiles",
         "auth-locks",
         "registry.json",
         "registry.lock",
         "registry.json.tmp",
         "share-journal.json",
-    ]
-    .iter()
-    .any(|name| !allowed(&registry.root().join(name)))
+    ];
+    if fixed
+        .iter()
+        .any(|name| !scan.exclusions.allows(&registry.root().join(name)))
     {
         return Err(Error::ForbiddenSource);
     }
     // Registry path resolution must obey the same exclusions as search roots.
     for prefix in registry.root().ancestors() {
-        match walk(prefix, allowed, false) {
+        match walk(
+            prefix,
+            |path, parent| scan.exclusions.allows_child(path, parent),
+            true,
+        ) {
             Ok(entry) => {
+                let directory = entry.directory.ok_or(Error::ForbiddenSource)?;
                 let tail = registry
                     .root()
                     .strip_prefix(prefix)
                     .map_err(|_| Error::ForbiddenSource)?;
                 scan.managed_root = entry.path.join(tail);
+                if fixed.iter().any(|name| {
+                    !scan.exclusions.allows_child(
+                        &scan.managed_root.join(name),
+                        tail.as_os_str().is_empty().then_some(&directory),
+                    )
+                }) {
+                    return Err(Error::ForbiddenSource);
+                }
                 break;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -228,7 +241,11 @@ impl Scan {
         if !self.start_directory() {
             return None;
         }
-        let entry = match walk(path, |p| self.allow(p), true) {
+        let entry = match walk(
+            path,
+            |p, parent| self.time_left() && self.exclusions.allows_child(p, parent),
+            true,
+        ) {
             Ok(entry) => entry,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
             Err(_) => return None,
@@ -295,8 +312,9 @@ impl Scan {
 
     fn locate(&mut self, provider: Provider, path: &Path, executable: bool) -> Option<fs::Entry> {
         let inside_home = Cell::new(self.exclusions.inside_provider_home(path));
-        let guard = |part: &Path| {
-            let inside = self.exclusions.inside_provider_home(part);
+        let guard = |part: &Path, parent: Option<&std::fs::File>| {
+            let inside = self.exclusions.inside_provider_home(part)
+                || self.exclusions.denied_child(part, parent);
             inside_home.set(inside);
             !inside && self.allow(part)
         };
@@ -442,7 +460,9 @@ impl Scan {
                             &path,
                             &entry.path,
                             &directory,
-                            |part| self.allow(part),
+                            |part, parent| {
+                                self.time_left() && self.exclusions.allows_child(part, Some(parent))
+                            },
                         ));
                     }
                 }

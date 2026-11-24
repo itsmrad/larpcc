@@ -30,7 +30,7 @@ pub(crate) fn collect(
     path: &Path,
     resolved: &Path,
     directory: &File,
-    allow: impl Fn(&Path) -> bool,
+    allow: impl Fn(&Path, &File) -> bool,
 ) -> Value {
     let plist = read_plist(resolved, directory, allow);
     let (bundle_id, version) = match plist {
@@ -50,13 +50,16 @@ pub(crate) fn collect(
     })
 }
 
-fn read_plist(app: &Path, directory: &File, allow: impl Fn(&Path) -> bool) -> Option<Owned> {
+fn read_plist(app: &Path, directory: &File, allow: impl Fn(&Path, &File) -> bool) -> Option<Owned> {
     let contents = app.join("Contents");
-    if !allow(&contents) || !allow(&contents.join("Info.plist")) {
+    if !allow(&contents, directory) {
         return None;
     }
-    let contents = open_dir(directory, c"Contents").ok()?;
-    let info = open_regular(&contents, c"Info.plist").ok()?;
+    let contents_dir = open_dir(directory, c"Contents").ok()?;
+    if !allow(&contents.join("Info.plist"), &contents_dir) {
+        return None;
+    }
+    let info = open_regular(&contents_dir, c"Info.plist").ok()?;
     let mut bytes = Vec::new();
     (&info)
         .take(MAX_PLIST_BYTES + 1)

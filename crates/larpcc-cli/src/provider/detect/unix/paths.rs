@@ -1,6 +1,9 @@
+use super::fs::walk_parent;
 use std::{
-    ffi::OsStr,
-    os::unix::ffi::OsStrExt,
+    ffi::{OsStr, OsString},
+    fs::File,
+    io,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Component, Path, PathBuf},
 };
 
@@ -27,6 +30,7 @@ impl Kind {
 
 pub(super) struct Exclusions {
     roots: Vec<PathBuf>,
+    edges: Vec<((u64, u64), OsString)>,
     claude_install: Option<PathBuf>,
 }
 
@@ -34,8 +38,79 @@ impl Exclusions {
     pub(super) fn new(home: Option<&Path>) -> Self {
         Self {
             roots: Vec::new(),
+            edges: Vec::new(),
             claude_install: home.map(|p| comparable(&p.join(".local/share/claude"))),
         }
+    }
+
+    pub(super) fn register(
+        &mut self,
+        paths: &[PathBuf],
+        within_budget: impl Fn() -> bool,
+    ) -> io::Result<()> {
+        let mut missing_edges = Vec::new();
+        for path in paths {
+            if !path.is_absolute()
+                || path.file_name().is_none()
+                || path.components().any(|part| part == Component::ParentDir)
+            {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            self.insert(path);
+        }
+        for path in paths {
+            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+                return Err(io::ErrorKind::InvalidInput.into());
+            };
+            let mut absent = None;
+            let mapped = walk_parent(
+                parent,
+                |part, directory| {
+                    within_budget()
+                    && self.allows_child(part, directory)
+                    // Until all aliases are known, do not enter any unresolved
+                    // protected basename while mapping another root's parent.
+                    && !part.file_name().is_some_and(|leaf| paths.iter().any(|path| {
+                        path.file_name().is_some_and(|name| same_name(name, leaf))
+                    }))
+                },
+                |part, directory| {
+                    absent = Some(edge(directory, part));
+                },
+            );
+            match mapped {
+                Ok(entry) => {
+                    let directory = entry.directory.ok_or(io::ErrorKind::NotADirectory)?;
+                    let physical = entry.path.join(name);
+                    self.edges.push(edge(&directory, &physical)?);
+                    self.insert(&physical);
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    // Keep the first absent component closed for this scan if
+                    // another process creates it after the guarded lookup.
+                    missing_edges.push(absent.ok_or(error)??);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        self.edges.extend(missing_edges);
+        Ok(())
+    }
+
+    pub(super) fn allows_child(&self, path: &Path, parent: Option<&File>) -> bool {
+        self.allows(path) && !self.denied_child(path, parent)
+    }
+
+    pub(super) fn denied_child(&self, path: &Path, parent: Option<&File>) -> bool {
+        let Some((name, parent)) = path.file_name().zip(parent) else {
+            return false;
+        };
+        self.edges.iter().any(|(id, denied)| {
+            same_name(name, denied)
+                && parent
+                    .metadata()
+                    .map_or(true, |meta| (meta.dev(), meta.ino()) == *id)
+        })
     }
 
     pub(super) fn insert(&mut self, path: &Path) {
@@ -103,15 +178,27 @@ impl Exclusions {
 fn comparable(path: &Path) -> PathBuf {
     if cfg!(target_os = "macos") {
         let folded = path.as_os_str().as_bytes().to_ascii_lowercase();
-        let path = Path::new(OsStr::from_bytes(&folded));
-        // The writable data volume also exposes /Users via this spelling.
-        if let Ok(suffix) = path.strip_prefix("/system/volumes/data") {
-            return Path::new("/").join(suffix);
-        }
-        path.to_owned()
+        Path::new(OsStr::from_bytes(&folded)).to_owned()
     } else {
         path.to_owned()
     }
+}
+
+fn same_name(a: &OsStr, b: &OsStr) -> bool {
+    if cfg!(target_os = "macos") {
+        let (a, b) = (a.as_bytes(), b.as_bytes());
+        // Close on Unicode spellings whose filesystem equivalence we cannot
+        // establish without inspecting the child.
+        !a.is_ascii() || !b.is_ascii() || a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
+    }
+}
+
+fn edge(directory: &File, path: &Path) -> io::Result<((u64, u64), OsString)> {
+    let meta = directory.metadata()?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    Ok(((meta.dev(), meta.ino()), name.to_owned()))
 }
 
 pub(super) fn normalize(path: &Path) -> PathBuf {

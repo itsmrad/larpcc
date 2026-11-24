@@ -50,28 +50,40 @@ fn target_at(parent: &File, name: &CStr) -> io::Result<PathBuf> {
 
 pub(super) fn walk(
     path: &Path,
-    allow: impl Fn(&Path) -> bool,
+    allow: impl Fn(&Path, Option<&File>) -> bool,
     open_leaf_directory: bool,
 ) -> io::Result<Entry> {
-    walk_inner(path, allow, open_leaf_directory, None)
+    walk_inner(path, allow, open_leaf_directory, None, |_, _| {})
+}
+
+pub(super) fn walk_parent(
+    path: &Path,
+    allow: impl Fn(&Path, Option<&File>) -> bool,
+    missing: impl FnMut(&Path, &File),
+) -> io::Result<Entry> {
+    walk_inner(path, allow, true, None, missing)
 }
 
 pub(super) fn walk_executable(
     path: &Path,
-    allow: impl Fn(&Path) -> bool,
+    allow: impl Fn(&Path, Option<&File>) -> bool,
     managed_root: &Path,
 ) -> io::Result<Entry> {
-    walk_inner(path, allow, false, Some(managed_root))
+    walk_inner(path, allow, false, Some(managed_root), |_, _| {})
 }
 
 fn walk_inner(
     path: &Path,
-    allow: impl Fn(&Path) -> bool,
+    allow: impl Fn(&Path, Option<&File>) -> bool,
     open_leaf_directory: bool,
     managed_root: Option<&Path>,
+    mut on_missing: impl FnMut(&Path, &File),
 ) -> io::Result<Entry> {
-    if !path.is_absolute() || path.as_os_str().len() > 4096 || !allow(Path::new("/")) {
+    if !path.is_absolute() || path.as_os_str().len() > 4096 {
         return Err(io::ErrorKind::InvalidInput.into());
+    }
+    if !allow(path, None) || !allow(Path::new("/"), None) {
+        return Err(io::ErrorKind::PermissionDenied.into());
     }
     let mut directories = vec![File::open("/")?];
     let mut resolved = PathBuf::from("/");
@@ -104,11 +116,14 @@ fn walk_inner(
         if resolved.as_os_str().len() > 4096 {
             return Err(io::ErrorKind::InvalidData.into());
         }
-        if !allow(&resolved) {
+        if !allow(&resolved, Some(dir)) {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
         let name = CString::new(part.into_vec()).map_err(|_| io::ErrorKind::InvalidInput)?;
-        let stat = stat_at(dir, &name)?.ok_or(io::ErrorKind::NotFound)?;
+        let Some(stat) = stat_at(dir, &name)? else {
+            on_missing(&resolved, dir);
+            return Err(io::ErrorKind::NotFound.into());
+        };
         match stat.st_mode & libc::S_IFMT {
             libc::S_IFLNK => {
                 if managed_root.is_some() && trust.is_ok() {

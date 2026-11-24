@@ -87,11 +87,15 @@ bind validator's owner, D41 directory mode, ACL, native-header, executable bit,
 self-image and managed-root rules. Unlike explicit bind, it refuses evidence
 when the spelling changes during the scan, and its macOS ACL check uses
 descriptors. A low-level failure is reported without a filesystem error path.
-The exclusions apply to configured spellings and symlink targets reached by
-the walk. An opaque filesystem alias such as a separate mount can expose the
-same directory without either spelling. Discovery does not open protected
-roots to build an identity map. The registry snapshot retains the existing
-path-based registry checks after detection's guarded root preflight.
+For each configured exclusion, detection walks its parent without looking up
+the protected leaf. It blocks the configured spelling, the resolved spelling
+and the protected name under that parent directory's device and inode. The
+identity check also covers system aliases of the parent. A missing ancestor
+is blocked for this scan. An ambiguous mapping stops detection before the
+search. The snapshot cannot identify an alias of the protected leaf itself,
+or a new target of a concurrently retargeted ancestor. The registry snapshot
+retains the existing path-based registry checks after detection's guarded
+root preflight.
 
 The Stage 08 runner for explicit bindings reopens the executable by pathname.
 On macOS that runner has no descriptor-based execution path. On Linux,

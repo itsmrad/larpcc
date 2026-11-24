@@ -57,7 +57,7 @@ fn stage19_guard_stops_before_lookup_inside_vendor_roots() {
         let allowed = std::cell::RefCell::new(Vec::new());
         let result = walk(
             &alias.join("codex"),
-            |path| {
+            |path, _| {
                 if !guard.allows(path) {
                     assert_eq!(path, root);
                     return false;
@@ -78,7 +78,7 @@ fn stage19_guard_stops_before_lookup_inside_vendor_roots() {
     let escaped = home.join("back-out");
     symlink(".codex/../elsewhere", &escaped).unwrap();
     assert!(matches!(
-        walk(&escaped, |p| guard.allows(p), false),
+        walk(&escaped, |p, parent| guard.allows_child(p, parent), false),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
     ));
     assert!(guard.allows(&home.join(".local/share/claude/versions/1.0")));
@@ -104,16 +104,65 @@ fn stage19_guard_stops_before_lookup_inside_vendor_roots() {
 fn stage19_configured_provider_root_is_excluded_before_walk() {
     let temp = private_dir();
     let path = temp.path();
-    let real = path.join("private-state");
-    fs::create_dir(&real).unwrap();
+    let actual = path.join("actual");
+    let alias = path.join("alias");
+    fs::create_dir(&actual).unwrap();
+    symlink("actual", &alias).unwrap();
+    let logical = alias.join("private-state");
+    let physical = actual.join("private-state");
     let mut scan = scan(path);
-    scan.exclusions.insert(&real);
-    assert!(!scan.exclusions.allows(&real));
-    assert!(!scan.exclusions.allows(&real.join("bin/codex")));
+    scan.exclusions
+        .register(std::slice::from_ref(&logical), || true)
+        .unwrap();
+    // No protected leaf exists. A syscall on either spelling before denial
+    // would return NotFound instead of PermissionDenied.
+    for root in [logical, physical] {
+        assert!(!scan.exclusions.allows(&root));
+        assert!(matches!(
+            walk(&root, |p, parent| scan.exclusions.allows_child(p, parent), false),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+    }
+    let renamed = path.join("renamed");
+    fs::rename(&actual, &renamed).unwrap();
+    let sibling = renamed.join("codex");
+    private_executable(&sibling);
+    let relocated = renamed.join("private-state");
     assert!(
-        scan.locate(Provider::Codex, &real.join("bin/codex"), true)
-            .is_none()
+        scan.exclusions.allows(&relocated),
+        "spelling alone would allow it"
     );
+    assert!(scan.locate(Provider::Codex, &relocated, true).is_none());
+    assert!(
+        scan.locate(Provider::Codex, &sibling, true)
+            .unwrap()
+            .object
+            .unwrap()
+            .is_ok()
+    );
+    assert!(scan.skipped.contains(&("codex", relocated)));
+}
+
+#[test]
+fn stage19_fails_closed_when_a_protected_parent_is_ambiguous() {
+    let temp = private_dir();
+    let path = temp.path();
+    let cycle = path.join("cycle");
+    symlink("cycle", &cycle).unwrap();
+    let mut guard = Exclusions::new(Some(path));
+    assert!(
+        guard
+            .register(&[cycle.join("private-state")], || true)
+            .is_err()
+    );
+    let mut guard = Exclusions::new(Some(path));
+    guard
+        .register(&[path.join("absent/one"), path.join("absent/two")], || true)
+        .unwrap();
+    assert!(matches!(
+        walk(&path.join("absent"), |p, parent| guard.allows_child(p, parent), false),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+    ));
 }
 
 #[test]
@@ -143,7 +192,7 @@ fn stage19_loops_and_unreadable_directories_have_no_candidates() {
     let cycle = path.join("cycle");
     symlink("cycle", &cycle).unwrap();
     assert!(matches!(
-        walk(&cycle, |_| true, false),
+        walk(&cycle, |_, _| true, false),
         Err(e) if e.kind() == std::io::ErrorKind::InvalidData
     ));
     let blocked = path.join("blocked");
@@ -204,8 +253,8 @@ fn stage19_bundle_plist_refuses_symlinked_contents() {
     symlink(home.join(".codex"), root.join("Contents")).unwrap();
     let guard = Exclusions::new(Some(home));
     let directory = fs::File::open(&root).unwrap();
-    let row = crate::desktop::detect_app(Provider::Codex, &root, &root, &directory, |p| {
-        guard.allows(p)
+    let row = crate::desktop::detect_app(Provider::Codex, &root, &root, &directory, |p, parent| {
+        guard.allows_child(p, Some(parent))
     });
     assert_eq!(row["bundle_id"], Value::Null);
     assert_eq!(row["code_requirement"], "unavailable");
