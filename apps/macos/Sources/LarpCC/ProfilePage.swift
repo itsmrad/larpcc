@@ -76,6 +76,8 @@ struct ProfilePage: View {
                     .foregroundStyle(.secondary)
             }
 
+            UsageSection(store: store, profile: profile)
+
             catalogSection("MCP Servers", items: snapshot.servers, kind: .mcp,
                            empty: "No MCP servers in the catalog.")
             catalogSection("Skills", items: snapshot.skills, kind: .skill,
@@ -104,7 +106,7 @@ struct ProfilePage: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .themedFormStyle()
         .sheet(isPresented: $renaming) { RenameProfileSheet(store: store, profile: profile) }
         .bindSheet($binding, store: store)
         .confirming($confirmation, store: store)
