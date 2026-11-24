@@ -1,0 +1,82 @@
+# Stage 19 — Onboarding detection (D40)
+
+`larp cc provider detect [--provider claude|codex] [--json]` is a local,
+read-only onboarding command. macOS and Linux search for candidate CLI
+installations. macOS also checks the two vendors' desktop bundles. Windows
+returns a fixed `unsupported` error before registry or candidate lookup.
+
+## Plan
+
+1. Read stored binding paths using the registry snapshot and revision
+   precondition. Build a bounded list from the bindings, conventional install
+   locations and each absolute PATH entry. Guard every discovery and symlink
+   resolution step before filesystem access.
+2. Reuse the binding trust checks and stage 08 executable evidence and exact
+   version-descriptor probe. Use the existing desktop code requirement where
+   reviewed. Keep executable and desktop observations independent of account
+   state and launch admission.
+3. Freeze the `provider.detect` read envelope in [CLI JSON v1](../contracts/cli-v1.md)
+   and check it on synthetic trees and all CI platforms. The app can consume
+   this command in its separately approved onboarding step.
+
+## Search and results
+
+Check the stored binding first, then conventional locations, then each PATH
+directory in order. Search `~/.local/bin`, Claude's native
+`~/.local/share/claude/versions/<version>` executable or version directory,
+Homebrew bin/Cellar/Caskroom under `/opt/homebrew` and `/usr/local`, known
+nvm, Volta, fnm, Bun and npm global layouts, and the official command spellings
+in standalone bin locations. Enumerate just the immediate names at each
+version level. Use only absolute paths and never invoke a package manager.
+
+Install layout identifies provenance candidates. A layout or a basename alone
+does not establish that an executable is official. Binding trust checks include
+the symlink chain, owner, permissions, ACLs, executable type and identity.
+Unavailable or untrusted digests are null, with a fixed bindability state.
+Qualification requires an exact provider, OS, architecture and digest match in
+the native artifact rows. A version requires a separate stage 08 descriptor for
+the same artifact. When no descriptor matches, the display version is
+`unapproved` and the diagnostic contains no native output. Both tables start
+empty. Deduplicate per provider by resolved device/inode. Prefer the stored
+binding when several spellings name the same file. Sort by bound, qualified,
+install kind (`native`, `homebrew`, `npm`, `bun`, `unknown`), then provider and
+path. Binding remains the separate, explicit `provider bind` command.
+
+On macOS check `Claude.app` and `ChatGPT.app` under `/Applications` and
+`~/Applications`. Report bounded bundle identifier and version metadata and
+the code requirement result. Stage 09 has a reviewed requirement for ChatGPT;
+report `unavailable` for Claude until a requirement is reviewed.
+Detection uses the same macOS static code check and flags as desktop bind,
+with the same residual behavior of the system Security framework. Detection
+does not make its own network requests.
+
+The success envelope uses `command:"provider.detect"` and the observed
+registry revision, including `"0"` on a fresh installation. Its data has
+`executables`, `desktop_apps`, `skipped` and `limited`. Each executable exposes
+`provider`, `path`, `resolved_path`, `identity` (Unix device and inode as
+decimal strings), `size` (decimal string), `install_kind`, `bindable`, nullable
+`bind_reason` (the bind validator's reason when available),
+`qualified`, `bound`, nullable `sha256` and `cdhash`, `version`, and nullable
+`version_diagnostic`. A rejected approved probe leaves version null with
+`version_probe_failed`. A desktop row contains `provider`, `path`,
+`resolved_path`, nullable `bundle_id` and `version`, and `code_requirement`
+(`passed`, `failed` or `unavailable`). Desktop order is system before home,
+then provider. Linux has an empty desktop array.
+Skipped rows contain `provider`, the nominated `path` and the fixed reason
+`inside provider home`. They sort by provider and path. The resolved
+destination is omitted.
+
+## Safety and acceptance
+
+Never descend into a provider home, a configured `CLAUDE_CONFIG_DIR` or
+`CODEX_HOME`, or vendor app-data directories. Exclude these paths before
+inspection, including during symlink resolution. The only provider execution
+is the approved stage 08 probe. A bounded scan can
+return partial results with `limited:true`. The discovery budget allows 48
+candidate spellings, 160 search directories, 2,048 entries in version
+directories, 40 links per lookup, and 10 seconds of elapsed time between
+filesystem operations. The stage 08 timeout and reap bounds still apply to
+each approved probe. Use no installation or real account in
+tests. Cover a forbidden symlink destination, a link loop, inaccessible
+directories, duplicate spellings, a fake executable under a writable parent,
+the revision precondition and the fixed Windows response.
