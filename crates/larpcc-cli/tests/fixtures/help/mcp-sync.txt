@@ -1,0 +1,8 @@
+Render all profiles or explicitly resume an interrupted transaction
+
+Usage: larp cc mcp sync [OPTIONS]
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help
