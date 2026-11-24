@@ -33,16 +33,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & .\bootstrap-target\debug\larpcc-fake-provider.exe
       - if: runner.os == 'Linux'
-        name: Verify stage acceptance refuses without a fixture parent
+        name: Verify stage acceptance refuses an unsafe test environment
         run: |
           python_path=$(command -v python)
           fake_bin=$(mktemp -d)
           trap 'rm -rf "$fake_bin"' EXIT
+          mkdir "$fake_bin/home" "$fake_bin/fixture-parent"
           printf '%s\n' '#!/bin/sh' ': > "$0.invoked"' 'echo "unexpected cargo invocation" >&2' 'exit 99' > "$fake_bin/cargo"
           chmod +x "$fake_bin/cargo"
           for script in stage04_check.py stage14_check.py; do
             status=0
             env -u LARPCC_TEST_PARENT PATH="$fake_bin" "$python_path" -B "crates/larpcc-cli/tests/support/$script" +stable || status=$?
+            test ! -e "$fake_bin/cargo.invoked"
+            test "$status" -eq 2
+            status=0
+            env -u GITHUB_ACTIONS LARPCC_TEST_PARENT="$fake_bin/fixture-parent" HOME="$fake_bin/home" PATH="$fake_bin" "$python_path" -B "crates/larpcc-cli/tests/support/$script" +stable || status=$?
             test ! -e "$fake_bin/cargo.invoked"
             test "$status" -eq 2
           done
