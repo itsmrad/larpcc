@@ -57,8 +57,7 @@ fn receipt(dirs: &Directories, root: &Path) -> Result<Option<HookReceipt>, Error
     if receipt.version != 1
         || receipt.directories != dirs.pin()
         || !claude::safe_root(&receipt.root)
-        || std::fs::canonicalize(&receipt.root).map_err(|_| Error::Drift)?
-            != std::fs::canonicalize(root).map_err(|_| Error::Drift)?
+        || !platform::DirId::same_directory(&receipt.root, root).map_err(|_| Error::Drift)?
         || receipt
             .executable
             .present(dirs, &root.join("bin").join(EXE))?

@@ -464,8 +464,16 @@ fn executable_policy(
     let invalid = |reason: &str| unsafe_path(path, reason);
     let mut handles = Vec::new();
     let resolved = resolve(path, &mut 0, &mut handles, ancestry, false)?;
-    let canonical_root = canonical_missing(root)?;
-    if contains_path(&resolved, &canonical_root)? {
+    // Identity, not spelling: case variants and firmlinks of the root are the root.
+    let parent = resolved.parent().unwrap_or(Path::new("/"));
+    let inside = match DirId::open_dir(root) {
+        // Nothing exists inside a root that does not exist yet; later errors all refuse.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        root_dir => root_dir
+            .and_then(|r| r.contains(parent))
+            .map_err(|e| io_error("inspect", root, e))?,
+    };
+    if inside {
         return Err(invalid("is inside the Larp CC data directory"));
     }
     let meta = fs::symlink_metadata(&resolved).map_err(|e| io_error("inspect", path, e))?;
@@ -514,32 +522,81 @@ fn executable_policy(
     }
     Ok((resolved, identity(&opened)))
 }
-fn canonical_missing(path: &Path) -> Result<PathBuf, Error> {
-    let mut suffix = Vec::new();
-    let mut prefix = path;
-    loop {
-        match fs::canonicalize(prefix) {
-            Ok(mut p) => {
-                for s in suffix.iter().rev() {
-                    p.push(s);
-                }
-                return Ok(p);
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                suffix.push(
-                    prefix
-                        .file_name()
-                        .ok_or_else(|| {
-                            unsafe_path(path, "cannot resolve a trusted executable path")
-                        })?
-                        .to_owned(),
-                );
-                prefix = prefix
-                    .parent()
-                    .ok_or_else(|| unsafe_path(path, "cannot resolve a trusted executable path"))?;
-            }
-            Err(e) => return Err(io_error("inspect", path, e)),
+// Search-only handles: walking needs only traversal, not read permission (a 0711 `/`).
+#[cfg(target_os = "macos")]
+const SEARCH: libc::c_int = libc::O_SEARCH;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const SEARCH: libc::c_int = libc::O_PATH | libc::O_DIRECTORY;
+// ponytail: other Unixes fall back to read handles, which need read permission on each directory.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+const SEARCH: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY;
+
+/// A directory held open (search-only, O_DIRECTORY|O_NOFOLLOW) and identified by (st_dev, st_ino).
+/// Comparisons keep every handle open until decided. Callers must treat any error as a denial.
+pub struct DirId {
+    file: File,
+    id: (u64, u64),
+}
+impl DirId {
+    pub fn open_dir(path: &Path) -> io::Result<Self> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+        // SAFETY: NUL-terminated path; no file is created.
+        Self::held(unsafe {
+            libc::open(path.as_ptr(), SEARCH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        })
+    }
+    fn parent(&self) -> io::Result<Self> {
+        use std::os::fd::AsRawFd;
+        let flags = SEARCH | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: live directory fd and a static NUL-terminated name.
+        Self::held(unsafe { libc::openat(self.file.as_raw_fd(), c"..".as_ptr(), flags) })
+    }
+    fn held(fd: libc::c_int) -> io::Result<Self> {
+        use std::os::fd::FromRawFd;
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
         }
+        // SAFETY: a successful open returned a new owned fd.
+        let file = unsafe { File::from_raw_fd(fd) };
+        let meta = file.metadata()?;
+        Ok(Self {
+            id: (meta.dev(), meta.ino()),
+            file,
+        })
+    }
+    pub fn identity(&self) -> FileIdentity {
+        FileIdentity::Unix {
+            dev: self.id.0,
+            ino: self.id.1,
+        }
+    }
+    pub fn same_directory(a: &Path, b: &Path) -> io::Result<bool> {
+        let (a, b) = (Self::open_dir(a)?, Self::open_dir(b)?);
+        Ok(a.id == b.id)
+    }
+    /// Walks `..` from `dir` until this directory (inside) or the process root (outside).
+    /// Device and mount changes are deliberately allowed: on macOS the walk from
+    /// /opt/homebrew or /Users crosses the Data/System volume boundary. Residual: a Linux
+    /// bind mount of a directory below the root, mounted outside it, walks `..` up the
+    /// mount point's ancestors and never meets the root; creating one needs privilege.
+    pub fn contains(&self, dir: &Path) -> io::Result<bool> {
+        let top = Self::open_dir(Path::new("/"))?;
+        let mut current = Self::open_dir(dir)?;
+        for _ in 0..4096 {
+            if current.id == self.id {
+                return Ok(true);
+            }
+            if current.id == top.id {
+                return Ok(false);
+            }
+            let parent = current.parent()?;
+            if parent.id == current.id {
+                return Err(io::Error::other("`..` stopped before the root directory"));
+            }
+            current = parent;
+        }
+        Err(io::Error::other("directory nesting is too deep"))
     }
 }
 
@@ -646,12 +703,15 @@ pub(crate) fn open_larp_artifact(path: &Path, root: &Path) -> Result<(File, File
 pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, PathBuf), Error> {
     let path = std::env::current_exe().map_err(|e| io_error("inspect", root, e))?;
     let path = fs::canonicalize(&path).map_err(|e| io_error("resolve", &path, e))?;
-    let (file, identity) = open_artifact_policy(&path, root, Own::Require, Ancestry::Strict)
-        .map_err(|error| match error {
-            Error::NamespaceUnverified => Error::AliasImageUnverified,
-            error => error,
-        })?;
+    let (file, identity) = open_running_larp(&path, root)?;
     Ok((file, identity, path))
+}
+/// `path` must reach the running Larp image through the trusted executable pipeline.
+pub(crate) fn open_running_larp(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
+    open_artifact_policy(path, root, Own::Require, Ancestry::Strict).map_err(|error| match error {
+        Error::NamespaceUnverified => Error::AliasImageUnverified,
+        error => error,
+    })
 }
 fn open_artifact_policy(
     path: &Path,
@@ -1277,6 +1337,122 @@ mod tests {
             assert_eq!(calls, 1);
             assert!(matches!(error, Error::ManagedMode { .. }));
         }
+    }
+    // A private temp holding root "Managed" with a native executable at Managed/bin/tool.
+    fn containment_fixture() -> (tempfile::TempDir, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = std::env::var_os("LARPCC_TEST_PARENT")
+            .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
+        let temporary = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .unwrap();
+        let root = temporary.path().join("Managed");
+        for dir in [&root, &root.join("bin"), &temporary.path().join("outside")] {
+            fs::DirBuilder::new().mode(0o700).create(dir).unwrap();
+        }
+        for tool in [root.join("bin/tool"), temporary.path().join("outside/tool")] {
+            fs::copy(std::env::current_exe().unwrap(), &tool).unwrap();
+            fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        (temporary, root)
+    }
+    #[test]
+    fn dir_id_compares_identity_and_denies_on_error() {
+        let (temporary, root) = containment_fixture();
+        let bin = root.join("bin");
+        let link = temporary.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        assert!(DirId::same_directory(&root, &bin.join("..")).unwrap());
+        assert!(!DirId::same_directory(&root, &bin).unwrap());
+        // The final component is never followed; intermediate components are.
+        assert!(DirId::open_dir(&link).is_err());
+        assert!(DirId::same_directory(&bin, &link.join("bin")).unwrap());
+        assert!(DirId::open_dir(&bin.join("tool")).is_err());
+        let within = |dir: &Path, ancestor: &Path| DirId::open_dir(ancestor)?.contains(dir);
+        assert!(within(&bin, &root).unwrap());
+        assert!(within(&root, &root).unwrap());
+        assert!(!within(&root, &bin).unwrap());
+        assert!(!within(&temporary.path().join("outside"), &root).unwrap());
+        assert!(within(&bin, Path::new("/")).unwrap());
+        assert!(within(&bin, &temporary.path().join("missing")).is_err());
+        // Once the root is held, a missing directory refuses instead of reading as outside.
+        assert!(within(&temporary.path().join("missing"), &root).is_err());
+    }
+    #[test]
+    fn dir_id_walks_directories_it_may_search_but_not_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let (temporary, root) = containment_fixture();
+        let sealed = root.join("sealed");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(sealed.join("inner"))
+            .unwrap();
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o300)).unwrap();
+        let result = DirId::open_dir(&root).and_then(|r| r.contains(&sealed.join("inner")));
+        fs::set_permissions(&sealed, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.unwrap());
+        drop(temporary);
+    }
+    fn inside(path: &Path, root: &Path) -> bool {
+        matches!(executable(path, root),
+            Err(Error::Unsafe { reason, .. }) if reason == "is inside the Larp CC data directory")
+    }
+    #[test]
+    fn containment_baseline_and_outside_executables() {
+        let (temporary, root) = containment_fixture();
+        assert!(inside(&root.join("bin/tool"), &root));
+        let outside = temporary.path().join("outside/tool");
+        executable(&outside, &root).unwrap();
+        executable(&outside, &temporary.path().join("missing")).unwrap();
+        // A sibling sharing the root's name prefix is not inside it.
+        fs::rename(
+            temporary.path().join("outside"),
+            temporary.path().join("ManagedX"),
+        )
+        .unwrap();
+        executable(&temporary.path().join("ManagedX/tool"), &root).unwrap();
+    }
+    #[test]
+    fn containment_holds_for_symlinked_spellings() {
+        let (temporary, root) = containment_fixture();
+        let link = temporary.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        assert!(inside(&link.join("bin/tool"), &root));
+        let ancestor = temporary.path().join("ancestor");
+        std::os::unix::fs::symlink(temporary.path(), &ancestor).unwrap();
+        assert!(inside(&root.join("bin/tool"), &ancestor.join("Managed")));
+        assert!(inside(&ancestor.join("Managed/bin/tool"), &root));
+    }
+    #[test]
+    fn containment_holds_for_case_variant_spellings() {
+        let (temporary, root) = containment_fixture();
+        let upper = temporary.path().join("MANAGED");
+        let insensitive =
+            fs::metadata(&upper).is_ok_and(|m| m.ino() == fs::metadata(&root).unwrap().ino());
+        if !insensitive {
+            eprintln!("skipped: case-sensitive volume");
+            return;
+        }
+        assert!(inside(&upper.join("bin/tool"), &root));
+        assert!(inside(&root.join("bin/tool"), &upper));
+        assert!(inside(&temporary.path().join("managed/BIN/tool"), &root));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn containment_holds_for_the_data_volume_firmlink_spelling() {
+        let (_temporary, root) = containment_fixture();
+        let firm = Path::new("/System/Volumes/Data").join(root.strip_prefix("/").unwrap());
+        if !root.starts_with("/Users") || fs::metadata(&firm).is_err() {
+            eprintln!(
+                "skipped: no Data volume firmlink spelling for {}",
+                root.display()
+            );
+            return;
+        }
+        assert!(inside(&firm.join("bin/tool"), &root));
+        assert!(inside(&root.join("bin/tool"), &firm));
     }
     #[cfg(feature = "synthetic-launch")]
     #[test]

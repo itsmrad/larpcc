@@ -109,8 +109,9 @@ pub(crate) fn check_collision(
 fn same_path(a: &Path, b: &Path) -> Result<bool, Error> {
     #[cfg(windows)]
     return Ok(platform::contains_path(a, b)? && platform::contains_path(b, a)?);
+    // Directories compare by identity; files keep the exact recorded spelling.
     #[cfg(unix)]
-    Ok(a == b)
+    Ok(a == b || platform::DirId::same_directory(a, b).unwrap_or(false))
 }
 
 fn launcher_root<'a>(executable: &'a Path, name: &ProfileName) -> Result<&'a Path, Error> {
@@ -530,12 +531,11 @@ impl Receipt {
                 .root
                 .components()
                 .any(|c| c == std::path::Component::ParentDir)
-            || !same_path(executable, &launcher_path(&self.root, &self.name))?
         {
             return Err(Error::AliasInvalid);
         }
         let dirs = Directories::open(&self.root)?;
-        if dirs.pin() != self.directories() {
+        if dirs.pin() != self.directories() || !self.is_launcher(&dirs, executable) {
             return Err(Error::AliasInvalid);
         }
         let launcher = Artifact {
@@ -579,16 +579,32 @@ impl Receipt {
         }
         Ok(())
     }
-    // Listing from the installed Larp sees its own image; a launcher sees another image.
-    fn source_image(&self) -> Result<Source, Error> {
-        if let Ok(executable) = std::env::current_exe()
-            && same_path(&executable, &self.source)?
+    // The launcher leaf in the pinned bin, whatever spelling reached the root.
+    fn is_launcher(&self, dirs: &Directories, executable: &Path) -> bool {
+        let expected = launcher_path(&self.root, &self.name);
+        #[cfg(windows)]
         {
-            let current = Source::current(&self.root)?;
-            if !same_path(&current.path, &self.source)? {
-                return Err(Error::AliasInvalid);
-            }
-            return Ok(current);
+            let _ = dirs;
+            same_path(executable, &expected).unwrap_or(false)
+        }
+        #[cfg(unix)]
+        {
+            let (Some(parent), Some(bin)) = (executable.parent(), &dirs.bin) else {
+                return false;
+            };
+            executable.file_name() == expected.file_name()
+                && platform::DirId::open_dir(parent).is_ok_and(|d| d.identity() == bin.identity)
+        }
+    }
+    // Listing from the installed Larp sees its own image; a launcher sees another image.
+    // Decided by image identity, not spelling: a symlinked install still runs the source.
+    fn source_image(&self) -> Result<Source, Error> {
+        let source = FileIdentity::from(&self.source_identity);
+        if platform::running_identity(&self.source).ok().as_ref() == Some(&source) {
+            // The recorded path, which launchers exec, must still reach the running image:
+            // a moved install keeps its inode but is no longer the source.
+            let (file, identity) = platform::open_running_larp(&self.source, &self.root)?;
+            return Source::hashed(file, identity, self.source.clone(), true);
         }
         Source::open(&self.source, &self.root)
     }

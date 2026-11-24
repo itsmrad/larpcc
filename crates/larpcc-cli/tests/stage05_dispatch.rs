@@ -440,3 +440,57 @@ fn stage05_dispatch_accepts_a_trusted_symlinked_root_ancestor() {
     f.root = real_root;
     assert_eq!(stderr(&launch(&f, "codex-45", &[], 1)), PENDING);
 }
+
+// Homebrew runs the installed Larp through a bin symlink; listing must still see itself.
+#[cfg(unix)]
+#[test]
+fn stage05_dispatch_list_through_a_symlinked_install_reports_ok() {
+    let f = setup();
+    f.larp_json(
+        &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
+        0,
+    );
+    let bin = f.temp.path().join("brew-bin");
+    create_directory(&bin);
+    let linked = bin.join("larp");
+    std::os::unix::fs::symlink(f.install_larp(), &linked).unwrap();
+    let list = envelope(&exec(
+        f.command_for(&linked, &["cc", "alias", "list", "--json"]),
+        0,
+    ));
+    assert_eq!(list["data"]["aliases"][0]["state"], "ok");
+}
+
+// A moved install keeps its inode, but launchers still exec the recorded source path.
+#[cfg(unix)]
+#[test]
+fn stage05_dispatch_list_from_a_moved_install_reports_incompatible() {
+    let f = setup();
+    f.larp_json(
+        &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
+        0,
+    );
+    let moved = f.temp.path().join("moved");
+    fs::rename(f.temp.path().join("install"), &moved).unwrap();
+    let list = envelope(&exec(
+        f.command_for(&moved.join("larp"), &["cc", "alias", "list", "--json"]),
+        0,
+    ));
+    assert_eq!(list["data"]["aliases"][0]["state"], "incompatible");
+}
+
+// Another spelling of the same root reaches the same pinned launcher.
+#[cfg(unix)]
+#[test]
+fn stage05_dispatch_list_through_another_root_spelling_reports_ok() {
+    let mut f = setup();
+    f.larp_json(
+        &["cc", "alias", "add", "codex-45", "claude-work", "--json"],
+        0,
+    );
+    let spelling = f.temp.path().join("alternate");
+    std::os::unix::fs::symlink(f.temp.path(), &spelling).unwrap();
+    f.root = spelling.join(f.root.file_name().unwrap());
+    let list = f.larp_json(&["cc", "alias", "list", "--json"], 0);
+    assert_eq!(list["data"]["aliases"][0]["state"], "ok");
+}
