@@ -117,7 +117,12 @@ resolution, and only then clear a directory that is not the profile. The
 expected path's device and inode, or its absence, is recorded from that open.
 Before each scan attempt and before clearing, the pathname is stated again
 without reopening; appearance, disappearance, replacement, or a lookup error
-refuses deletion. A valid
+refuses deletion. The scan is a best-effort snapshot. A pathname can change
+after its final lstat, a provider app can launch after the PID list is taken,
+and time passes between the scan returning and the caller taking the registry
+lock. Closing sessions started outside Larp before `--yes` is what covers
+those windows. A same-user process that deliberately races them is outside
+the threat model (threats.md). A valid
 argument vector with no `--user-data-dir` clears the process. Skip a process
 that exits or whose PID is reused during the scan, and skip denied path
 lookups that have yet to identify a candidate.

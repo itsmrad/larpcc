@@ -150,11 +150,17 @@ struct Expected {
 
 #[cfg(any(test, target_os = "macos"))]
 impl Expected {
-    fn recheck(&self, table: &impl ProcessTable) -> Result<(), ScanError> {
+    fn recheck(
+        &self,
+        table: &impl ProcessTable,
+        check_deadline: &impl Fn() -> Result<(), ScanError>,
+    ) -> Result<(), ScanError> {
         for (spelling, state) in &self.pinned {
+            check_deadline()?;
             if table.stat_dir(spelling)? != *state {
                 return Err(ScanError::Busy);
             }
+            check_deadline()?;
         }
         Ok(())
     }
@@ -170,7 +176,10 @@ fn pin_expected(
     let mut held = Vec::new();
     let mut pinned = Vec::new();
     for spelling in &spellings {
-        check_deadline()?;
+        // An unfinished pin must not be retried: the retry would adopt a new baseline.
+        if let Err(ScanError::Deadline) = check_deadline() {
+            return Err(ScanError::Busy);
+        }
         let state = match table.profile_dir(spelling, false)? {
             DirHit::Found(found) => {
                 ids.insert(found.id);
@@ -182,6 +191,9 @@ fn pin_expected(
             DirHit::Unsupported => Recorded::Unsupported,
         };
         pinned.push((spelling.clone(), state));
+        if let Err(ScanError::Deadline) = check_deadline() {
+            return Err(ScanError::Busy);
+        }
     }
     Ok((
         Expected {
@@ -219,12 +231,40 @@ fn profile_dir_fs(path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
         canonical = path.canonicalize().map_err(|_| ScanError::Busy)?;
         canonical.as_path()
     } else {
-        match path.symlink_metadata() {
+        let listed = match path.symlink_metadata() {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DirHit::Absent),
             Err(_) => return Err(ScanError::Busy),
             Ok(meta) if !meta.file_type().is_dir() => return Err(ScanError::Busy),
-            Ok(_) => path,
+            Ok(meta) => DirId {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            },
+        };
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)
+            .map_err(|_| ScanError::Busy)?;
+        let meta = file.metadata().map_err(|_| ScanError::Busy)?;
+        if !meta.is_dir() {
+            return Err(ScanError::Busy);
         }
+        let id = DirId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        };
+        // The listing taken before open and the pathname after open must both be this descriptor.
+        if id != listed {
+            return Err(ScanError::Busy);
+        }
+        let now = path.symlink_metadata().map_err(|_| ScanError::Busy)?;
+        if !now.file_type().is_dir() || now.dev() != id.dev || now.ino() != id.ino {
+            return Err(ScanError::Busy);
+        }
+        return Ok(DirHit::Found(FoundDir {
+            id,
+            file: Some(file),
+        }));
     };
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -239,13 +279,6 @@ fn profile_dir_fs(path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
         dev: meta.dev(),
         ino: meta.ino(),
     };
-    if !follow {
-        // The pathname must still name the directory this descriptor holds.
-        let now = path.symlink_metadata().map_err(|_| ScanError::Busy)?;
-        if !now.file_type().is_dir() || now.dev() != id.dev || now.ino() != id.ino {
-            return Err(ScanError::Busy);
-        }
-    }
     Ok(DirHit::Found(FoundDir {
         id,
         file: Some(file),
@@ -305,7 +338,7 @@ fn scan(
     uncertain: &mut HashMap<i32, Option<StartTime>>,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
-    expected.recheck(table)?;
+    expected.recheck(table, &check_deadline)?;
     let previous = std::mem::take(uncertain);
     for pid in table.pids()? {
         check_deadline()?;
@@ -350,7 +383,15 @@ fn scan(
     if !uncertain.is_empty() {
         return Err(ScanError::CandidateUncertain);
     }
-    expected.recheck(table)?;
+    // A deadline during the final recheck is not a reason to scan again.
+    match expected.recheck(table, &check_deadline) {
+        Ok(()) => {}
+        Err(ScanError::Deadline) => return Err(ScanError::Busy),
+        Err(error) => return Err(error),
+    }
+    if let Err(ScanError::Deadline) = check_deadline() {
+        return Err(ScanError::Busy);
+    }
     Ok(())
 }
 
@@ -741,14 +782,21 @@ mod tests {
                 path: None,
                 ..Fixture::candidate(&[], None)
             };
+            let fired = Cell::new(false);
             let result = retry_scan(
                 |uncertain| {
                     table.scan_with_history(uncertain, || {
-                        if table.listings.get() == 1 || retry_expired {
-                            Err(ScanError::Deadline)
-                        } else {
-                            Ok(())
+                        if table.listings.get() == 0 {
+                            return Ok(());
                         }
+                        if !fired.get() && table.listings.get() == 1 {
+                            fired.set(true);
+                            return Err(ScanError::Deadline);
+                        }
+                        if retry_expired && table.listings.get() >= 2 {
+                            return Err(ScanError::Deadline);
+                        }
+                        Ok(())
                     })
                 },
                 || panic!("deadline retry should not wait"),
@@ -756,6 +804,31 @@ mod tests {
             assert_eq!(result.is_err(), retry_expired);
             assert_eq!(table.listings.get(), 2);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_deadline_during_final_recheck_stays_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let desktop = root.path().join("desktop");
+        std::fs::create_dir(&desktop).unwrap();
+        let table = Fixture {
+            path: None,
+            expected: Some(path_bytes(&desktop)),
+            ..Fixture::candidate(&[], None)
+        };
+        let checks = Cell::new(0u32);
+        let result = table.scan(|| {
+            let seen = checks.get();
+            checks.set(seen + 1);
+            // Opening recheck and the process loop are checks 0-3. Check 4 is the final recheck.
+            if seen == 4 {
+                Err(ScanError::Deadline)
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result, Err(ScanError::Busy));
     }
 
     #[test]
