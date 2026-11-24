@@ -23,34 +23,38 @@ struct AliasesPage: View {
             .sorted { $0.alias < $1.alias }
     }
     private var trimmed: String { newName.trimmingCharacters(in: .whitespaces) }
-    private var nameTaken: Bool { rows.contains { $0.alias == trimmed } }
-    private var canAdd: Bool {
-        LarpNames.isValidAlias(trimmed, shadow: shadow) && !nameTaken && snapshot.profiles.contains { $0.id == newProfileID }
+    private var addDisabledReason: String? {
+        if snapshot.profiles.isEmpty { return "Create a profile before adding an alias." }
+        if trimmed.isEmpty { return "Enter a command name." }
+        if rows.contains(where: { $0.alias == trimmed }) { return "That alias already exists." }
+        if !LarpNames.isValidAlias(trimmed, shadow: true) {
+            return "Start with a lowercase letter. Use up to 32 lowercase letters, digits, hyphens or underscores. Reserved names are unavailable."
+        }
+        if !LarpNames.isValidAlias(trimmed, shadow: shadow) { return "Turn on “Allow shadowing” to use this name." }
+        if !snapshot.profiles.contains(where: { $0.id == newProfileID }) { return "Choose a profile." }
+        return nil
     }
 
     var body: some View {
         Form {
             Section {
                 if rows.isEmpty {
-                    Text("No aliases yet.").foregroundStyle(.secondary)
+                    UnavailablePane(title: "No aliases yet", symbol: "terminal",
+                                    message: "Add an alias to give a profile its own command.")
                 }
                 ForEach(rows) { row in
                     LabeledContent {
-                        HStack(spacing: 10) {
-                            HStack(spacing: 4) {
+                        HStack(spacing: SettingsSpacing.control) {
+                            HStack(spacing: SettingsSpacing.tight) {
                                 ProviderGlyph(provider: row.profile.provider, size: 13)
-                                Text(row.profile.name)
+                                Text(row.profile.name).foregroundStyle(SettingsTypography.supportingInk)
                             }
-                            Button {
+                            Button("Remove") {
                                 confirmation = Confirmation(title: "Remove “\(row.alias)”?",
-                                    message: "Larp deletes the \(row.alias) command. The profile itself is unchanged.",
+                                    message: "Larp removes the command that points to “\(row.profile.name)”.",
                                     button: "Remove Alias", action: .removeAlias(name: row.alias))
-                            } label: {
-                                Image(systemName: "minus.circle.fill")
-                                    .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.borderless)
-                            .help("Remove alias \(row.alias)")
+                            .buttonStyle(.bordered)
                             .accessibilityLabel("Remove alias \(row.alias)")
                         }
                     } label: {
@@ -60,43 +64,53 @@ struct AliasesPage: View {
             } header: {
                 Text("Commands")
             } footer: {
-                Text("Each alias is a command that starts its profile. LarpCC never edits your shell configuration or PATH.")
+                Text("Aliases point to profiles. To run an alias by name, put Larp’s bin directory on your PATH.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
 
             Section {
-                TextField("Command name", text: $newName, prompt: Text("command-name"))
-                    .onSubmit(add)
+                LabeledContent("Command name") {
+                    TextField("Command name", text: $newName, prompt: Text(""))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.leading)
+                        .font(.body.monospaced())
+                        .frame(maxWidth: 280)
+                        .onSubmit(add)
+                        .onChange(of: newName) { error = nil }
+                }
                 Picker("Profile", selection: $newProfileID) {
                     if newProfileID.isEmpty { Text("Choose…").tag("") }
                     ForEach(snapshot.profiles) { Text($0.name).tag($0.id) }
                 }
                 .onAppear { if newProfileID.isEmpty { newProfileID = snapshot.profiles.first?.id ?? "" } }
+                .onChange(of: snapshot.profiles.map(\.id)) { _, ids in
+                    if !ids.contains(newProfileID) { newProfileID = "" }
+                }
                 Toggle(isOn: $desktop) {
-                    Text("Open the desktop app")
-                    Text("The command opens the profile's desktop app instead of its command line.")
+                    Text("Target the desktop app")
+                    Text("Launching requires an enabled desktop surface and a qualified app.")
+                        .foregroundStyle(SettingsTypography.supportingInk)
                 }
                 Toggle(isOn: $shadow) {
-                    Text("Allow claude or codex")
-                    Text("Lets the alias use a provider's own command name, ahead of it on PATH. Existing commands are never overwritten.")
+                    Text("Allow shadowing")
+                    Text("Allows names like claude or codex. PATH order decides which command runs.")
+                        .foregroundStyle(SettingsTypography.supportingInk)
                 }
                 HStack {
                     if let error {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .symbolRenderingMode(.multicolor)
-                            .font(.callout)
-                    } else if !trimmed.isEmpty && !canAdd {
-                        Text(nameTaken ? "That alias already exists."
-                             : LarpNames.isValidAlias(trimmed, shadow: shadow) ? "Choose a profile."
-                             : LarpNames.isValidAlias(trimmed, shadow: true) ? "Turn on “Allow claude or codex” to use this name."
-                             : "Use lowercase letters, digits, - or _, up to 32 characters.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .font(SettingsTypography.supporting)
+                            .foregroundStyle(SettingsTypography.criticalInk)
+                    } else if let addDisabledReason, !trimmed.isEmpty || snapshot.profiles.isEmpty {
+                        Text(addDisabledReason)
+                            .font(SettingsTypography.supporting)
+                            .foregroundStyle(SettingsTypography.supportingInk)
                     }
                     Spacer()
                     Button("Add Alias", action: add)
-                        .disabled(!canAdd)
+                        .disabledReason(addDisabledReason)
                 }
             } header: {
                 Text("New Alias")
@@ -107,7 +121,7 @@ struct AliasesPage: View {
     }
 
     private func add() {
-        guard canAdd else { return }
+        guard addDisabledReason == nil else { return }
         error = nil
         store.perform(.addAlias(name: trimmed, profileID: newProfileID, desktop: desktop, shadow: shadow)) { failure in
             if let failure { error = failure } else { newName = ""; shadow = false; desktop = false }
