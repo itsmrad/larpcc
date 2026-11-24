@@ -258,7 +258,10 @@ fn stage14_admission_cannot_spawn_after_a_blocked_notice() {
         if blocked.contains("pipe_write") {
             break;
         }
-        assert!(Instant::now() < end, "status did not block writing its notice");
+        assert!(
+            Instant::now() < end,
+            "status did not block writing its notice"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     f.fixture.profile(&["rename", "codex-45", "claude-work"], 0);
