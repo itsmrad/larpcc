@@ -40,10 +40,12 @@ jobs:
           trap 'rm -rf "$fake_bin"' EXIT
           printf '%s\n' '#!/bin/sh' ': > "$0.invoked"' 'echo "unexpected cargo invocation" >&2' 'exit 99' > "$fake_bin/cargo"
           chmod +x "$fake_bin/cargo"
-          status=0
-          env -u LARPCC_TEST_PARENT PATH="$fake_bin" "$python_path" crates/larpcc-cli/tests/support/stage04_check.py +stable || status=$?
-          test ! -e "$fake_bin/cargo.invoked"
-          test "$status" -eq 2
+          for script in stage04_check.py stage14_check.py; do
+            status=0
+            env -u LARPCC_TEST_PARENT PATH="$fake_bin" "$python_path" -B "crates/larpcc-cli/tests/support/$script" +stable || status=$?
+            test ! -e "$fake_bin/cargo.invoked"
+            test "$status" -eq 2
+          done
       - if: runner.os == 'macOS'
         run: cc -Wall -Werror crates/larpcc-cli/tests/support/macos_acl_abi.c -o acl-abi && ./acl-abi
       - if: runner.os == 'Linux'
