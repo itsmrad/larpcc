@@ -766,7 +766,9 @@ private struct MenuBarProfileSummary: View {
         if let left = window.leftPercent {
             let level = UsageLevel(leftPercent: left)
             GridRow {
-                Text(title).foregroundStyle(SettingsTypography.supportingInk)
+                Text(title)
+                    .foregroundStyle(SettingsTypography.supportingInk)
+                    .fixedSize(horizontal: true, vertical: false)
                 UsageMeter(leftPercent: left, level: level)
                 Text("\(Int(left.rounded()))%")
                     .fontWeight(.semibold)
@@ -789,14 +791,18 @@ private struct MenuBarProfileSummary: View {
                     Text(reason.text)
                         .foregroundStyle(SettingsTypography.supportingInk)
                         .gridCellColumns(3)
+                        .gridCellUnsizedAxes(.horizontal)
                 }
             }
         } else {
             GridRow {
-                Text(title).foregroundStyle(SettingsTypography.supportingInk)
+                Text(title)
+                    .foregroundStyle(SettingsTypography.supportingInk)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text(window.reason?.text ?? "Not available")
                     .foregroundStyle(SettingsTypography.supportingInk)
                     .gridCellColumns(3)
+                    .gridCellUnsizedAxes(.horizontal)
             }
         }
     }
