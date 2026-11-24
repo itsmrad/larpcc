@@ -6,9 +6,10 @@ Wait for the test handoff. It gives you the approved test build, the two exact
 provider paths, and the sign-out instructions for each provider.
 
 This test checks that you can sign in, open and sign out of two new, disposable
-profiles called `claude-test` and `codex-test`. They keep their files in a new
-folder. You use your usual Claude Code and Codex setup only for the two checks
-that confirm your existing logins stay the same. Use only your own accounts.
+profiles called `claude-test` and `codex-test`. The default LarpCC data folder
+holds LarpCC's records and each test profile's own files. Your usual `~/.claude`
+and `~/.codex` folders stay separate. Use your usual setup only for the two
+checks of your existing logins. Use only your own accounts.
 
 Quit other Claude Code and Codex sessions, including runs in other Terminal
 tabs. Do the test in an unrecorded Terminal. Use a fresh private browser window
@@ -29,10 +30,9 @@ claude auth status
 codex login status
 ```
 
-Privately note which account each command confirms. If a command only says
-you're signed in, use the private account check in the handoff, if provided.
-If you still can't identify the account, stop and report that you couldn't
-verify the baseline.
+Privately note the Claude Code account and the Codex account, if shown. If Codex
+only shows how you signed in, note the sign-in method so you can compare it in
+step 8. **[confirm: Codex account-identity check, pending G0 research]**
 
 ## 3. Install the test build
 
@@ -74,21 +74,21 @@ xattr -dr com.apple.quarantine "$HOME/Applications/LarpCC.app"
 
 **[depends on PR #35]** **[depends on PR: qualification rows]**
 
-Make a private test folder. `LARPCC_HOME` tells LarpCC where to keep its data.
-Set it only in this test Terminal. Stop if the first line fails or the printed
-path is empty.
+Use the default LarpCC data folder, `~/Library/Application Support/larpcc`, so
+the command line, app and menu bar see the same profiles. Clear any custom
+folder setting in this test Terminal only. If either test name already appears,
+stop and report it. Leave that profile in place.
 
 ```sh
-LARPCC_HOME="$(mktemp -d "$HOME/larpcc-mvp-test.XXXXXX")"
-echo "$LARPCC_HOME"
-export LARPCC_HOME
-cd "$LARPCC_HOME"
+unset LARPCC_HOME
 larp --version
+larp cc profile list
 ```
 
 Tell LarpCC which two programs to check. Replace the example paths below with
 the exact full paths from the handoff. Keep the quotes. This saves the paths in
-the test folder so the version check can find them.
+LarpCC so the version check can find them. If LarpCC reports a different path
+is already set, stop and report it. Keep the existing path.
 
 ```sh
 larp cc provider bind claude '/full/path/to/claude'
@@ -108,8 +108,8 @@ larp cc profile add codex-test --provider codex
 larp cc profile list
 ```
 
-Check that the list contains only the two new profiles with the correct
-providers. They use the paths you set in step 4.
+Check that both new profiles appear with the correct providers. They use the
+paths from step 4. Leave any other LarpCC profiles alone.
 
 ## 6. Test one profile at a time
 
@@ -129,7 +129,7 @@ NAME=claude-test
 
 **If you started sign-in and anything fails, times out, or is cancelled, go
 straight to checks 7 and 8.** If sign-out fails or you can't confirm `Signed out`,
-stop, report it and keep both the profile and the test folder.
+stop, report it and keep the test profile.
 
 1. Show the profile details. Expect no account details.
 
@@ -183,7 +183,7 @@ stop, report it and keep both the profile and the test folder.
    ```
 
 8. Confirm `Signed out` before moving on. Keep the profile for now. If the check
-   fails, report it and leave the profile and test folder in place.
+   fails, report it and leave the test profile in place.
 
    ```sh
    larp cc status "$NAME"
@@ -197,19 +197,14 @@ quitting a profile can leave no numbers to show.
 **[depends on PR: stage 11 usage CLI]**
 
 ```sh
-larp cc usage --local
+larp cc usage claude-test --local
+larp cc usage codex-test --local
 ```
 
-The app and the command line use the same default LarpCC data folder on Mac,
-`~/Library/Application Support/larpcc`. Setting `LARPCC_HOME` changes the folder
-for the command line. **[confirm: app data-folder selection]**
-
-If the handoff includes the app and confirms it can use the test folder, open
-`LarpCC.app`. In **General → larp executable → Choose…**, select the installed
-`larp`. Check that the two test profiles appear and that the usage display
-matches the command above. If the menu bar is included, open the LarpCC icon
-at the top of the screen and make the same checks. If either view can't use
-the test folder or shows other profiles, close it and mark that check SKIPPED.
+Open `LarpCC.app`. In **General → larp executable → Choose…**, select
+`~/.local/bin/larp`. Check that the two test profiles appear and that their usage display
+matches the command above. Open the LarpCC icon at the top of the screen and
+make the same checks. If the test build omits a view, mark that check SKIPPED.
 Quit LarpCC when done. **[depends on PR #37]**
 **[depends on PR: stage 11 usage app]** **[depends on PR #19]**
 **[depends on PR: stage 11 usage menu bar]**
@@ -222,23 +217,25 @@ confirm it still shows `Signed out`. **[depends on PR: qualification rows]**
 ```sh
 larp cc alias add mvp-codex-test codex-test
 larp cc alias list
-"$LARPCC_HOME/bin/mvp-codex-test"
+"$HOME/Library/Application Support/larpcc/bin/mvp-codex-test"
 larp cc status codex-test
 ```
 
 ## 8. Re-check your usual accounts (G0)
 
-In the same normal Terminal you used in step 2, repeat the two checks and any
-private account check you used there.
+In the same normal Terminal you used in step 2, repeat the two checks.
 
 ```sh
 claude auth status
 codex login status
 ```
 
-Privately confirm that each shows the same account it showed in step 2. If
-either differs or you can't confirm a match, stop and report **G0 FAILED**
-immediately. Keep the test folder for follow-up.
+Privately compare the results with step 2. The Claude Code account must match.
+If Codex only shows the sign-in method, compare that method before and after.
+An unchanged sign-in method tells you how you signed in. Account identity
+still needs confirmation in that case.
+If the results differ or you can't confirm a match, stop and report
+**G0 FAILED** immediately. Leave the test profiles in place for follow-up.
 
 ## 9. Clean up
 
@@ -252,9 +249,7 @@ larp cc profile delete claude-test --yes
 larp cc profile delete codex-test --yes
 ```
 
-Once both deletes succeed, run `echo "$LARPCC_HOME"` to see the exact test folder.
-Move that `larpcc-mvp-test.*` folder to the Trash in Finder and close the test
-Terminal. Leave your usual LarpCC folder alone.
+Once both deletes succeed, close the test Terminal. Keep the LarpCC data folder.
 
 ## 10. Send your results
 
@@ -268,12 +263,13 @@ URLs and raw command output private. The two version lines are safe to include.
 larp --version:
 README "qualified for" line:
 G0 result (PASS / G0 FAILED / SKIPPED):
+Codex comparison (account / sign-in method only / SKIPPED):
 
 Step/command | PASS/FAIL/SKIPPED | exit=___ | email shown=yes/no
 1 preparation |
 2 baseline (one line per provider) |
 3 checkout/preview/install (one line per command) |
-4 test folder/bind/version (one line per command) |
+4 profile list/bind/version (one line per command) |
 5 add/list (one line per command) |
 6 claude-test (one line per check, 1–8) |
 6 codex-test (one line per check, 1–8) |
