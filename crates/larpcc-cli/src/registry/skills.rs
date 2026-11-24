@@ -149,6 +149,8 @@ struct Journal {
     manifest: Manifest,
     steps: Vec<Step>,
     next: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp: Option<super::mcp::Journal>,
 }
 
 pub enum SkillsAction {
@@ -688,10 +690,15 @@ fn apply(root: &Path, j: &mut Journal) -> Result<(), Error> {
     let mut tmp = false;
     store::persist(root, j.after_registry.as_bytes(), &mut applied, &mut tmp)?;
     fault("registry")?;
+    if let Some(mcp) = &j.mcp {
+        // Replace the skills journal atomically so consumers always see pending intent.
+        return super::mcp::publish(root, mcp);
+    }
     fs::remove_file(root.join(JOURNAL))
         .map_err(|e| paths::io("finish share transaction", root, e))?;
     paths::sync(root)
 }
+#[allow(clippy::too_many_arguments)]
 fn begin(
     root: &Path,
     before: &store::Data,
@@ -700,7 +707,11 @@ fn begin(
     mut index: Index,
     manifest: Manifest,
     steps: Vec<Step>,
+    mcp: Option<super::mcp::Journal>,
 ) -> Result<(), Error> {
+    if let Some(j) = &mcp {
+        super::mcp::validate_continuation(root, j, before, after)?;
+    }
     index.revision = after.revision;
     // Profile hooks and catalog edits must both fit every public view before intent.
     render(root, &SkillsAction::List, after, &index, &manifest)?;
@@ -755,6 +766,7 @@ fn begin(
         manifest,
         steps,
         next: 0,
+        mcp,
     };
     write_atomic(root, JOURNAL, &bounded(&j, JOURNAL_LIMIT)?)?;
     fault("journal")?;
@@ -779,6 +791,9 @@ fn recover(root: &Path, current: &store::Data) -> Result<(), Error> {
         return Err(Error::Conflict);
     }
     validate(root, &j.before_index, &j.before_manifest, &before)?;
+    if let Some(mcp) = &j.mcp {
+        super::mcp::validate_continuation(root, mcp, &before, &after)?;
+    }
     let mut union_index = j.after_index.clone();
     for s in &j.before_index.skills {
         if !union_index.skills.iter().any(|v| v.name == s.name) {
@@ -855,6 +870,27 @@ fn fault(_phase: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Test-only skill add with injected private vendor homes, for other owners'
+/// hook-ordering tests (e.g. MCP after a skills registry commit).
+#[cfg(test)]
+pub(super) fn add_private(r: &Registry, source: &Path, name: ProfileName) -> Result<Value, Error> {
+    let homes = VendorHomes {
+        configured: vec![],
+        default_home: Some(
+            r.root()
+                .parent()
+                .ok_or(Error::RecoveryRequired)?
+                .join("fake-home"),
+        ),
+    };
+    r.skills_with_homes(
+        SkillsAction::Add {
+            source: source.into(),
+            name,
+        },
+        Some(&homes),
+    )
+}
 impl Registry {
     pub fn skills(&self, action: SkillsAction) -> Result<Value, Error> {
         self.skills_with_homes(action, None)
@@ -1015,6 +1051,7 @@ impl Registry {
                 index,
                 manifest,
                 steps,
+                None,
             )?;
             data = after;
         }
@@ -1215,6 +1252,7 @@ pub(super) fn profile_commit(
     after: &store::Data,
     lock: &mut Option<store::RegistryLock>,
     expected: Option<u64>,
+    mcp: &mut Option<super::mcp::Journal>,
 ) -> Result<bool, Error> {
     let before = store::load_unchecked(root)?;
     let (old, manifest) = load(root, &before)?;
@@ -1254,7 +1292,16 @@ pub(super) fn profile_commit(
     *lock = Some(registry_lock);
     store::load(root)?;
     // Same revision after reacquisition: no cooperative writer changed the plan.
-    begin(root, &before, after, old, index, manifest, steps)?;
+    begin(
+        root,
+        &before,
+        after,
+        old,
+        index,
+        manifest,
+        steps,
+        mcp.take(),
+    )?;
     Ok(true)
 }
 
@@ -1359,7 +1406,8 @@ pub(super) mod tests {
                 Index::default(),
                 index,
                 Manifest::default(),
-                vec![]
+                vec![],
+                None,
             ),
             Err(Error::TooLarge)
         ));
