@@ -32,6 +32,18 @@ jobs:
           cargo +stable build --locked --features synthetic-launch --bin larpcc-fake-provider --target-dir bootstrap-target
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & .\bootstrap-target\debug\larpcc-fake-provider.exe
+      - if: runner.os == 'Linux'
+        name: Verify stage acceptance refuses without a fixture parent
+        run: |
+          python_path=$(command -v python)
+          fake_bin=$(mktemp -d)
+          trap 'rm -rf "$fake_bin"' EXIT
+          printf '%s\n' '#!/bin/sh' ': > "$0.invoked"' 'echo "unexpected cargo invocation" >&2' 'exit 99' > "$fake_bin/cargo"
+          chmod +x "$fake_bin/cargo"
+          status=0
+          env -u LARPCC_TEST_PARENT PATH="$fake_bin" "$python_path" crates/larpcc-cli/tests/support/stage04_check.py +stable || status=$?
+          test ! -e "$fake_bin/cargo.invoked"
+          test "$status" -eq 2
       - if: runner.os == 'macOS'
         run: cc -Wall -Werror crates/larpcc-cli/tests/support/macos_acl_abi.c -o acl-abi && ./acl-abi
       - if: runner.os == 'Linux'
