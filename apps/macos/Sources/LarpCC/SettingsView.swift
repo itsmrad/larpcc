@@ -72,7 +72,7 @@ struct SettingsView: View {
 
     var body: some View {
         split
-        .task { store.startRefresh(); store.scheduleLiveRefresh() }
+        .task { store.startRefresh() }
         .confirmationDialog("Stop this change?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("Stop", role: .destructive) { store.cancel() }
             Button("Keep Waiting", role: .cancel) {}

@@ -20,6 +20,7 @@ struct LarpCCApp: App {
             SettingsView(store: store)
                 .themed()
                 .onAppear { fitWindowOnScreen() }
+                .background { UsageWindowVisibility(store: store, usageView: .settings) }
         }
         .defaultSize(width: 900, height: 680)
         .defaultPosition(.center)
@@ -34,6 +35,7 @@ struct LarpCCApp: App {
         }
         MenuBarExtra(isInserted: MenuBarDockPolicy.insertion($menuBarShown)) {
             MenuBarPanel(store: store)
+                .background { UsageWindowVisibility(store: store, usageView: .menuBar) }
                 .themed()
         } label: {
             MenuBarLabel(store: store)
@@ -104,6 +106,8 @@ final class AppStore: ObservableObject {
     @Published private(set) var usageLoading = false
     private var usageTask: Task<Void, Never>?
     private var liveRefresh: Task<Void, Never>?
+    enum UsageView { case settings, menuBar }
+    private var visibleUsageViews: Set<UsageView> = []
     var modeTitle: String { isFixture ? "Sample mode" : "Local Larp CLI" }
     private var client: any LarpClient
     private var operation: Task<Void, Never>?
@@ -129,6 +133,7 @@ final class AppStore: ObservableObject {
                 guard generation == token, !Task.isCancelled else { return }
                 client = ProcessLarpClient(selected: selected)
                 selectedPath = url.path
+                scheduleLiveRefresh()
                 busy = false
                 await refresh()
             } catch {
@@ -138,6 +143,7 @@ final class AppStore: ObservableObject {
     }
     /// Reads usage for every profile from the current source.
     func refreshUsage() {
+        guard isFixture || selectedPath != nil else { return }
         let source = UsagePreferences.source
         usageTask?.cancel()
         usageLoading = true
@@ -152,19 +158,29 @@ final class AppStore: ObservableObject {
                 usageError = (error as? ClientError)?.errorDescription ?? "Usage is unavailable."
             }
             usageLoading = false
+            usageTask = nil
         }
     }
 
-    /// Restarts the optional Live refresh. Nothing repeats in Local mode or when the interval is Off.
+    func setUsageView(_ view: UsageView, visible: Bool) {
+        let wasVisible = !visibleUsageViews.isEmpty
+        if visible { visibleUsageViews.insert(view) } else { visibleUsageViews.remove(view) }
+        let isVisible = !visibleUsageViews.isEmpty
+        if wasVisible != isVisible { scheduleLiveRefresh() }
+    }
+
+    /// Restarts the opt-in interval while at least one usage view is visible.
     func scheduleLiveRefresh() {
         liveRefresh?.cancel(); liveRefresh = nil
         let minutes = UsagePreferences.intervalMinutes
-        guard UsagePreferences.source == .live, minutes > 0 else { return }
+        guard !visibleUsageViews.isEmpty, isFixture || selectedPath != nil,
+              UsagePreferences.source == .live, minutes > 0 else { return }
         liveRefresh = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(minutes) * 60_000_000_000)
-                guard !Task.isCancelled else { return }
-                self?.refreshUsage()
+                guard !Task.isCancelled, let self, !self.visibleUsageViews.isEmpty,
+                      UsagePreferences.source == .live, UsagePreferences.intervalMinutes == minutes else { return }
+                self.refreshUsage()
             }
         }
     }
@@ -173,6 +189,7 @@ final class AppStore: ObservableObject {
         cancel()
         isFixture = true; selectedPath = nil; snapshot = nil
         client = FixtureLarpClient()
+        scheduleLiveRefresh()
         operation = Task { await refresh() }
     }
     /// True while a change (not a read) is running; Cancel then warns before stopping it.
@@ -183,7 +200,9 @@ final class AppStore: ObservableObject {
         operation?.cancel(); operation = nil
         busy = false
         snapshot = nil
-        usageTask?.cancel(); usage = [:]; usageLoading = false
+        liveRefresh?.cancel(); liveRefresh = nil
+        usageTask?.cancel(); usageTask = nil
+        usage = [:]; usageError = nil; usageLoading = false
         message = mutating ? ClientError.outcomeUnknown.errorDescription : "Cancelled. Refresh before choosing another action."
         mutating = false
     }

@@ -1,0 +1,11 @@
+Inherit definitions on all current and future profiles (on) or stop (off)
+
+Usage: larp cc mcp sync-all [OPTIONS] <MODE>
+
+Arguments:
+  <MODE>  [possible values: on, off]
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help
