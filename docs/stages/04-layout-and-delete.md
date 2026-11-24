@@ -127,6 +127,11 @@ argument vector with no `--user-data-dir` clears the process. Skip a process
 that exits or whose PID is reused during the scan, and skip denied path
 lookups that have yet to identify a candidate.
 
+The name-filtered scan misses renamed or copied `Claude.app` or `ChatGPT.app`
+bundles running under other names. The `SingletonLock` backstop applies only
+if the app left a lock in the profile's desktop directory. Without that lock
+the backstop provides no coverage. Close such apps before deleting the profile.
+
 If the initial path lookup returns `ENOENT`, as can happen after a running
 executable is unlinked, read its bounded argument vector between process
 start-time probes. The first probe can show that the process is already absent.
@@ -152,7 +157,9 @@ candidate is still alive even if its executable path cannot be read.
 Exited, zombie, or reused PIDs do not carry the earlier uncertainty forward.
 Persistent uncertainty still refuses deletion. Each scan has a two-second
 deadline checked between probes. A first-scan deadline triggers an immediate
-retry. Both retry reasons share at most one retry.
+retry except when it expires during directory pinning, during the final
+pathname recheck, or at the last deadline check. Those expiries return
+terminal Busy. Both retry reasons share at most one retry.
 Never inspect process environment, tokens or account data.
 
 The user must close sessions started outside Larp (including manual terminal
