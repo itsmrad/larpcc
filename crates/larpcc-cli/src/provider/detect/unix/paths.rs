@@ -1,11 +1,14 @@
 use super::fs::walk_parent;
 use std::{
+    cell::Cell,
     ffi::{OsStr, OsString},
     fs::File,
     io,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Component, Path, PathBuf},
 };
+
+type Edge = ((u64, u64), OsString);
 
 struct Planned {
     parent: PathBuf,
@@ -36,7 +39,7 @@ impl Kind {
 
 pub(super) struct Exclusions {
     roots: Vec<PathBuf>,
-    edges: Vec<((u64, u64), OsString)>,
+    edges: Vec<Edge>,
     claude_install: Option<PathBuf>,
 }
 
@@ -98,24 +101,40 @@ impl Exclusions {
         &mut self,
         planned: &[Planned],
         index: usize,
-        missing_edges: &mut Vec<((u64, u64), OsString)>,
+        missing_edges: &mut Vec<Edge>,
         within_budget: &impl Fn() -> bool,
     ) -> io::Result<()> {
         let parent = planned[index].parent.clone();
         let name = planned[index].leaf.clone();
+        let known_absent = Cell::new(false);
         let mut absent = None;
         let mapped = walk_parent(
             &parent,
             |part, directory| {
-                within_budget()
-                    && !blocks_unresolved_leaf(part, planned)
-                    && self.allows_child(part, directory)
+                if !within_budget()
+                    || blocks_unresolved_leaf(part, planned)
+                    || !self.allows_child(part, directory)
+                {
+                    return false;
+                }
+                // Reuse an earlier absence before looking up the child again.
+                match matches_edge(missing_edges, part, directory) {
+                    Ok(false) => true,
+                    Ok(true) => {
+                        known_absent.set(true);
+                        false
+                    }
+                    Err(_) => false,
+                }
             },
             |part, directory| {
                 absent = Some(edge(directory, part));
             },
         );
         match mapped {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied && known_absent.get() => {
+                Ok(())
+            }
             Ok(entry) => {
                 let directory = entry.directory.ok_or(io::ErrorKind::NotADirectory)?;
                 let physical = entry.path.join(name);
@@ -138,15 +157,7 @@ impl Exclusions {
     }
 
     pub(super) fn denied_child(&self, path: &Path, parent: Option<&File>) -> bool {
-        let Some((name, parent)) = path.file_name().zip(parent) else {
-            return false;
-        };
-        self.edges.iter().any(|(id, denied)| {
-            same_name(name, denied)
-                && parent
-                    .metadata()
-                    .map_or(true, |meta| (meta.dev(), meta.ino()) == *id)
-        })
+        matches_edge(&self.edges, path, parent).unwrap_or(true)
     }
 
     pub(super) fn insert(&mut self, path: &Path) {
@@ -211,6 +222,19 @@ impl Exclusions {
     }
 }
 
+fn matches_edge(edges: &[Edge], path: &Path, parent: Option<&File>) -> io::Result<bool> {
+    let Some((name, parent)) = path.file_name().zip(parent) else {
+        return Ok(false);
+    };
+    let mut matches = edges.iter().filter(|(_, denied)| same_name(name, denied));
+    let Some((first, _)) = matches.next() else {
+        return Ok(false);
+    };
+    let meta = parent.metadata()?;
+    let id = (meta.dev(), meta.ino());
+    Ok(*first == id || matches.any(|(other, _)| *other == id))
+}
+
 fn comparable(path: &Path) -> PathBuf {
     if cfg!(target_os = "macos") {
         let folded = path.as_os_str().as_bytes().to_ascii_lowercase();
@@ -273,6 +297,43 @@ fn stage19_unresolved_leaf_guard_rejects_lexical_ancestor_before_lookup() {
     assert!(!parent_walk_is_safe(&root, std::slice::from_ref(&root)));
 }
 
+#[cfg(test)]
+#[test]
+fn stage19_missing_boundary_stays_closed_if_created_between_parent_walks() {
+    let temp = super::tests::private_dir();
+    let path = temp.path();
+    let boundary = path.join("pending");
+    let alias = path.join("alias");
+    std::os::unix::fs::symlink(".", &alias).unwrap();
+    let mut planned = [
+        Planned {
+            parent: boundary.clone(),
+            leaf: "first".into(),
+            done: false,
+        },
+        Planned {
+            parent: alias.join("pending"),
+            leaf: "second".into(),
+            done: false,
+        },
+    ];
+    let mut guard = Exclusions::new(None);
+    let mut missing_edges = Vec::new();
+    guard
+        .map_configured(&planned, 0, &mut missing_edges, &|| true)
+        .unwrap();
+    planned[0].done = true;
+    assert_eq!(missing_edges.len(), 1);
+
+    // A lookup of the newly created file would fail the directory walk.
+    std::fs::write(&boundary, b"fixture").unwrap();
+    guard
+        .map_configured(&planned, 1, &mut missing_edges, &|| true)
+        .unwrap();
+    assert_eq!(missing_edges.len(), 1);
+    assert!(guard.edges.is_empty());
+}
+
 #[cfg(target_os = "macos")]
 fn macos_name_eq(a: &[u8], b: &[u8]) -> bool {
     use std::ffi::c_void;
@@ -309,7 +370,7 @@ fn macos_name_eq(a: &[u8], b: &[u8]) -> bool {
     }
 }
 
-fn edge(directory: &File, path: &Path) -> io::Result<((u64, u64), OsString)> {
+fn edge(directory: &File, path: &Path) -> io::Result<Edge> {
     let meta = directory.metadata()?;
     let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
     Ok(((meta.dev(), meta.ino()), name.to_owned()))

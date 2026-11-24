@@ -4,7 +4,7 @@ use std::{
     os::unix::fs::{PermissionsExt, symlink},
 };
 
-fn private_dir() -> tempfile::TempDir {
+pub(super) fn private_dir() -> tempfile::TempDir {
     let parent = std::env::var_os("LARPCC_TEST_PARENT")
         .map(PathBuf::from)
         .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
@@ -168,8 +168,9 @@ fn stage19_registers_conventional_home_and_xdg_through_symlinked_home() {
     let temp = private_dir();
     let actual = temp.path().join("home");
     let alias = temp.path().join("home-alias");
-    let xdg = [".config", ".local/share", ".cache", ".local/state"];
+    let xdg = ["xdg/config", "xdg/data", "xdg/cache", "xdg/state"];
     for parent in xdg.into_iter().chain([
+        ".config",
         "Library/Application Support",
         "Library/Containers",
         "Library/Caches",
@@ -190,6 +191,38 @@ fn stage19_registers_conventional_home_and_xdg_through_symlinked_home() {
             ],
             xdg.map(|parent| home.join(parent)),
         );
+        let expected: BTreeSet<_> = [
+            "settings/claude-data",
+            "settings/codex-data",
+            ".config/Claude",
+            ".config/ChatGPT",
+            ".config/claude",
+            ".config/chatgpt",
+            "Library/Application Support/Claude",
+            "Library/Application Support/ChatGPT",
+            "Library/Containers/com.anthropic.claudefordesktop",
+            "Library/Containers/com.openai.chat",
+            "Library/Caches/com.anthropic.claudefordesktop",
+            "Library/Caches/com.openai.chat",
+        ]
+        .map(|path| home.join(path))
+        .into_iter()
+        .chain(xdg.into_iter().flat_map(|parent| {
+            [
+                "Claude",
+                "claude",
+                "ChatGPT",
+                "chatgpt",
+                "Codex",
+                "codex",
+                "com.openai.chat",
+                "com.openai.codex",
+                "com.anthropic.claudefordesktop",
+            ]
+            .map(|app| home.join(parent).join(app))
+        }))
+        .collect();
+        assert_eq!(roots.iter().cloned().collect::<BTreeSet<_>>(), expected);
         let mut guard = Exclusions::new(Some(home));
         guard.register(&roots, || true).unwrap();
 
