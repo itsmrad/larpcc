@@ -444,11 +444,12 @@ pub fn run() -> ExitCode {
                         path,
                         recorded_version,
                         replace,
-                    } => {
-                        eprintln!("Checking desktop app signature; this may take a few seconds.");
-                        r.bind_desktop(provider, path, recorded_version, replace)
-                            .map(|_| "Desktop binding saved.\n".to_owned())
-                    }
+                    } => r
+                        .bind_desktop(provider, path, recorded_version, replace)
+                        .map(|_| {
+                            eprintln!("Desktop app signature verified.");
+                            "Desktop binding saved.\n".to_owned()
+                        }),
                     AppCommand::Open { name } => r
                         .open_desktop(&name, false)
                         .map(|receipt| format!("Desktop {}.\n", receipt.outcome)),
