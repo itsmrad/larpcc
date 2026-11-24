@@ -1,4 +1,4 @@
-Show native authentication status
+Show profile account status
 
 Usage: larp cc status [OPTIONS] <NAME>
 
@@ -7,8 +7,12 @@ Arguments:
 
 Options:
       --json                                   Emit one local metadata JSON envelope
+      --no-account                             Show local metadata without running the provider
       --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
   -h, --help                                   Print help
 
 Profiles select native state, not a verified account, model or endpoint. Native project, configuration and administrator policy still apply. Provider restrictions remain possible.
 Quiesce relevant sessions before authentication changes. Refresh and logout may affect grants and integrations.
+
+Use --expected-profile-id ID to require the selected profile identity.
+Account details can appear in terminal scrollback and screenshots. Use --no-account to omit them.
