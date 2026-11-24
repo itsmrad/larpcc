@@ -362,6 +362,8 @@ struct Captured {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     exit: Option<i32>,
+    #[cfg(test)]
+    status: std::process::ExitStatus,
 }
 
 // Exact-path execve storage; pointers refer to the owned CString heap buffers.
@@ -580,6 +582,8 @@ fn spawn(
         stdout,
         stderr,
         exit: status.code(),
+        #[cfg(test)]
+        status,
     }))
 }
 
@@ -649,7 +653,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn stage08_spawn_enters_held_home_without_pathname_chdir() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::{fs::PermissionsExt, process::ExitStatusExt};
         let parent = std::env::var_os("LARPCC_TEST_PARENT")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
@@ -670,7 +674,13 @@ mod tests {
         .unwrap()
         .expect("child started in the held directory");
         assert!(checked);
-        assert_eq!(captured.exit, Some(0));
+        assert_eq!(
+            captured.exit,
+            Some(0),
+            "direct child status: {} (raw wait status: {})",
+            captured.status,
+            captured.status.into_raw()
+        );
         assert!(captured.stderr.is_empty());
         let mut expected = std::fs::canonicalize(&moved)
             .unwrap()
