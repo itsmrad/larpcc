@@ -107,28 +107,34 @@ path is available, read arguments only for executables inside Claude.app or
 ChatGPT.app bundle contents. Keep the official main-app signature requirements
 and verify nested helpers against the corresponding vendor team signature. An
 exact profile `--user-data-dir` argument match refuses deletion. Signed
-candidates and the `ENOENT` fallback use the same directory comparison: resolve
-the argument and compare that filesystem object, so absolute symlinks, trailing
-slashes, and `/var` versus `/private/var` cannot hide a match. A malformed or
-unresolvable directory argument refuses deletion. Re-check process identity
-after that resolution, and only then clear a directory that is not the profile.
-Skip a process that exits or whose PID is reused during the scan, and skip
-denied path lookups that have yet to identify a candidate.
+candidates and the `ENOENT` fallback then compare filesystem identity: the
+device and inode of the resolved argument against the profile directory.
+Absolute symlinks, trailing slashes, `/var` versus `/private/var`, and two
+canonical paths for one directory (an APFS firmlink) cannot hide a match. If
+that target's identity cannot be established, because stat fails or it is not
+a directory, deletion is refused. Re-check process identity after that
+resolution, and only then clear a directory that is not the profile. A valid
+argument vector with no `--user-data-dir` clears the process. Skip a process
+that exits or whose PID is reused during the scan, and skip denied path
+lookups that have yet to identify a candidate.
 
 If the initial path lookup returns `ENOENT`, as can happen after a running
 executable is unlinked, read its bounded argument vector between process
 start-time probes. Skip the process only when the probe after the read shows
 that it exited or its PID was reused. `ESRCH` or missing arguments do not prove
 that on their own: a matching live stamp, including one with the exiting flag
-set, refuses deletion. A matching directory, unreadable or malformed arguments,
-or an inconclusive process identity also refuses deletion. A valid argument
-vector whose resolved directory is not the profile, confirmed against that same
-live stamp, clears the process. Other unresolved initial path errors, failed or
-oversized enumeration, and failed signature validation of a live candidate also
-refuse deletion.
+set, refuses deletion. On this fallback, an exiting process or unreadable
+arguments return terminal Busy and do not retry. A matching directory identity
+also refuses deletion. A valid argument vector with no `--user-data-dir`, or
+whose directory identity is not the profile and whose start time is still the
+same live process, clears the process. Other unresolved initial path errors,
+failed or oversized enumeration, and failed signature validation of a live
+candidate also refuse deletion.
 
-If the only blockers are live candidates that are mid-exit or whose liveness,
-path, or arguments could not be read conclusively, wait 150 ms and scan again.
+If the only blockers are signed candidates reported as `CandidateUncertain`
+(mid-exit, or liveness, path, or arguments that could not be read conclusively),
+wait 150 ms and scan again. That is the one retry for this result. An `ENOENT`
+fallback that already returned Busy does not use it.
 An `ESRCH` from an argument or path recheck counts as inconclusive when the
 same candidate is still alive. The retry checks whether an already identified
 candidate is still alive even if its executable path cannot be read.

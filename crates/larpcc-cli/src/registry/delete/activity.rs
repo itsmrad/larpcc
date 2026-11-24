@@ -191,22 +191,37 @@ fn scan(
     Ok(())
 }
 
+#[cfg(all(unix, any(test, target_os = "macos")))]
+fn directory_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let resolved = path.canonicalize().ok()?;
+    // The final component is already resolved, so a symlink planted there cannot be followed.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(resolved)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    meta.is_dir().then_some((meta.dev(), meta.ino()))
+}
+
 #[cfg(any(test, target_os = "macos"))]
-fn resolved_profile_dir(dir: &[u8]) -> Result<Option<Vec<u8>>, ScanError> {
+fn same_profile_directory(dir: &[u8], expected: &HashSet<Vec<u8>>) -> Result<bool, ScanError> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
-        // A different spelling cannot establish that the directory is unrelated.
-        let resolved = Path::new(std::ffi::OsStr::from_bytes(dir))
-            .canonicalize()
-            .map_err(|_| ScanError::Busy)?;
-        Ok(Some(resolved.as_os_str().as_bytes().to_vec()))
+        // Canonical text can name one directory twice. Compare device and inode.
+        let target = directory_identity(Path::new(std::ffi::OsStr::from_bytes(dir)))
+            .ok_or(ScanError::Busy)?;
+        Ok(expected.iter().any(|candidate| {
+            directory_identity(Path::new(std::ffi::OsStr::from_bytes(candidate))) == Some(target)
+        }))
     }
     #[cfg(not(unix))]
     {
-        let _ = dir;
+        let _ = (dir, expected);
         // shortcut: non-unix tests compare the raw spelling; upgrade when delete scans processes there.
-        Ok(None)
+        Ok(false)
     }
 }
 
@@ -246,16 +261,14 @@ fn scan_without_path(
     let Some(dir) = dir else {
         return Ok(());
     };
-    let Some(resolved) = resolved_profile_dir(dir)? else {
-        return Ok(());
-    };
+    let matched = same_profile_directory(dir, expected)?;
     let Some(again) = table
         .stamp(pid, Some(before.start))
         .map_err(|_| ScanError::Busy)?
     else {
         return Ok(());
     };
-    if again.exiting || expected.contains(&resolved) {
+    if again.exiting || matched {
         return Err(ScanError::Busy);
     }
     Ok(())
@@ -299,14 +312,12 @@ fn scan_candidate(
     let Some(dir) = dir else {
         return Ok(());
     };
-    let Some(resolved) = resolved_profile_dir(dir)? else {
-        return Ok(());
-    };
-    // The filesystem resolve sits between identity checks. Recheck before clearing.
+    let matched = same_profile_directory(dir, expected)?;
+    // Resolution sits between identity checks. Recheck before clearing.
     if !same_process(table, pid, before, path)? {
         return Ok(());
     }
-    if expected.contains(&resolved) {
+    if matched {
         return Err(ScanError::Busy);
     }
     Ok(())
@@ -801,6 +812,73 @@ mod tests {
             assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
             assert_eq!(table.reads.get(), 1);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_matches_a_symlinked_ancestor_by_directory_identity() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let real_parent = root.path().join("real");
+        let desktop = real_parent.join("desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        let via_parent = root.path().join("via");
+        std::os::unix::fs::symlink(&real_parent, &via_parent).unwrap();
+        let via = via_parent.join("desktop");
+        let real_meta = std::fs::metadata(&desktop).unwrap();
+        let via_meta = std::fs::metadata(&via).unwrap();
+        assert_eq!(
+            (real_meta.dev(), real_meta.ino()),
+            (via_meta.dev(), via_meta.ino())
+        );
+        // The profile spelling is not the canonical text of the argv path.
+        assert_ne!(
+            path_bytes(&via),
+            path_bytes(&desktop.canonicalize().unwrap())
+        );
+        let expected = path_bytes(&via);
+        let arg = directory_arg(&desktop);
+        let signed = Fixture {
+            expected: Some(expected.clone()),
+            ..Fixture::candidate(&[Some((10, 0)); 4], Some(&arg))
+        };
+        assert_eq!(signed.scan(|| Ok(())), Err(ScanError::Busy));
+        assert_eq!(signed.reads.get(), 1);
+
+        let enoent = Fixture {
+            path: None,
+            paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+            expected: Some(expected),
+            ..Fixture::candidate(&[], Some(&arg))
+        };
+        enoent.stamps.borrow_mut().extend([
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+        ]);
+        assert_eq!(enoent.scan(|| Ok(())), Err(ScanError::Busy));
+        assert_eq!(enoent.reads.get(), 1);
+        assert!(enoent.stamps.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_non_directory_target_stays_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("not-a-directory");
+        std::fs::write(&file, b"x").unwrap();
+        let arg = directory_arg(&file);
+        let table = Fixture::candidate(&[Some((10, 0)); 3], Some(&arg));
+        assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
     }
 
     #[cfg(unix)]
