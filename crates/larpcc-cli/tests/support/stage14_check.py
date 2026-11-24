@@ -3,6 +3,10 @@ import re
 import subprocess
 import sys
 
+from cargo_test_environment import require_private_test_environment
+
+require_private_test_environment('stage14_check.py')
+
 result = subprocess.run(
     ["cargo", *sys.argv[1:], "test", "--workspace", "--locked",
      "--features", "synthetic-launch", "stage14_"],
