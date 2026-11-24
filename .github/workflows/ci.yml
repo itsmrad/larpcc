@@ -32,6 +32,25 @@ jobs:
           cargo +stable build --locked --features synthetic-launch --bin larpcc-fake-provider --target-dir bootstrap-target
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & .\bootstrap-target\debug\larpcc-fake-provider.exe
+      - if: runner.os == 'Linux'
+        name: Verify stage acceptance refuses an unsafe test environment
+        run: |
+          python_path=$(command -v python)
+          fake_bin=$(mktemp -d)
+          trap 'rm -rf "$fake_bin"' EXIT
+          mkdir "$fake_bin/home" "$fake_bin/fixture-parent"
+          printf '%s\n' '#!/bin/sh' ': > "$0.invoked"' 'echo "unexpected cargo invocation" >&2' 'exit 99' > "$fake_bin/cargo"
+          chmod +x "$fake_bin/cargo"
+          for script in stage04_check.py stage14_check.py; do
+            status=0
+            env -u LARPCC_TEST_PARENT PATH="$fake_bin" "$python_path" -B "crates/larpcc-cli/tests/support/$script" +stable || status=$?
+            test ! -e "$fake_bin/cargo.invoked"
+            test "$status" -eq 2
+            status=0
+            env -u GITHUB_ACTIONS LARPCC_TEST_PARENT="$fake_bin/fixture-parent" HOME="$fake_bin/home" PATH="$fake_bin" "$python_path" -B "crates/larpcc-cli/tests/support/$script" +stable || status=$?
+            test ! -e "$fake_bin/cargo.invoked"
+            test "$status" -eq 2
+          done
       - if: runner.os == 'macOS'
         run: cc -Wall -Werror crates/larpcc-cli/tests/support/macos_acl_abi.c -o acl-abi && ./acl-abi
       - if: runner.os == 'Linux'
@@ -47,10 +66,22 @@ jobs:
             cargo +stable test --test stage04_delete --locked stage04_delete -- --exact | tee stage04-delete.log
             grep -Fq 'test result: ok. 1 passed; 0 failed;' stage04-delete.log
           done
+      - if: runner.os == 'macOS'
+        name: Repeat full stage04_delete suite 10 times
+        shell: bash
+        run: |
+          for iteration in {1..10}; do
+            echo "stage04_delete suite run $iteration/10"
+            cargo +stable test --test stage04_delete --locked | tee stage04-delete-suite.log
+            grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' stage04-delete-suite.log
+          done
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
         env:
           LARPCC_STAGE_FILTER: stage06_
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
+        env:
+          LARPCC_STAGE_FILTER: stage07_
       - if: runner.os == 'Windows'
         run: |
           cargo +stable test --bin larp --locked platform::windows::tests::w01_w03_existing_security_refuses_without_changing_contents_or_acl -- --exact --nocapture 2>&1 | Tee-Object -Variable cleanupEvidence
@@ -76,6 +107,9 @@ jobs:
       - run: cargo +stable test --test gate --all-features --locked
       - run: cargo +stable clippy --workspace --all-targets --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked -- -D warnings
       - run: cargo +stable test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
+      - run: python crates/larpcc-cli/tests/support/stage14_check.py +stable
+        env:
+          CARGO_TARGET_DIR: ${{ env.LARPCC_TEST_PARENT }}/synthetic-target
       - run: cargo +stable test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
       - if: runner.os == 'Windows'
         name: Report bounded grandchild process timings
@@ -120,5 +154,11 @@ jobs:
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
         env:
           LARPCC_STAGE_FILTER: stage06_
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
+        env:
+          LARPCC_STAGE_FILTER: stage07_
       - run: cargo +1.89 test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
+      - run: python crates/larpcc-cli/tests/support/stage14_check.py +1.89
+        env:
+          CARGO_TARGET_DIR: ${{ env.LARPCC_TEST_PARENT }}/synthetic-target
       - run: cargo +1.89 test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked

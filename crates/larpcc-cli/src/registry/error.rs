@@ -14,6 +14,11 @@ pub enum Error {
     AliasInvalid,
     AliasImageUnverified,
     ForbiddenSource,
+    McpNotFound,
+    McpInvalid,
+    SecretLiteral,
+    SecretReference,
+    Unsupported,
     InvalidVersionLabel,
     RecoveryRequired,
     ManagedMode {
@@ -108,6 +113,15 @@ impl fmt::Display for Error {
             }
             Self::Drift => f.write_str("owned skills content or filesystem identity has drifted"),
             Self::SkillNotFound => f.write_str("skill was not found"),
+            Self::McpNotFound => f.write_str("MCP server was not found"),
+            Self::McpInvalid => f.write_str("MCP definition input is invalid"),
+            Self::SecretLiteral => {
+                f.write_str("MCP input looks like a literal value; only references are accepted")
+            }
+            Self::SecretReference => {
+                f.write_str("MCP reference is missing, invalid or unsupported")
+            }
+            Self::Unsupported => f.write_str("MCP transport or adapter is unsupported"),
             Self::AliasNotFound => f.write_str("alias was not found"),
             Self::AliasInvalid => {
                 f.write_str("alias launcher, receipt or mapping cannot be verified")

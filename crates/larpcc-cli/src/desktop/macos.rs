@@ -147,15 +147,15 @@ fn code_directory_hash(path: &Path) -> Result<Vec<u8>, Error> {
         if hash.is_null() || CFGetTypeID(hash) != CFDataGetTypeID() {
             return Err(Error::ArtifactInvalid);
         }
-        let len = CFDataGetLength(hash);
-        if !(20..=32).contains(&len) {
+        let len = usize::try_from(CFDataGetLength(hash)).map_err(|_| Error::ArtifactInvalid)?;
+        if !SIGNATURE_CDHASH_LENGTH.contains(&len) {
             return Err(Error::ArtifactInvalid);
         }
         let bytes = CFDataGetBytePtr(hash);
         if bytes.is_null() {
             return Err(Error::ArtifactInvalid);
         }
-        Ok(std::slice::from_raw_parts(bytes, len as usize).to_vec())
+        Ok(std::slice::from_raw_parts(bytes, len).to_vec())
     }
 }
 fn file_key(object: &CheckedObject) -> Result<[i64; 7], Error> {
@@ -179,7 +179,7 @@ fn cache_key(
     info: &CheckedObject,
 ) -> Result<SignatureCache, Error> {
     Ok(SignatureCache {
-        version: 1,
+        version: SIGNATURE_CACHE_VERSION,
         executable: file_key(executable)?,
         info: file_key(info)?,
         cdhash: code_directory_hash(path)?,

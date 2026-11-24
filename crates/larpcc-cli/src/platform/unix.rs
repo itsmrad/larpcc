@@ -695,12 +695,25 @@ extern "C" fn auth_signal(signal: i32) {
     let bit = match signal {
         libc::SIGTERM => 1,
         libc::SIGHUP => 2,
+        libc::SIGINT => 4,
         _ => 0,
     };
     AUTH_SIGNALS.fetch_or(bit, std::sync::atomic::Ordering::SeqCst);
 }
-struct AuthSignals(Vec<(i32, libc::sigaction)>);
+pub(crate) struct AuthSignals(Vec<(i32, libc::sigaction)>);
 impl AuthSignals {
+    pub(crate) fn pending(&self) -> Option<i32> {
+        pending_auth_signal().or_else(|| {
+            (AUTH_SIGNALS.load(std::sync::atomic::Ordering::SeqCst) & 4 != 0)
+                .then_some(libc::SIGINT)
+        })
+    }
+
+    pub(crate) fn finish(self) -> Result<(), Error> {
+        drop(self);
+        Ok(())
+    }
+
     fn install() -> Result<Self, Error> {
         AUTH_SIGNALS.store(0, std::sync::atomic::Ordering::SeqCst);
         let mut saved = Self(Vec::new());
@@ -786,7 +799,7 @@ impl Drop for AuthMask {
         }
     }
 }
-fn cancel_reap(pid: libc::pid_t) {
+pub(crate) fn cancel_reap(pid: libc::pid_t) {
     // SAFETY: pid is the known unreaped direct child. Never kill an unknown tree.
     unsafe {
         libc::kill(pid, libc::SIGKILL);
@@ -888,16 +901,13 @@ impl AuthExec {
     }
 }
 
-pub(crate) fn auth_spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<AuthExit, Error> {
+fn auth_command(
+    plan: &crate::launch::LaunchPlan,
+    signals: &AuthSignals,
+    capture: bool,
+) -> Result<std::process::Command, Error> {
     use std::os::unix::process::CommandExt;
     let prepared = AuthExec::prepare(plan)?;
-    let signals = AuthSignals::install()?;
-    if auth_fault(3) {
-        return Ok(AuthExit::Signal(libc::SIGTERM));
-    }
-    if let Some(signal) = pending_auth_signal() {
-        return Ok(AuthExit::Signal(signal));
-    }
     let mut command = std::process::Command::new(&plan.executable);
     if let Some(cwd) = &plan.cwd {
         command.current_dir(cwd);
@@ -915,6 +925,9 @@ pub(crate) fn auth_spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<AuthEx
     // cannot use execvp's shell fallback. No allocation, locks or environment access.
     unsafe {
         command.pre_exec(move || {
+            if capture && libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
             for (signal, action) in &ignored {
                 if libc::sigaction(*signal, action, std::ptr::null_mut()) != 0 {
                     return Err(io::Error::last_os_error());
@@ -922,6 +935,26 @@ pub(crate) fn auth_spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<AuthEx
             }
             Err(prepared.execute())
         });
+    }
+    Ok(command)
+}
+
+pub(crate) fn auth_capture_command(
+    plan: &crate::launch::LaunchPlan,
+) -> Result<(std::process::Command, AuthSignals), Error> {
+    let signals = AuthSignals::install()?;
+    let command = auth_command(plan, &signals, true)?;
+    Ok((command, signals))
+}
+
+pub(crate) fn auth_spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<AuthExit, Error> {
+    let signals = AuthSignals::install()?;
+    let mut command = auth_command(plan, &signals, false)?;
+    if auth_fault(3) {
+        return Ok(AuthExit::Signal(libc::SIGTERM));
+    }
+    if let Some(signal) = pending_auth_signal() {
+        return Ok(AuthExit::Signal(signal));
     }
     let child = command.spawn().map_err(|source| Error::Launch {
         path: plan.executable.clone(),

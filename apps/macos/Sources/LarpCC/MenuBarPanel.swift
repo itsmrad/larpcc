@@ -260,7 +260,7 @@ struct MenuBarPanel: View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("LarpCC").font(.system(size: 13, weight: .bold))
-                Text(statusLine).foregroundStyle(.secondary)
+                Text(statusLine).foregroundStyle(SettingsTypography.supportingInk)
             }
             Spacer(minLength: 8)
             if store.usageLoading || store.busy {
@@ -700,7 +700,8 @@ private struct MenuBarProfileSummary: View {
                     ProfileRing(provider: profile.provider, session: report?.fiveHour)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.name).font(.system(size: 13)).lineLimit(1)
-                        Text(subtitle).font(.system(size: theme.tokens.descriptionSize)).foregroundStyle(.secondary)
+                        Text(subtitle).font(.system(size: theme.tokens.descriptionSize))
+                            .foregroundStyle(SettingsTypography.supportingInk)
                             .monospacedDigit()
                     }
                     Spacer(minLength: 8)
@@ -729,7 +730,7 @@ private struct MenuBarProfileSummary: View {
             CardRow {
                 Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -755,16 +756,16 @@ private struct MenuBarProfileSummary: View {
     private func meterRow(_ kind: UsageWindowKind, _ window: UsageWindow) -> some View {
         let level = UsageLevel(leftPercent: window.leftPercent)
         return GridRow {
-            Text(kind.title).foregroundStyle(.secondary)
+            Text(kind.title).foregroundStyle(SettingsTypography.supportingInk)
             UsageMeter(leftPercent: window.leftPercent, level: level)
             Text("\(Int(window.leftPercent.rounded()))%")
                 .fontWeight(.semibold)
-                .foregroundStyle(level.textTint(in: theme) ?? .primary)
+                .foregroundStyle(level.textTint ?? .primary)
                 .frame(width: 32, alignment: .trailing)
             // Fixed widths keep every card's meter the same length.
             Label(resetText(window), systemImage: "clock")
                 .labelStyle(ResetLabelStyle())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(SettingsTypography.supportingInk)
                 .frame(width: 58, alignment: .trailing)
         }
         .monospacedDigit()
@@ -867,13 +868,22 @@ private struct ResetLabelStyle: LabelStyle {
 private struct UsageMeter: View {
     let leftPercent: Double
     let level: UsageLevel
+    @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var fill: Color {
+        if level == .critical && theme != .tahoe && colorScheme == .dark {
+            return Color(red: 1, green: 0.53, blue: 0.49)
+        }
+        return level.tint ?? Color.primary.opacity(0.7)
+    }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.primary.opacity(0.12))
                 Capsule()
-                    .fill(level.tint ?? Color.primary.opacity(0.7))
+                    .fill(fill)
                     .frame(width: max(leftPercent > 0 ? 4 : 0, proxy.size.width * leftPercent / 100))
             }
         }
@@ -893,25 +903,17 @@ private extension UsageLevel {
         }
     }
 
-    /// For the percentage text, which needs more contrast than the meter and ring. The classic
-    /// themes sit on the wallpaper-tinted sidebar vibrancy, so their dark red is lighter still.
-    func textTint(in theme: Theme) -> Color? {
-        guard self == .critical else { return tint }
-        return theme == .tahoe ? criticalTextRed : classicCriticalTextRed
+    /// For the percentage text, which needs more contrast than the meter and ring.
+    var textTint: Color? {
+        switch self {
+        case .normal: return nil
+        case .low: return SettingsTypography.warningInk
+        case .critical: return SettingsTypography.criticalInk
+        }
     }
 }
 
-/// The system red in dark mode. In light mode the system red is too pale on the white
-/// cards, so text uses a deeper red (4.5:1 or better) and the meter and ring a slightly
-/// deeper one (3:1 or better, also on a selected card).
-private let criticalTextRed = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1)
-                       : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
-})
-private let classicCriticalTextRed = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.59, blue: 0.57, alpha: 1)
-                       : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
-})
+/// Meter and ring red, with a deeper shade on light cards.
 private let criticalGraphicRed = Color(nsColor: NSColor(name: nil) { appearance in
     isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.843, green: 0, blue: 0.082, alpha: 1)
 })

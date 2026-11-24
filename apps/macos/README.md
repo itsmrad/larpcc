@@ -88,14 +88,13 @@ follow the running macOS, not the theme. On macOS 14 and 15 the system already
 draws grouped forms in that release’s style, so LarpCC draws its own sections
 only when an earlier look runs on macOS 26. Each theme keeps Reduce
 Transparency (materials and glass turn opaque) and Increase Contrast (firm
-borders on cards and the selection). A nearly-out percentage uses a deeper
-red in light mode and a lighter one in dark mode (lighter still on the
-wallpaper-tinted classic panels), and a selected card is outlined, so text
-stays at 4.5:1 or better. Tahoe leaves the sidebar density to the system
-setting; Sequoia and Sonoma set their own.
+borders on cards and the selection). Low and nearly-out percentages use
+appearance-aware text colors. The selected card is outlined, and the text
+colors reach 4.5:1 on the sampled card backgrounds. Tahoe leaves sidebar density
+to the system setting. Sequoia and Sonoma set their own.
 
-For screenshots, `--theme=tahoe|sequoia|sonoma` overrides the setting for one
-launch, like `--appearance`. Settings, the panel and the status item all read
+For screenshots in debug builds, `--theme=tahoe|sequoia|sonoma` overrides the setting
+for one launch. Settings, the panel and the status item all read
 the one stored setting through `.themed()`, so a change shows at once, even in
 a panel that is already open. `ThemePropagationTests` checks that a change
 reaches a view under `.themed()`; that the three scene roots use it was checked

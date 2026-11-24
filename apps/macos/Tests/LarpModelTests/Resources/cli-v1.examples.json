@@ -320,7 +320,65 @@
         "email": "user@example.com",
         "plan": "Plus"
       },
-      "usage": null,
+      "usage": {
+        "profile_id": "2",
+        "name": "codex-45",
+        "provider": "codex",
+        "mode": "local",
+        "source": "codex_session_log",
+        "captured_at": "2026-11-21T12:00:00Z",
+        "client_version": "0.169.0",
+        "plan": {
+          "label": "pro",
+          "source": "client_local"
+        },
+        "windows": {
+          "five_hour": {
+            "used_percent": null,
+            "resets_at": "2026-11-21T12:20:00Z",
+            "captured_at": null,
+            "window_seconds": 18000,
+            "reason": "reset_since_capture",
+            "pace": null
+          },
+          "weekly": {
+            "used_percent": 75.0,
+            "resets_at": "2026-11-24T23:59:59Z",
+            "captured_at": "2026-11-21T12:00:00Z",
+            "window_seconds": 604800,
+            "reason": null,
+            "pace": {
+              "elapsed_percent": 50.0,
+              "reserve_percent": -25.0,
+              "runs_out_at": "2026-11-22T16:00:00Z",
+              "lasts_until_reset": false
+            }
+          },
+          "extra": [
+            {
+              "label": "Other limit 1 5h",
+              "used_percent": 10.0,
+              "resets_at": "2026-11-21T14:00:00Z",
+              "captured_at": "2026-11-21T10:00:00Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 20.0,
+                "reserve_percent": 10.0,
+                "runs_out_at": "2026-11-21T14:00:00Z",
+                "lasts_until_reset": true
+              }
+            }
+          ]
+        },
+        "reset_credits": {
+          "state": "unsupported",
+          "count": null,
+          "expires_state": "unsupported",
+          "expires_at": null
+        },
+        "diagnostics": []
+      },
       "diagnostics": []
     }
   },
@@ -1188,6 +1246,556 @@
     "error": {
       "code": "remote_output",
       "message": "The remote response was invalid."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "usage",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "requested_mode": "settings",
+      "generated_at": "2026-11-21T12:30:00Z",
+      "profiles": [
+        {
+          "profile_id": "1",
+          "name": "claude-work",
+          "provider": "claude",
+          "mode": "local",
+          "source": null,
+          "captured_at": null,
+          "client_version": null,
+          "plan": null,
+          "windows": {
+            "five_hour": {
+              "used_percent": null,
+              "resets_at": null,
+              "captured_at": null,
+              "window_seconds": 18000,
+              "reason": "capture_not_installed",
+              "pace": null
+            },
+            "weekly": {
+              "used_percent": null,
+              "resets_at": null,
+              "captured_at": null,
+              "window_seconds": 604800,
+              "reason": "capture_not_installed",
+              "pace": null
+            },
+            "extra": null
+          },
+          "reset_credits": {
+            "state": "unsupported",
+            "count": null,
+            "expires_state": "unsupported",
+            "expires_at": null
+          },
+          "diagnostics": [
+            {
+              "code": "capture_not_installed",
+              "message": "Claude usage capture is off or needs a qualified Larp launch."
+            }
+          ]
+        },
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "local",
+          "source": "codex_session_log",
+          "captured_at": "2026-11-21T12:00:00Z",
+          "client_version": "0.169.0",
+          "plan": {
+            "label": "pro",
+            "source": "client_local"
+          },
+          "windows": {
+            "five_hour": {
+              "used_percent": 30.0,
+              "resets_at": "2026-11-21T14:00:00Z",
+              "captured_at": "2026-11-21T12:00:00Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 60.0,
+                "reserve_percent": 30.0,
+                "runs_out_at": "2026-11-21T14:00:00Z",
+                "lasts_until_reset": true
+              }
+            },
+            "weekly": {
+              "used_percent": 75.0,
+              "resets_at": "2026-11-24T23:59:59Z",
+              "captured_at": "2026-11-21T12:00:00Z",
+              "window_seconds": 604800,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 50.0,
+                "reserve_percent": -25.0,
+                "runs_out_at": "2026-11-22T16:00:00Z",
+                "lasts_until_reset": false
+              }
+            },
+            "extra": [
+              {
+                "label": "Other limit 1 5h",
+                "used_percent": 10.0,
+                "resets_at": "2026-11-21T14:00:00Z",
+                "captured_at": "2026-11-21T10:00:00Z",
+                "window_seconds": 18000,
+                "reason": null,
+                "pace": {
+                  "elapsed_percent": 20.0,
+                  "reserve_percent": 10.0,
+                  "runs_out_at": "2026-11-21T14:00:00Z",
+                  "lasts_until_reset": true
+                }
+              },
+              {
+                "label": "Other limit 2 5h",
+                "used_percent": null,
+                "resets_at": "2026-11-21T11:00:00Z",
+                "captured_at": null,
+                "window_seconds": 18000,
+                "reason": "reset_since_capture",
+                "pace": null
+              }
+            ]
+          },
+          "reset_credits": {
+            "state": "unsupported",
+            "count": null,
+            "expires_state": "unsupported",
+            "expires_at": null
+          },
+          "diagnostics": []
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "usage",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "requested_mode": "live",
+      "generated_at": "2026-11-21T12:00:05Z",
+      "profiles": [
+        {
+          "profile_id": "1",
+          "name": "claude-work",
+          "provider": "claude",
+          "mode": "live",
+          "source": null,
+          "captured_at": null,
+          "client_version": null,
+          "plan": {
+            "label": "Max 5x",
+            "source": "user"
+          },
+          "windows": {
+            "five_hour": {
+              "used_percent": null,
+              "resets_at": null,
+              "captured_at": null,
+              "window_seconds": 18000,
+              "reason": "sign_in_again",
+              "pace": null
+            },
+            "weekly": {
+              "used_percent": null,
+              "resets_at": null,
+              "captured_at": null,
+              "window_seconds": 604800,
+              "reason": "sign_in_again",
+              "pace": null
+            },
+            "extra": null
+          },
+          "reset_credits": {
+            "state": "unsupported",
+            "count": null,
+            "expires_state": "unsupported",
+            "expires_at": null
+          },
+          "diagnostics": [
+            {
+              "code": "sign_in_again",
+              "message": "Sign in again in the official client."
+            }
+          ]
+        },
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "live",
+          "source": "live_endpoint",
+          "captured_at": "2026-11-21T12:00:05Z",
+          "client_version": null,
+          "plan": {
+            "label": "pro",
+            "source": "live_endpoint"
+          },
+          "windows": {
+            "five_hour": {
+              "used_percent": 30.0,
+              "resets_at": "2026-11-21T14:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 60.0,
+                "reserve_percent": 30.0,
+                "runs_out_at": "2026-11-21T14:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "weekly": {
+              "used_percent": 12.0,
+              "resets_at": "2026-11-24T12:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 604800,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 57.1,
+                "reserve_percent": 45.1,
+                "runs_out_at": "2026-11-24T12:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "extra": []
+          },
+          "reset_credits": {
+            "state": "available",
+            "count": 2,
+            "expires_state": "unsupported",
+            "expires_at": null
+          },
+          "diagnostics": []
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "usage",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "requested_mode": "live",
+      "generated_at": "2026-11-21T12:00:05Z",
+      "profiles": [
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "live",
+          "source": "live_endpoint",
+          "captured_at": "2026-11-21T12:00:05Z",
+          "client_version": null,
+          "plan": {
+            "label": "free_workspace",
+            "source": "live_endpoint"
+          },
+          "windows": {
+            "five_hour": {
+              "used_percent": 30.0,
+              "resets_at": "2026-11-21T14:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 60.0,
+                "reserve_percent": 30.0,
+                "runs_out_at": "2026-11-21T14:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "weekly": {
+              "used_percent": 12.0,
+              "resets_at": "2026-11-24T12:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 604800,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 57.1,
+                "reserve_percent": 45.1,
+                "runs_out_at": "2026-11-24T12:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "extra": []
+          },
+          "reset_credits": {
+            "state": "none",
+            "count": 0,
+            "expires_state": "none",
+            "expires_at": null
+          },
+          "diagnostics": []
+        },
+        {
+          "profile_id": "3",
+          "name": "codex-46",
+          "provider": "codex",
+          "mode": "live",
+          "source": "live_endpoint",
+          "captured_at": "2026-11-21T12:00:05Z",
+          "client_version": null,
+          "plan": null,
+          "windows": {
+            "five_hour": {
+              "used_percent": 30.0,
+              "resets_at": "2026-11-21T14:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 18000,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 60.0,
+                "reserve_percent": 30.0,
+                "runs_out_at": "2026-11-21T14:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "weekly": {
+              "used_percent": 12.0,
+              "resets_at": "2026-11-24T12:00:05Z",
+              "captured_at": "2026-11-21T12:00:05Z",
+              "window_seconds": 604800,
+              "reason": null,
+              "pace": {
+                "elapsed_percent": 57.1,
+                "reserve_percent": 45.1,
+                "runs_out_at": "2026-11-24T12:00:05Z",
+                "lasts_until_reset": true
+              }
+            },
+            "extra": []
+          },
+          "reset_credits": {
+            "state": "not_recorded",
+            "count": null,
+            "expires_state": "not_recorded",
+            "expires_at": null
+          },
+          "diagnostics": []
+        },
+        {
+          "profile_id": "4",
+          "name": "codex-47",
+          "provider": "codex",
+          "mode": "live",
+          "source": null,
+          "captured_at": null,
+          "client_version": null,
+          "plan": null,
+          "windows": {
+            "five_hour": {
+              "used_percent": null,
+              "resets_at": null,
+              "captured_at": null,
+              "window_seconds": 18000,
+              "reason": "live_unavailable",
+              "pace": null
+            },
+            "weekly": {
+              "used_percent": null,
+              "resets_at": null,
+              "captured_at": null,
+              "window_seconds": 604800,
+              "reason": "live_unavailable",
+              "pace": null
+            },
+            "extra": null
+          },
+          "reset_credits": {
+            "state": "not_recorded",
+            "count": null,
+            "expires_state": "not_recorded",
+            "expires_at": null
+          },
+          "diagnostics": [
+            {
+              "code": "live_unavailable",
+              "message": "Usage is not available right now."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage",
+    "ok": true,
+    "revision": "7",
+    "data": {
+      "mode": "local",
+      "live": {
+        "state": "off",
+        "enabled": false,
+        "acknowledged_warning": null,
+        "current_warning": 1,
+        "verified": false
+      },
+      "refresh_interval_seconds": null,
+      "profiles": [
+        {
+          "profile_id": "1",
+          "name": "claude-work",
+          "provider": "claude",
+          "mode": "inherit",
+          "plan_label": "Max 5x",
+          "claude_statusline": false
+        },
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "inherit",
+          "plan_label": null,
+          "claude_statusline": null
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage",
+    "ok": true,
+    "revision": "9",
+    "data": {
+      "mode": "live",
+      "live": {
+        "state": "needs_acknowledgement",
+        "enabled": true,
+        "acknowledged_warning": 1,
+        "current_warning": 2,
+        "verified": false
+      },
+      "refresh_interval_seconds": null,
+      "profiles": [
+        {
+          "profile_id": "1",
+          "name": "claude-work",
+          "provider": "claude",
+          "mode": "inherit",
+          "plan_label": "Max 5x",
+          "claude_statusline": false
+        },
+        {
+          "profile_id": "2",
+          "name": "codex-45",
+          "provider": "codex",
+          "mode": "inherit",
+          "plan_label": null,
+          "claude_statusline": null
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.live",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": [
+        {
+          "code": "live_unverified",
+          "message": "LIVE usage is unverified against real accounts."
+        }
+      ]
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.mode",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": "2",
+      "name": "codex-45",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.interval",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": null,
+      "name": null,
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.claude-statusline",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": "1",
+      "name": "claude-work",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "profile.plan-label",
+    "ok": true,
+    "revision": "8",
+    "data": {
+      "changed": true,
+      "profile_id": "1",
+      "name": "claude-work",
+      "warnings": []
+    }
+  },
+  {
+    "schema": 1,
+    "command": "usage",
+    "ok": false,
+    "error": {
+      "code": "live_disabled",
+      "message": "LIVE usage is off; enable it in settings first."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.live",
+    "ok": false,
+    "error": {
+      "code": "confirmation_required",
+      "message": "Enabling LIVE usage requires --acknowledge-risk."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.claude-statusline",
+    "ok": false,
+    "error": {
+      "code": "statusline_exists",
+      "message": "This profile already has its own statusLine; LarpCC will not replace it."
+    }
+  },
+  {
+    "schema": 1,
+    "command": "settings.usage.claude-statusline",
+    "ok": false,
+    "error": {
+      "code": "statusline_unverifiable",
+      "message": "LarpCC could not confirm that this profile has no statusLine."
     }
   }
 ]
