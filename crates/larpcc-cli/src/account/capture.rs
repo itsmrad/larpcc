@@ -13,23 +13,29 @@ pub(super) enum Captured {
     Cancelled(i32),
 }
 
-pub(super) fn run(plan: &LaunchPlan, budget: Duration) -> Result<Captured, Error> {
+pub(super) fn run(
+    plan: &LaunchPlan,
+    budget: Duration,
+    revalidate: impl FnOnce() -> Result<(), Error>,
+) -> Result<Captured, Error> {
     let (mut command, signals) = os::prepare(plan)?;
-    let deadline = Instant::now() + budget;
-    let result = if let Some(signal) = signals.pending() {
-        Ok(Captured::Cancelled(signal))
-    } else {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let result = revalidate().and_then(|()| {
+        if let Some(signal) = signals.pending() {
+            return Ok(Captured::Cancelled(signal));
+        }
+        let deadline = Instant::now() + budget;
         command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
             .spawn()
             .map_err(|source| Error::Launch {
                 path: plan.executable.clone(),
                 source,
             })
             .and_then(|mut child| supervise(&mut child, &signals, deadline))
-    };
+    });
     let pending = signals.pending();
     signals.finish()?;
     match pending {

@@ -214,13 +214,15 @@ fn finish(metadata: Value, prepared: Prepared<'_>, json: bool) -> Result<Summary
         Error::AdmissionChanged => Error::Conflict,
         error => error,
     })?;
-    admission::revalidate(&admitted).map_err(|_| Error::Conflict)?;
-    admission::revalidate_guard(&admitted.root, id, &guard).map_err(|_| Error::Conflict)?;
+    let revalidate = || {
+        admission::revalidate_guard(&admitted.root, id, &guard).map_err(|_| Error::Conflict)?;
+        admission::revalidate(&admitted).map_err(|_| Error::Conflict)
+    };
     if !json {
         eprintln!("{}", admission::ROUTING_NOTICE);
         eprintln!("{}", admission::AUTH_NOTICE);
     }
-    let captured = capture::run(&admitted.plan, DEADLINE.min(row.deadline));
+    let captured = capture::run(&admitted.plan, DEADLINE.min(row.deadline), revalidate);
     let version = Some(admitted.row.release);
     let account = match captured {
         Ok(capture::Captured::Cancelled(signal)) => {
@@ -230,8 +232,7 @@ fn finish(metadata: Value, prepared: Prepared<'_>, json: bool) -> Result<Summary
             return Err(Error::Conflict);
         }
         captured => {
-            admission::revalidate(&admitted).map_err(|_| Error::Conflict)?;
-            admission::revalidate_guard(&admitted.root, id, &guard).map_err(|_| Error::Conflict)?;
+            revalidate()?;
             match captured? {
                 capture::Captured::Complete(exit, stdout, stderr) => {
                     (row.parser)(exit.code(), &stdout, &stderr)

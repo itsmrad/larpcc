@@ -356,7 +356,11 @@ enum ProfileAction {
 }
 
 const KEYCHAIN_RETAINED: &str = "Keychain items and remote grants may remain.";
-const STATUS_HELP: &str = "Use --expected-profile-id ID to require the selected profile identity.\nAccount details can appear in terminal scrollback and screenshots. Use --no-account to omit them.";
+const STATUS_HELP: &str = "\
+Profiles select native state, not a verified account, model or endpoint. Native project, configuration and administrator policy still apply. Provider restrictions remain possible.\n\
+Quiesce relevant sessions before authentication changes. Refresh and logout may affect grants and integrations.\n\n\
+Use --expected-profile-id ID to require the selected profile identity.\n\
+Account details can appear in terminal scrollback and screenshots. Use --no-account to omit them.";
 
 use clap::builder::TypedValueParser;
 

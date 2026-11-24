@@ -215,6 +215,70 @@ fn stage14_admission_cannot_publish_a_stale_snapshot() {
     assert!(result.get("data").is_none());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn stage14_admission_cannot_spawn_after_a_blocked_notice() {
+    use std::{
+        io::{self, Read, Write},
+        os::fd::AsRawFd,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+
+    let f = StatusFixture::new();
+    let (mut reader, mut writer) = io::pipe().unwrap();
+    let fd = writer.as_raw_fd();
+    // SAFETY: Both fcntl calls operate on the live test pipe writer.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    assert!(flags >= 0);
+    assert_eq!(
+        unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0
+    );
+    let filler = [0; 4096];
+    loop {
+        match writer.write(&filler) {
+            Ok(n) => assert_eq!(n, filler.len()),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("failed to fill test pipe: {error}"),
+        }
+    }
+    // SAFETY: Restore blocking writes before giving the write end to the child.
+    assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, flags) }, 0);
+    let mut cmd = f.command(true, &["cc", "status", "codex-45"]);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(writer);
+    let child = common::spawn(&mut cmd).unwrap();
+    drop(cmd);
+    let wait_channel = format!("/proc/{}/wchan", child.id());
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let blocked = fs::read_to_string(&wait_channel).unwrap();
+        if blocked.contains("pipe_write") {
+            break;
+        }
+        assert!(Instant::now() < end, "status did not block writing its notice");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    f.fixture.profile(&["rename", "codex-45", "claude-work"], 0);
+    let drain = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let output = common::wait_output(child).unwrap();
+    let diagnostics = drain.join().unwrap();
+    assert!(
+        diagnostics
+            .windows(b"conflict".len())
+            .any(|part| part == b"conflict")
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(!f.marker.exists(), "stale status executed its provider");
+}
+
 #[test]
 fn stage14_parser_capture_timeout_and_overflow() {
     let f = StatusFixture::new();
