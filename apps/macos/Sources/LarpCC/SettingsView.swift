@@ -69,6 +69,7 @@ struct SettingsView: View {
     @State private var confirmingStop = false
     @AppStorage(PreferenceKey.appearance) private var appearance = AppearanceMode.system.rawValue
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         split
@@ -122,7 +123,13 @@ struct SettingsView: View {
                 sidebar
                     .scrollContentBackground(.hidden)
                     .frame(width: 230)
-                    .background(SidebarMaterial().ignoresSafeArea())
+                    .background {
+                        if reduceTransparency {
+                            Color(nsColor: .windowBackgroundColor).ignoresSafeArea()
+                        } else {
+                            SidebarMaterial().ignoresSafeArea()
+                        }
+                    }
                 Divider().ignoresSafeArea()
                 detailColumn.background(classicPageBackground.ignoresSafeArea())
             }
@@ -151,55 +158,74 @@ struct SettingsView: View {
     }
 
     private var sidebar: some View {
-        List(selection: $selection) {
-            Section {
-                ForEach(SettingsPage.allCases.filter { matches($0.title + " " + $0.keywords) }) { page in
-                    Label {
-                        Text(page.title)
-                    } icon: {
-                        IconTile(symbol: page.symbol, color: page.color)
-                    }
-                    .tag(Selection.page(page))
+        let query = search.trimmingCharacters(in: .whitespaces)
+        let pages = SettingsPage.allCases.filter { matches($0.title + " " + $0.keywords, query: query) }
+        let profiles = store.snapshot?.profiles.filter {
+            matches($0.name + " " + $0.provider.title + " " + $0.aliases.joined(separator: " "), query: query)
+        } ?? []
+
+        return List(selection: $selection) {
+            ForEach(pages) { page in
+                Label {
+                    Text(page.title)
+                } icon: {
+                    IconTile(symbol: page.symbol, color: page.color, size: theme.tokens.sidebarIconSize)
                 }
+                .tag(Selection.page(page))
             }
-            if let snapshot = store.snapshot {
+            if store.snapshot != nil {
                 Section {
-                    ForEach(snapshot.profiles.filter { matches($0.name + " " + $0.provider.title + " " + $0.aliases.joined(separator: " ")) }) { profile in
+                    if profiles.isEmpty, !query.isEmpty {
+                        Text(pages.isEmpty ? "No results" : "No matching profiles")
+                            .font(SettingsTypography.supporting)
+                            .foregroundStyle(SettingsTypography.supportingInk)
+                            .selectionDisabled()
+                    }
+                    ForEach(profiles) { profile in
                         ProfileSidebarRow(profile: profile, usage: store.usage[profile.id])
                             .tag(Selection.profile(profile.id))
                     }
                 } header: {
                     HStack {
                         Text("Profiles")
+                            .font(SettingsTypography.caption.weight(.semibold))
+                            .foregroundStyle(Color(nsColor: .labelColor))
                         Spacer()
-                        Text("\(snapshot.enabledCount) on").monospacedDigit()
-                        Button { store.sheet = .addProfile } label: { Image(systemName: "plus") }
-                            .buttonStyle(.borderless)
-                            .help("New Profile (⌘N)")
-                            .accessibilityLabel("New Profile")
-                            .disabled(store.busy)
+                        SettingsIconButton(title: "New Profile", symbol: "plus", help: "New Profile (⌘N)") {
+                            store.sheet = .addProfile
+                        }
+                        .disabled(store.busy)
                     }
-                    .padding(.trailing, 10)
+                    .padding(.trailing, SettingsSpacing.tight)
                     .accessibilityElement(children: .contain)
                 }
             }
         }
         .listStyle(.sidebar)
         .modifier(SidebarDensity(size: theme.tokens.sidebarRowSize))
+        .overlay(alignment: .topLeading) {
+            if store.snapshot == nil, pages.isEmpty, !query.isEmpty {
+                Text("No results")
+                    .font(SettingsTypography.supporting)
+                    .foregroundStyle(Color(nsColor: .labelColor))
+                    .padding(SettingsSpacing.inset)
+                    .allowsHitTesting(false)
+            }
+        }
         .modifier(SidebarSearch(text: $search, inSidebarSplit: theme.tokens.floatingSidebar))
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack(spacing: 6) {
-                Image(systemName: store.isFixture ? "testtube.2" : "terminal")
-                Text(store.isFixture ? "Sample data" : "Your larp executable")
+            VStack(spacing: 0) {
+                if !theme.tokens.floatingSidebar { Divider() }
+                Label(store.isFixture ? "Sample data" : "Your larp executable",
+                      systemImage: store.isFixture ? "testtube.2" : "terminal")
+                    .font(SettingsTypography.caption)
+                    .foregroundStyle(Color(nsColor: .labelColor))
                     .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, SettingsSpacing.inset)
+                    .padding(.vertical, SettingsSpacing.inline)
             }
             .help(store.isFixture ? "Sample data: changes stay in memory and reset on restart." : "Using your larp executable")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .accessibilityElement(children: .combine)
         }
     }
 
@@ -248,12 +274,19 @@ struct SettingsView: View {
     private var metadataUnavailable: some View {
         Group {
             if store.busy {
-                ProgressView("Loading local metadata…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingPane(title: "Loading local metadata…")
+                    .transition(.opacity)
+            } else if store.isFixture || store.selectedPath != nil {
+                UnavailablePane(title: "Local metadata unavailable", symbol: "terminal",
+                                message: "Refresh to try loading it again.", retry: store.startRefresh)
+                    .transition(.opacity)
             } else {
                 UnavailablePane(title: "Local metadata unavailable", symbol: "terminal",
                                 message: "Choose a trusted larp executable or use sample data in General.")
+                    .transition(.opacity)
             }
         }
+        .settingsAnimation(value: store.busy)
     }
 
     @ToolbarContentBuilder
@@ -300,18 +333,19 @@ struct SettingsView: View {
         if let message = store.message {
             VStack(spacing: 0) {
                 Divider()
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(spacing: SettingsSpacing.inline) {
                     Image(systemName: "info.circle").foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     Text(message)
-                        .font(.callout)
+                        .font(SettingsTypography.supporting)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button { store.message = nil } label: { Image(systemName: "xmark") }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Dismiss message")
+                    SettingsIconButton(title: "Dismiss message", symbol: "xmark", help: "Dismiss message") {
+                        store.message = nil
+                    }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
+                .padding(.horizontal, SettingsSpacing.page)
+                .padding(.vertical, SettingsSpacing.inline)
             }
             .background(.bar)
         }
@@ -319,8 +353,7 @@ struct SettingsView: View {
 
     // MARK: Helpers
 
-    private func matches(_ text: String) -> Bool {
-        let query = search.trimmingCharacters(in: .whitespaces)
+    private func matches(_ text: String, query: String) -> Bool {
         return query.isEmpty || text.localizedCaseInsensitiveContains(query)
     }
 
@@ -346,21 +379,108 @@ struct SettingsView: View {
 private struct ProfileSidebarRow: View {
     let profile: Profile
     let usage: UsageReport?
+    @Environment(\.theme) private var theme
+
     var body: some View {
-        let labelOpacity = profile.readiness == .off ? 0.55 : 1.0
         HStack(spacing: 10) {
-            // Not a Label: the sidebar restyles Label icons, which washes out the marks.
-            ProviderGlyph(provider: profile.provider)
-                .opacity(labelOpacity)
-            Text(profile.name).lineLimit(1).opacity(labelOpacity)
-            Spacer(minLength: 4)
+            ProviderGlyph(provider: profile.provider, size: theme.tokens.sidebarIconSize - 4)
+                .accessibilityHidden(true)
+            Text(profile.name)
+                .lineLimit(1)
+                .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
+            Spacer(minLength: SettingsSpacing.tight)
             UsageHint(report: usage)
-            if profile.readiness != .off {
-                StatusDot(color: profile.readiness.color)
-            }
+            SidebarReadiness(readiness: profile.readiness)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
+    }
+}
+
+private struct SidebarReadiness: View {
+    let readiness: Readiness
+    @Environment(\.backgroundProminence) private var prominence
+
+    private var symbol: String {
+        switch readiness {
+        case .ready: return "checkmark.circle"
+        case .attention: return "exclamationmark.triangle"
+        case .off: return "minus.circle"
+        }
+    }
+
+    private var ink: Color {
+        if prominence == .increased { return .white }
+        switch readiness {
+        case .ready: return SettingsTypography.successInk
+        case .attention: return SettingsTypography.warningInk
+        case .off: return SettingsTypography.supportingInk
+        }
+    }
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(SettingsTypography.caption.weight(.semibold))
+            .foregroundStyle(ink)
+            .frame(width: 14)
+            .help(readiness.title)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Sidebar hint for the lowest percentage left when a usage window is getting low.
+private struct UsageHint: View {
+    let report: UsageReport?
+    @Environment(\.backgroundProminence) private var prominence
+
+    var body: some View {
+        if let left = report?.lowestLeftPercent, left < 25 {
+            let critical = left < 10
+            let severity = critical ? "Critical usage" : "Low usage"
+            // Keep the displayed percentage on the same side of the cutoff.
+            let percent = Int(left.rounded(.down))
+            HStack(spacing: SettingsSpacing.tight) {
+                Image(systemName: critical ? "exclamationmark.circle.fill" : "exclamationmark.circle")
+                Text("\(percent)%").monospacedDigit()
+            }
+            .font(SettingsTypography.caption.weight(.medium))
+            .foregroundStyle(ink(critical: critical))
+            .fixedSize()
+            .help("\(severity): \(percent)% of a usage window left")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(severity), \(percent) percent left")
+        }
+    }
+
+    private func ink(critical: Bool) -> Color {
+        if prominence == .increased { return .white }
+        return critical ? SettingsTypography.criticalInk : SettingsTypography.warningInk
+    }
+}
+
+private struct SettingsIconButton: View {
+    let title: String
+    let symbol: String
+    let help: String
+    let action: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(SettingsTypography.caption.weight(.semibold))
+                .frame(width: 22, height: 22)
+                .background {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(.primary.opacity(hovering && isEnabled ? 0.1 : 0))
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .onHover { hovering = $0 }
+        .settingsAnimation(value: hovering)
+        .help(help)
+        .accessibilityLabel(title)
     }
 }
 
@@ -403,6 +523,7 @@ private struct SearchField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSSearchField {
         let field = NSSearchField()
         field.placeholderString = "Search"
+        field.setAccessibilityLabel("Search Settings")
         field.delegate = context.coordinator
         return field
     }

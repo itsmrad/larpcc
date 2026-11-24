@@ -3,19 +3,6 @@ import AppKit
 import Combine
 import LarpModel
 
-enum MenuBarInk {
-    static let criticalInk = adaptiveInk(light: (0.65, 0.10, 0.12), dark: (1, 0.62, 0.61))
-    static let warningInk = adaptiveInk(light: (0.54, 0.30, 0.06), dark: (1, 0.73, 0.45))
-    static let supportingInk = adaptiveInk(light: (0.35, 0.35, 0.35), dark: (0.76, 0.76, 0.76))
-
-    private static func adaptiveInk(light: (CGFloat, CGFloat, CGFloat), dark: (CGFloat, CGFloat, CGFloat)) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let (red, green, blue) = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-            return NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
-        })
-    }
-}
-
 // MARK: - Preferences (UserDefaults; never sent anywhere)
 
 enum MenuBarPreferences {

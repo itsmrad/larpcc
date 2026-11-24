@@ -260,7 +260,7 @@ struct MenuBarPanel: View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("LarpCC").font(.system(size: 13, weight: .bold))
-                Text(statusLine).foregroundStyle(MenuBarInk.supportingInk)
+                Text(statusLine).foregroundStyle(SettingsTypography.supportingInk)
             }
             Spacer(minLength: 8)
             if store.usageLoading || store.busy {
@@ -701,7 +701,7 @@ private struct MenuBarProfileSummary: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.name).font(.system(size: 13)).lineLimit(1)
                         Text(subtitle).font(.system(size: theme.tokens.descriptionSize))
-                            .foregroundStyle(MenuBarInk.supportingInk)
+                            .foregroundStyle(SettingsTypography.supportingInk)
                             .monospacedDigit()
                     }
                     Spacer(minLength: 8)
@@ -730,7 +730,7 @@ private struct MenuBarProfileSummary: View {
             CardRow {
                 Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
                     .font(.system(size: 11))
-                    .foregroundStyle(MenuBarInk.supportingInk)
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -756,7 +756,7 @@ private struct MenuBarProfileSummary: View {
     private func meterRow(_ kind: UsageWindowKind, _ window: UsageWindow) -> some View {
         let level = UsageLevel(leftPercent: window.leftPercent)
         return GridRow {
-            Text(kind.title).foregroundStyle(MenuBarInk.supportingInk)
+            Text(kind.title).foregroundStyle(SettingsTypography.supportingInk)
             UsageMeter(leftPercent: window.leftPercent, level: level)
             Text("\(Int(window.leftPercent.rounded()))%")
                 .fontWeight(.semibold)
@@ -765,7 +765,7 @@ private struct MenuBarProfileSummary: View {
             // Fixed widths keep every card's meter the same length.
             Label(resetText(window), systemImage: "clock")
                 .labelStyle(ResetLabelStyle())
-                .foregroundStyle(MenuBarInk.supportingInk)
+                .foregroundStyle(SettingsTypography.supportingInk)
                 .frame(width: 58, alignment: .trailing)
         }
         .monospacedDigit()
@@ -907,8 +907,8 @@ private extension UsageLevel {
     var textTint: Color? {
         switch self {
         case .normal: return nil
-        case .low: return MenuBarInk.warningInk
-        case .critical: return MenuBarInk.criticalInk
+        case .low: return SettingsTypography.warningInk
+        case .critical: return SettingsTypography.criticalInk
         }
     }
 }

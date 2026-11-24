@@ -68,13 +68,13 @@ struct UsageSettingsSection: View {
                 } label: {
                     Text("Live usage")
                     if !store.usageLoading, let error = store.usageError {
-                        Text(error).foregroundStyle(MenuBarInk.supportingInk)
+                        Text(error).foregroundStyle(SettingsTypography.supportingInk)
                     } else {
                         UsageUpdatedText(report: store.usage.values.first, loading: store.usageLoading)
                     }
                 }
             } else if !store.usageLoading, let error = store.usageError {
-                Text(error).foregroundStyle(MenuBarInk.supportingInk)
+                Text(error).foregroundStyle(SettingsTypography.supportingInk)
             }
         } header: {
             Text("Usage")
@@ -196,7 +196,7 @@ private struct UsageWindowRow: View {
                 Spacer()
                 Text("\(Int(window.leftPercent.rounded()))% left")
                     .monospacedDigit()
-                    .foregroundStyle(window.leftPercent <= 10 ? MenuBarInk.criticalInk : MenuBarInk.supportingInk)
+                    .foregroundStyle(window.leftPercent <= 10 ? SettingsTypography.criticalInk : SettingsTypography.supportingInk)
             }
             ProgressView(value: window.leftPercent, total: 100)
                 .tint(window.levelColor)
@@ -254,21 +254,5 @@ enum UsageTime {
     }()
     static func span(_ seconds: TimeInterval) -> String {
         seconds < 60 ? "less than a minute" : formatter.string(from: seconds) ?? ""
-    }
-}
-
-/// Sidebar hint: the tighter window's percent left, shown only when it is getting low.
-struct UsageHint: View {
-    let report: UsageReport?
-    @Environment(\.backgroundProminence) private var prominence
-    var body: some View {
-        if let left = report?.lowestLeftPercent, left < 25 {
-            Text("\(Int(left.rounded()))%")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(prominence == .increased ? Color.white
-                                 : left < 10 ? MenuBarInk.criticalInk : MenuBarInk.warningInk)
-                .help("\(Int(left.rounded()))% of a usage window left")
-                .accessibilityLabel("\(Int(left.rounded())) percent usage left")
-        }
     }
 }
