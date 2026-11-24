@@ -83,6 +83,15 @@ fn poll_cleanup(child: &mut std::process::Child) -> io::Result<Option<std::proce
     }
     result
 }
+pub(crate) fn auth_cancel_reap(child: &mut std::process::Child) {
+    loop {
+        let _ = kill_child(child);
+        if matches!(poll_cleanup(child), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
 pub fn spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<u32, Error> {
     spawn_wait_inner(plan, false)
 }
@@ -136,12 +145,9 @@ fn spawn_wait_inner(plan: &crate::launch::LaunchPlan, auth: bool) -> Result<u32,
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 // Auth exclusion cannot end on unknown cleanup: retain Child and handler until reap.
-                while auth && !reaped {
-                    let _ = kill_child(&mut child);
-                    reaped = matches!(poll_cleanup(&mut child), Ok(Some(_)));
-                    if !reaped {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
+                if auth && !reaped {
+                    auth_cancel_reap(&mut child);
+                    reaped = true;
                 }
                 Err(Error::Wait {
                     source,

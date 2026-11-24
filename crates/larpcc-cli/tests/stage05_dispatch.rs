@@ -279,36 +279,62 @@ fn stage05_dispatch_copies_and_moves_refuse() {
 #[cfg(unix)]
 #[test]
 fn stage05_dispatch_desktop_alias_forwards_to_app_open() {
-    let f = setup();
+    let f = Fixture::new();
+    for (profile, provider) in [("claude-work", "claude"), ("codex-45", "codex")] {
+        f.larp_json(
+            &[
+                "cc",
+                "profile",
+                "add",
+                profile,
+                "--provider",
+                provider,
+                "--json",
+            ],
+            0,
+        );
+        f.larp_json(
+            &[
+                "cc", "profile", "surface", profile, "desktop", "on", "--json",
+            ],
+            0,
+        );
+    }
     f.larp_json(
         &[
             "cc",
             "alias",
             "add",
-            "codex-app",
-            "codex-45",
-            "--desktop",
-            "--json",
-        ],
-        0,
-    );
-    let output = launch(&f, "codex-app", &[OsString::from("--json")], 1);
-    assert!(stderr(&output).starts_with("error: unsupported launch argument: argument syntax\n"));
-    // Claude desktop (and every non-macOS desktop) stays closed: alias is no unlock.
-    assert_eq!(stderr(&launch(&f, "codex-app", &[], 1)), PENDING);
-    f.larp_json(
-        &[
-            "cc",
-            "alias",
-            "add",
-            "chatgpt-app",
+            "claude-app",
             "claude-work",
             "--desktop",
             "--json",
         ],
         0,
     );
-    assert_eq!(stderr(&launch(&f, "chatgpt-app", &[], 1)), PENDING);
+    let output = launch(&f, "claude-app", &[OsString::from("--json")], 1);
+    assert!(stderr(&output).starts_with("error: unsupported launch argument: argument syntax\n"));
+    // Claude desktop (and every non-macOS desktop) stays closed: alias is no unlock.
+    assert_eq!(stderr(&launch(&f, "claude-app", &[], 1)), PENDING);
+    f.larp_json(
+        &[
+            "cc",
+            "alias",
+            "add",
+            "chatgpt-app",
+            "codex-45",
+            "--desktop",
+            "--json",
+        ],
+        0,
+    );
+    let output = launch(&f, "chatgpt-app", &[], 1);
+    // The unbound fixture reaches registry admission on macOS before any app access.
+    if cfg!(target_os = "macos") {
+        assert!(stderr(&output).starts_with("error: no executable bound for codex\n"));
+    } else {
+        assert_eq!(stderr(&output), PENDING);
+    }
 }
 
 #[cfg(feature = "synthetic-launch")]

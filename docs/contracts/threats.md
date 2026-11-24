@@ -31,6 +31,68 @@ Stale GUI intent: require `--expected-revision` on GUI mutation/open requests,
 checked under the resolution lock before effects. Name reuse after rename must
 fail with conflict; internal post-resolution revalidation alone is insufficient.
 
+MCP command admission checks each path component on add, catalog load and
+journal replay. Case-insensitive markers are `sk-` (including `sk-ant-`), `sk_`,
+`ghp_`, `gho_`, `ghs_`, `ghu_`, `ghr_`, `github_pat_`, `glpat-`,
+`xoxa-`, `xoxb-`, `xoxp-`, `xoxr-`, `xoxs-`, `-----begin`, and the
+standalone word `Bearer`. These markers and JWTs are checked at the start
+of a component and after any character outside Unicode alphanumerics, including a
+backslash in a Unix filename. JWTs start with `eyJ` and have three
+dot-separated base64url segments of at least eight characters each.
+Fixed-width key shapes are also refused within any path component, including when
+embedded in a word. These are uppercase `AKIA` or `ASIA` followed by 16
+uppercase letters or digits, and `AIza` followed by 35 base64url characters.
+The mixed-case check considers runs of ASCII letters, digits and `+`, split
+at all other characters, including hyphens, underscores and dots. It refuses a run of at
+least 20 characters that contains both letter cases and a digit. A mixed-case
+run of the same length followed by base64 padding (`=`) is also refused.
+Standard 8-4-4-4-12 hex GUIDs and lowercase hex and Nix base32 hashes can be used
+in command paths. The finite shape list leaves other secret formats possible,
+so callers must provide only known non-secret paths.
+
+## Usage (stage 11, D14)
+
+Scope: [stage 11](../stages/11-usage.md). The user accepted LIVE's ban risk
+explicitly and informed (2026-11-17); LOCAL stays the default. Controls below
+are requirements with synthetic acceptance, not implementation certification.
+
+| Threat | Required control and discriminating acceptance |
+|---|---|
+| Token in memory, swap, core dumps | zeroizing buffers and token type without Debug/Display, dropped right after the one request; core dumps disabled for the process before a LIVE read on Unix (`RLIMIT_CORE` 0, Linux `PR_SET_DUMPABLE` 0). No `mlock` promise: swap and hibernation images remain a residual risk |
+| Token in logs, panics, error strings | no logging in LIVE paths; fixed codes only; parser/TLS/IO errors never formatted into output; JSON-mode panic hook emits only a fixed envelope. `stage11_secrets` injects failures at every step and finds zero fake-token bytes in stdout/stderr/files/panic output |
+| Token in child argv/env | LIVE starts no child or PTY and never refreshes; tokens never enter argv/env. Asserted by the fake transport and process-spawn seam |
+| Endpoint confusion, MITM, exfiltration | two fixed host/path pairs, TLS verification, proxy env ignored, redirects never followed, no cookies, 64 KiB response cap, 5/10 s timeouts, one attempt. Test-only base-URL/trust-root override is compiled out of release |
+| Hostile or changed response | allowlisted deserializer; unknown shape, out-of-range values or 401/403 fail closed to `live_unavailable`/`sign_in_again`; nothing echoed; account IDs, user IDs, credits and dollar fields discarded unread into output. Codex `plan_type` is the one plan field kept (D32): verified enum value only, in memory for the invocation, never stored, cached or logged |
+| Codex account ID in LIVE | inside D14 (D29): read from auth.json only when LIVE is enabled, zeroized, sent only as `chatgpt-account-id` to the pinned host, never stored or output; covered by `stage11_secrets` with fake account IDs |
+| Session-log privacy (LOCAL Codex) | confined no-follow reader in the profile's own CODEX_HOME, grammar-checked paths, caps on dirs/files/bytes/lines/time; streaming skip of all non-allowlisted values; `session_meta` yields only `cli_version`. Conversation sentinels in fixtures never appear in output or files |
+| Provider names in output | bucket names/IDs (`limit_name`, `limit_id`, `metered_feature`) can name an organization or private model: labels come only from a fixed Larp vocabulary (`Other limit N` for unreviewed buckets), enforced by the schema pattern; grammar-valid private sentinels never appear in local or forwarded output |
+| Wrong-bucket or stale data | filter by `limit_id`, map by `window_minutes` not position, per-window observation time for pace (no row-level mixing), per-file version gate, `reset_since_capture` after reset; resumed sessions written by another Codex version than `session_meta` names are a known limitation (shape check still applies) |
+| Hook injection: hostile statusLine input | fixed argv and `CLAUDE_CONFIG_DIR` match, 256 KiB/2 s stdin cap, allowlist parse, range checks, no stderr, no echo, exit 0; deep nesting, huge strings, NaN and wrong types tested |
+| Overwriting the user's statusLine | capture is opt-in per profile (D29); a key-presence-only check refuses `statusline_exists` on enable and skips injection at launch when the profile or the launch directory's project/local settings (any parent) define a statusLine; an indeterminate check (malformed/unsupported syntax, oversize, unsafe file, IO error, walk cap) refuses `statusline_unverifiable` at enable and launches without injection; never wraps another command; the hook prints nothing. Settings values are never read or output |
+| Torn settings commit | `usage.json` changes use a journaled two-phase commit under the registry lock and the pending-journal gate; recovery runs before any revision comparison or read, so LIVE consent/mode is never visible at the wrong revision; kill-between-writes tests |
+| Hook tamper: file/settings drift | hook is a root-pinned Larp copy validated by receipt and hash; the `--settings` render is an owned, hash-checked file outside native homes and refuses on drift; no native `settings.json` writes. Managed policy, `disableAllHooks` or untrusted workspaces silently stop capture (shows stale/`not_captured`, never guessed) |
+| Capture file forgery by same-user programs | capture is untrusted input to `usage`: no-follow, owner-only, size/field/range checks; a same-user process can still forge plausible numbers. Display is "as reported", never used for automation |
+| macOS Keychain access | a plain read query; macOS prompts the user, and the prompt is explained at enable time (D29). Larp never requests, sets or edits "Always Allow" or the item's ACL. If the user chooses Always Allow themselves, a later compromised Larp binary could read that item without asking |
+| ToS / ban risk | LIVE is off by default, needs `--acknowledge-risk` on every enable, labelled unverified; still a request from a non-official client with the user's token, which the provider may detect and restrict. No imitation of official clients' User-Agent |
+
+What LarpCC still never does: refresh, store or copy tokens; drive a client in a
+PTY; scrape or capture native client output for usage; read native config
+values (only `statusLine` key presence); read plan or account identity from
+tokens or credential files; poll in the background or at login; switch, rotate or
+pool profiles based on usage; send usage data anywhere; read real credentials
+or call real endpoints in tests (fakes only). Residual risks stay: same-user
+processes can read the same credentials and forge captures, memory can be
+swapped, and a provider can restrict an account for LIVE use regardless of
+these controls.
+
+## Desktop dispatch
+
+| Threat | Control and remaining exposure |
+|---|---|
+| Writes to the default Codex home | D34 repeated the exact ChatGPT.app launch after stopping all processes using `~/.codex` and establishing a quiet baseline. The metadata diff for `~/.codex` was empty and `lsof` found no open files there. ChatGPT.app started its own CodexCLI app-server with `CODEX_HOME=<T>/cli`. Profile state went to `<T>/cli` (343 entries) and the Chromium profile at `<T>/desktop`. |
+| Shared runtime files | ChatGPT.app extracts Node runtime binaries into `~/.cache/codex-runtimes`, a shared directory outside `CODEX_HOME` isolation. The cache holds only runtime binaries. `profile delete` leaves the shared cache in place. |
+| Stale nested signature verdict | Bind validates nested code and resources. On open, the cached verdict is keyed by executable and Info.plist metadata and the code directory hash. Changes limited to nested code or resources can leave the key unchanged and go undetected on a cache hit. |
+
 ## Remote
 
 These controls apply to [Stage 13 SSH requests](../stages/13-remote-hosts.md).
