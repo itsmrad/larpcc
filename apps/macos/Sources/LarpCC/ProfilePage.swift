@@ -27,7 +27,7 @@ struct ProfilePage: View {
                             Image(systemName: "exclamationmark.triangle.fill").symbolRenderingMode(.multicolor)
                         }
                     }
-                } else if profile.needsAttention, let attentionDetail {
+                } else if profile.needsAttention {
                     Label {
                         Text(attentionDetail)
                             .font(SettingsTypography.supporting)
@@ -52,6 +52,7 @@ struct ProfilePage: View {
                 }
                 LabeledContent {
                     Button("Bind…") { binding = BindTarget(provider: profile.provider, kind: .app) }
+                        .disabledReason(bindingUnavailableReason)
                 } label: {
                     Text("\(profile.provider.desktopApp)")
                     Text(bindingDetail)
@@ -163,12 +164,19 @@ struct ProfilePage: View {
     private var desktopLaunchReason: String? {
         if store.isFixture { return "Launching is unavailable in sample mode." }
         if profile.recoverable { return "Finish the interrupted delete first." }
+        if bindingUnavailableReason != nil { return "Opening Claude.app requires desktop qualification." }
         if !profile.desktopEnabled { return "Turn on Desktop app to open it." }
         if profile.desktopBinding?.state != .ok { return "Bind \(profile.provider.desktopApp) in Configuration first." }
         return nil
     }
 
+    private var bindingUnavailableReason: String? {
+        // The CLI rejects Claude desktop bindings while qualification is pending.
+        !store.isFixture && profile.provider == .claude ? "Binding Claude.app requires desktop qualification." : nil
+    }
+
     private var bindingDetail: String {
+        if let bindingUnavailableReason { return bindingUnavailableReason }
         switch profile.desktopBinding?.state {
         case .ok:
             return [profile.desktopBinding?.displayPath, profile.desktopBinding.map(\.versionTitle)]
@@ -180,14 +188,17 @@ struct ProfilePage: View {
         }
     }
 
-    private var attentionDetail: String? {
+    private var attentionDetail: String {
+        if profile.desktopBinding?.state != .ok, let bindingUnavailableReason {
+            return bindingUnavailableReason
+        }
         if profile.desktopBinding?.state == .invalid {
             return "Choose Bind in Configuration to replace the \(profile.provider.desktopApp) binding."
         }
         if profile.desktopBinding?.state == .unbound {
             return "Choose Bind in Configuration to link \(profile.provider.desktopApp)."
         }
-        if store.isFixture { return nil }
+        if store.isFixture { return "This sample profile has a configuration warning." }
         return "In Terminal, run larp cc profile show \(profile.name) --json to check the folder, aliases and app binding."
     }
 
