@@ -173,8 +173,14 @@ struct SettingsView: View {
                 }
                 .tag(Selection.page(page))
             }
-            if store.snapshot != nil, !profiles.isEmpty || query.isEmpty {
+            if store.snapshot != nil {
                 Section {
+                    if profiles.isEmpty, !query.isEmpty {
+                        Text(pages.isEmpty ? "No results" : "No matching profiles")
+                            .font(SettingsTypography.supporting)
+                            .foregroundStyle(SettingsTypography.supportingInk)
+                            .selectionDisabled()
+                    }
                     ForEach(profiles) { profile in
                         ProfileSidebarRow(profile: profile, usage: store.usage[profile.id])
                             .tag(Selection.profile(profile.id))
@@ -198,7 +204,7 @@ struct SettingsView: View {
         .listStyle(.sidebar)
         .modifier(SidebarDensity(size: theme.tokens.sidebarRowSize))
         .overlay(alignment: .topLeading) {
-            if pages.isEmpty, profiles.isEmpty, !query.isEmpty {
+            if store.snapshot == nil, pages.isEmpty, !query.isEmpty {
                 Text("No results")
                     .font(SettingsTypography.supporting)
                     .foregroundStyle(Color(nsColor: .labelColor))
@@ -428,12 +434,20 @@ private struct UsageHint: View {
 
     var body: some View {
         if let left = report?.lowestLeftPercent, left < 25 {
-            let percent = Int(left.rounded())
-            Text("\(percent)%")
-                .font(SettingsTypography.caption.weight(.medium).monospacedDigit())
-                .foregroundStyle(ink(critical: left < 10))
-                .help("\(percent)% of a usage window left")
-                .accessibilityLabel("\(percent) percent usage left")
+            let critical = left < 10
+            let severity = critical ? "Critical usage" : "Low usage"
+            // Keep the displayed percentage on the same side of the cutoff.
+            let percent = Int(left.rounded(.down))
+            HStack(spacing: SettingsSpacing.tight) {
+                Image(systemName: critical ? "exclamationmark.circle.fill" : "exclamationmark.circle")
+                Text("\(percent)%").monospacedDigit()
+            }
+            .font(SettingsTypography.caption.weight(.medium))
+            .foregroundStyle(ink(critical: critical))
+            .fixedSize()
+            .help("\(severity): \(percent)% of a usage window left")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(severity), \(percent) percent left")
         }
     }
 
