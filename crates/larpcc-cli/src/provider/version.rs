@@ -414,6 +414,10 @@ impl Exec {
 
 /// Direct child only: stdin closed, explicit env, bounded capture, kill and reap.
 /// `Ok(None)` is a rejected probe; `Err` means the child's reap could not be proved.
+///
+/// The `pre_exec` hook makes std fork rather than posix_spawn. Never call this while
+/// other threads use Security.framework: on macOS such a fork intermittently gets the
+/// child SIGKILLed (seen in CI with the cdhash evidence tests running beside it).
 #[cfg(unix)]
 fn spawn(
     path: &Path,
@@ -654,6 +658,28 @@ mod tests {
     #[test]
     fn stage08_spawn_enters_held_home_without_pathname_chdir() {
         use std::os::unix::{fs::PermissionsExt, process::ExitStatusExt};
+        // spawn() forks (std's pre_exec path). On macOS CI, a fork taken while sibling tests
+        // run on other threads of this process intermittently gets the child SIGKILLed before
+        // it reports (4/300 with the stage08 siblings, 0/300 on one thread). The CLI forks
+        // single-threaded, so check spawn() that way: in a copy of this binary running only
+        // this test on one thread.
+        const SOLO: &str = "LARPCC_STAGE08_SPAWN_SOLO";
+        if std::env::var_os(SOLO).is_none() {
+            let module = module_path!().split_once("::").map_or("", |(_, path)| path);
+            let name = format!("{module}::stage08_spawn_enters_held_home_without_pathname_chdir");
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([name.as_str(), "--exact", "--test-threads=1"])
+                .env(SOLO, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("test result: ok. 1 passed;"),
+                "{stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
         let parent = std::env::var_os("LARPCC_TEST_PARENT")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
