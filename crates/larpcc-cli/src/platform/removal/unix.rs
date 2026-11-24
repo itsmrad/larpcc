@@ -75,7 +75,7 @@ fn file_identity(file: &File) -> io::Result<FileIdentity> {
     })
 }
 
-fn same_mount(parent: &File, child: &File) -> io::Result<bool> {
+pub(crate) fn same_mount(parent: &File, child: &File) -> io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
     if parent.metadata()?.dev() != child.metadata()?.dev() {
         return Ok(false);
@@ -110,9 +110,9 @@ fn same_mount(parent: &File, child: &File) -> io::Result<bool> {
     Ok(true)
 }
 
-struct Entries(*mut libc::DIR);
+pub(crate) struct Entries(*mut libc::DIR);
 impl Entries {
-    fn open(dir: &File) -> io::Result<Self> {
+    pub(crate) fn open(dir: &File) -> io::Result<Self> {
         // Reopen to give the directory stream its own offset.
         let fd = open_dir(dir, c".")?.into_raw_fd();
         let stream = unsafe { libc::fdopendir(fd) };
@@ -124,7 +124,7 @@ impl Entries {
         Ok(Self(stream))
     }
 
-    fn next(&mut self) -> io::Result<Option<CString>> {
+    pub(crate) fn next(&mut self) -> io::Result<Option<CString>> {
         loop {
             // readdir returns null at EOF or on error. Reset errno to tell them apart.
             #[cfg(target_os = "linux")]

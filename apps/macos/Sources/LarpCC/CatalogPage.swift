@@ -8,6 +8,7 @@ struct CatalogPage: View {
     let snapshot: Snapshot
     let kind: CatalogKind
     @State private var confirmation: Confirmation?
+    @State private var expandedServers: Set<String> = []
 
     private var items: [CatalogItem] { kind == .mcp ? snapshot.servers : snapshot.skills }
     private var noun: String { kind == .mcp ? "server" : "skill" }
@@ -21,15 +22,16 @@ struct CatalogPage: View {
                         set: { on in
                             if on {
                                 confirmation = Confirmation(title: "Turn on every server for every profile?",
-                                    message: "Larp switches every current MCP server on for every active profile, and new servers and profiles start with them on. Turning this off later keeps the switches as they are.",
+                                    message: "Larp turns on every compatible server for each profile, including profiles with the command line turned off. Those profiles receive their servers when the command line is enabled. New servers and profiles inherit this setting. Turning it off later preserves saved switches.",
                                     button: "Turn On", action: .setSyncNewServers(true))
                             } else {
                                 store.perform(.setSyncNewServers(false))
                             }
                         }
                     )) {
-                        Text("New MCP servers start on for every profile")
-                        Text("Turning this on also switches every current server on for every active profile.")
+                        Text("Turn on new MCP servers automatically")
+                        Text("Turning this on also saves compatible server assignments for every profile.")
+                            .foregroundStyle(SettingsTypography.supportingInk)
                     }
                 }
                 LabeledContent {
@@ -37,6 +39,7 @@ struct CatalogPage: View {
                 } label: {
                     Text(kind == .mcp ? "Server files" : "Skill links")
                     Text(kind == .mcp ? "Rewrites each profile's server files from these switches." : "Relinks each profile's skills from these switches.")
+                        .foregroundStyle(SettingsTypography.supportingInk)
                 }
             }
 
@@ -47,50 +50,151 @@ struct CatalogPage: View {
                     } label: {
                         Text(kind == .mcp ? "No MCP servers yet" : "No skills yet")
                         Text(kind == .mcp ? "Add a server by its program or URL." : "Add a folder that contains SKILL.md.")
+                            .foregroundStyle(SettingsTypography.supportingInk)
                     }
                 }
-            }
-            // One section per item: a header row, then a switch per profile.
-            ForEach(items) { item in
+            } else if kind == .mcp {
                 Section {
-                    LabeledContent {
-                        HStack(spacing: 10) {
-                            Text("\(item.profileIDs.count) of \(snapshot.profiles.count) on")
-                                .monospacedDigit()
+                    ForEach(items) { item in
+                        let expanded = expandedServers.contains(item.id)
+                        HStack(spacing: SettingsSpacing.control) {
+                            Button {
+                                if expanded {
+                                    expandedServers.remove(item.id)
+                                } else {
+                                    expandedServers.insert(item.id)
+                                }
+                            } label: {
+                                HStack(spacing: SettingsSpacing.inline) {
+                                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                        .font(SettingsTypography.caption.weight(.semibold))
+                                        .foregroundStyle(SettingsTypography.supportingInk)
+                                        .frame(width: SettingsSpacing.control)
+                                        .accessibilityHidden(true)
+                                    itemLabel(item, symbol: "server.rack", color: .indigo)
+                                    Spacer(minLength: SettingsSpacing.inline)
+                                    enabledCount(item)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(item.id), \(enabledDescription(item))")
+                            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                            .accessibilityHint(expanded ? "Hide profile switches" : "Show profile switches")
                             menu(for: item)
                         }
-                    } label: {
-                        RowLabel(item.id, subtitle: item.subtitle) {
-                            IconTile(symbol: kind == .mcp ? "server.rack" : "sparkles",
-                                     color: kind == .mcp ? .indigo : .pink)
-                        }
-                    }
-                    ForEach(snapshot.profiles) { profile in
-                        Toggle(isOn: Binding(
-                            get: { item.profileIDs.contains(profile.id) },
-                            set: { store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: $0)) }
-                        )) {
-                            Label {
-                                Text(profile.name).accessibilityLabel("\(profile.name), \(item.id)")
-                            } icon: {
-                                ProviderGlyph(provider: profile.provider, size: 14)
+                        if expanded {
+                            ForEach(snapshot.profiles) { profile in
+                                profileSwitch(item, profile: profile)
+                                    .padding(.leading, SettingsSpacing.page)
+                            }
+                            if snapshot.profiles.isEmpty {
+                                Text("No profiles yet")
+                                    .foregroundStyle(SettingsTypography.supportingInk)
+                                    .padding(.leading, SettingsSpacing.page)
                             }
                         }
-                        .foregroundStyle(profile.readiness == .off ? .secondary : .primary)
                     }
                 } footer: {
-                    if item.id == items.last?.id {
-                        Text(kind == .mcp
-                             ? "Switches choose which profiles receive each server definition. LarpCC never starts a server."
-                             : "Switches choose which profiles can use each skill.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    Text("Switches choose which profiles receive each server definition. LarpCC never starts a server.")
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                }
+            } else {
+                ForEach(items) { item in
+                    Section {
+                        HStack(spacing: SettingsSpacing.control) {
+                            itemLabel(item, symbol: "sparkles", color: .pink)
+                            Spacer(minLength: SettingsSpacing.inline)
+                            enabledCount(item)
+                            menu(for: item)
+                        }
+                        ForEach(snapshot.profiles) { profile in
+                            profileSwitch(item, profile: profile)
+                        }
+                    } footer: {
+                        if item.id == items.last?.id {
+                            Text("Switches choose which profiles can use each skill.")
+                                .foregroundStyle(SettingsTypography.supportingInk)
+                        }
                     }
                 }
             }
         }
         .themedFormStyle()
+        .settingsAnimation(value: expandedServers)
         .confirming($confirmation, store: store)
+    }
+
+    private func itemLabel(_ item: CatalogItem, symbol: String, color: Color) -> some View {
+        HStack(spacing: SettingsSpacing.inline) {
+            IconTile(symbol: symbol, color: color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.id)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(item.id)
+                if !item.subtitle.isEmpty {
+                    Text(item.subtitle)
+                        .font(SettingsTypography.caption)
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(item.subtitle)
+                }
+            }
+        }
+    }
+
+    private func enabledDescription(_ item: CatalogItem) -> String {
+        "\(item.profileIDs.count) of \(snapshot.profiles.count) on"
+    }
+
+    private func enabledCount(_ item: CatalogItem) -> some View {
+        Text(enabledDescription(item))
+            .monospacedDigit()
+            .foregroundStyle(SettingsTypography.supportingInk)
+            .fixedSize()
+    }
+
+    private func profileSwitch(_ item: CatalogItem, profile: Profile) -> some View {
+        let enabled = item.profileIDs.contains(profile.id)
+        return LabeledContent {
+            if kind == .skill && !profile.cliEnabled {
+                // The CLI reports effective availability here, so the saved switch is unknown.
+                Menu("Set Skill") {
+                    Button("Turn On") {
+                        store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: true))
+                    }
+                    Button("Turn Off") {
+                        store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: false))
+                    }
+                }
+                .accessibilityLabel("Set \(item.id) for \(profile.name)")
+            } else {
+                Toggle(isOn: Binding(
+                    get: { enabled },
+                    set: { store.perform(.setCatalog(kind: kind, itemID: item.id, profileID: profile.id, enabled: $0)) }
+                )) {
+                    Text("\(profile.name), \(item.id)")
+                }
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
+        } label: {
+            Label {
+                Text(profile.name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(profile.name)
+            } icon: {
+                ProviderGlyph(provider: profile.provider, size: 14)
+            }
+            if kind == .skill && !profile.cliEnabled {
+                Text("Changes take effect when the command line is enabled.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
+            }
+        }
     }
 
     private func menu(for item: CatalogItem) -> some View {

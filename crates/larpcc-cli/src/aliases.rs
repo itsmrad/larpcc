@@ -282,7 +282,7 @@ impl Source {
     }
     // Another Larp image (an installed source seen from a launcher); never self.
     pub(crate) fn open(path: &Path, root: &Path) -> Result<Self, Error> {
-        let (file, identity) = platform::open_artifact(path, root)?;
+        let (file, identity) = platform::open_larp_artifact(path, root)?;
         Self::hashed(file, identity, path.into(), false)
     }
     fn hashed(

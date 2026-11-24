@@ -47,6 +47,39 @@ pub(super) fn json_or_usage(is_json: bool, command: &str, code: &str, message: &
 }
 fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
     match error {
+        Error::UsagePlanLabel => ("usage", "Provide a valid plan label or --clear.", 2),
+        Error::UsageMode => ("usage", "Inherit requires --profile.", 2),
+        Error::UsageInterval => (
+            "usage",
+            "Refresh interval must be off or 300–86400 seconds.",
+            2,
+        ),
+        Error::UsageUnsupported => ("unsupported", "Only Claude supports statusLine capture.", 1),
+        Error::UsageRemoteUnsupported => (
+            "unsupported",
+            "This usage operation is unavailable on remote requests.",
+            2,
+        ),
+        Error::UsageConfirmation => (
+            "confirmation_required",
+            "Enabling LIVE usage requires --acknowledge-risk.",
+            2,
+        ),
+        Error::StatuslineExists => (
+            "statusline_exists",
+            "This profile already has its own statusLine; LarpCC will not replace it.",
+            1,
+        ),
+        Error::StatuslineUnverifiable => (
+            "statusline_unverifiable",
+            "LarpCC could not confirm that this profile has no statusLine.",
+            1,
+        ),
+        Error::LiveDisabled => (
+            "live_disabled",
+            "LIVE usage is off; enable it in settings first.",
+            1,
+        ),
         Error::InvalidVersionLabel => {
             ("usage", "Recorded version label is invalid or too long.", 2)
         }
@@ -138,8 +171,15 @@ pub(super) fn failure(command: &str, error: Error) -> ExitCode {
 fn receipt(entry: &crate::registry::ProfileEntry) -> Value {
     json!({"changed":true,"profile_id":entry.profile.id.to_string(),"name":entry.profile.name,"warnings":[]})
 }
-pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode {
+pub(super) fn execute_json(
+    action: CcAction,
+    expected: Option<u64>,
+    read_clock: i64,
+    remote: bool,
+) -> ExitCode {
     let command = match &action {
+        CcAction::Usage(_) => "usage",
+        CcAction::Settings { command } => command.discriminator(),
         CcAction::App {
             command: AppCommand::Bind { .. },
         } => "app.bind",
@@ -160,6 +200,7 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         CcAction::Doctor { .. } => "doctor",
         CcAction::Provider { .. } => "provider.bind",
         CcAction::Profile { command } => match command {
+            ProfileAction::PlanLabel(_) => "profile.plan-label",
             ProfileAction::Add { .. } => "profile.add",
             ProfileAction::List => "profile.list",
             ProfileAction::Show { .. } => "profile.show",
@@ -221,6 +262,8 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         Err(e) => return failure(command, e),
     };
     let result = match action {
+        CcAction::Usage(args) => args.execute(&r, read_clock, remote),
+        CcAction::Settings { command } => command.execute(&r, remote),
         CcAction::App {command:AppCommand::Bind {provider,path,recorded_version,replace}} => r.bind_desktop(provider,path,recorded_version,replace).map(|changed| json!({"changed":changed,"profile_id":null,"name":null,"warnings":[]})),
         CcAction::App {command:AppCommand::Open {name}} => r.open_desktop(&name,true).map(|receipt| json!({"profile_id":receipt.profile_id.to_string(),"provider":receipt.provider,"surface":receipt.surface,"outcome":receipt.outcome,"native_auth":receipt.native_auth})),
         CcAction::Skills {command} => r.skills(command.into_action()),
@@ -232,6 +275,7 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         CcAction::Doctor {profile,detect_versions} => super::doctor::data(&r,profile.as_ref(),detect_versions),
         CcAction::Provider {command:ProviderAction::Bind {provider,executable,replace}} => r.bind(provider,executable,replace).map(|outcome| json!({"changed":outcome != crate::registry::BindOutcome::Unchanged,"profile_id":null,"name":null,"warnings":[]})),
         CcAction::Profile {command: action} => match action {
+            ProfileAction::PlanLabel(args) => args.execute(&r),
             ProfileAction::List => r.metadata_json(command,None),
             ProfileAction::Show {name} => r.metadata_json(command,Some(&name)),
             ProfileAction::Add {name,provider} => r.add(name,provider).map(|e| receipt(&e)),
