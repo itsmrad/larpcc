@@ -41,12 +41,28 @@ try:
             status = value
             break
     assert status is not None, 'confirmation completion timeout'
+    # Reaping the child says nothing about its last write still queued in the terminal
+    # (it can write and exit between two polls). Read until every slave end is closed.
+    while True:
+        remaining = end - time.monotonic()
+        assert remaining > 0, ('terminal output did not reach end of file', output)
+        if not select.select([master], [], [], remaining)[0]:
+            continue
+        try:
+            chunk = os.read(master, 4096)
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
+            break
+        if not chunk:
+            break
+        output.extend(chunk)
     expected = 0 if mode in ('yes', 'crlf') else 1
     assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == expected, (status, output)
     if mode == 'rename':
-        assert b'launch context changed during admission' in output
+        assert b'launch context changed during admission' in output, output
     elif expected:
-        assert b'authentication operation cancelled' in output
+        assert b'authentication operation cancelled' in output, output
     print('confirmation', operation, mode, 'passed')
 finally:
     if status is None:
