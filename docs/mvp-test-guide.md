@@ -36,7 +36,7 @@ verify the baseline.
 
 ## 3. Install the test build
 
-**[depends on PR #QUALIFICATION-ROWS]** **[depends on PR #37]**
+**[depends on PR: qualification rows]** **[depends on PR #37]**
 
 Use the checkout from the handoff. A checkout is a local copy of the project at
 a specific revision. It must be on the `stage/qualify-mac-rows` test branch,
@@ -72,7 +72,7 @@ xattr -dr com.apple.quarantine "$HOME/Applications/LarpCC.app"
 
 ## 4. Check versions
 
-**[depends on PR #35]** **[depends on PR #QUALIFICATION-ROWS]**
+**[depends on PR #35]** **[depends on PR: qualification rows]**
 
 Make a private test folder. `LARPCC_HOME` tells LarpCC where to keep its data.
 Set it only in this test Terminal. Stop if the first line fails or the printed
@@ -113,7 +113,7 @@ providers. They use the paths you set in step 4.
 
 ## 6. Test one profile at a time
 
-**[depends on PR #QUALIFICATION-ROWS]**
+**[depends on PR: qualification rows]**
 
 Before signing in, read the test build README's sign-out instructions for that
 profile. Keychain is where macOS can save sign-in details. If the README says
@@ -194,26 +194,30 @@ stop, report it and keep both the profile and the test folder.
 If the handoff includes local usage, check the numbers recorded on this Mac.
 If no usage was recorded, expect an unavailable or empty display. Opening and
 quitting a profile can leave no numbers to show.
-**[depends on PR #USAGE-CLI]**
+**[depends on PR: stage 11 usage CLI]**
 
 ```sh
 larp cc usage --local
 ```
 
-If the handoff includes the Mac app and gives a way to point it at the test
-folder, open `LarpCC.app`. In **General → larp executable → Choose…**, select
-the installed `larp`. Confirm the app shows the two test profiles and check its
-usage display against the command above. If the menu bar is included, open the
-LarpCC icon at the top of the screen and make the same checks. If either view
-can't use the test folder or shows other profiles, close it and mark that check
-SKIPPED. Quit LarpCC when done.
-**[depends on PR #37]** **[depends on PR #USAGE-APP]**
-**[depends on PR #19]** **[depends on PR #USAGE-MENU-BAR]**
+The app and the command line use the same default LarpCC data folder on Mac,
+`~/Library/Application Support/larpcc`. Setting `LARPCC_HOME` changes the folder
+for the command line. **[confirm: app data-folder selection]**
+
+If the handoff includes the app and confirms it can use the test folder, open
+`LarpCC.app`. In **General → larp executable → Choose…**, select the installed
+`larp`. Check that the two test profiles appear and that the usage display
+matches the command above. If the menu bar is included, open the LarpCC icon
+at the top of the screen and make the same checks. If either view can't use
+the test folder or shows other profiles, close it and mark that check SKIPPED.
+Quit LarpCC when done. **[depends on PR #37]**
+**[depends on PR: stage 11 usage app]** **[depends on PR #19]**
+**[depends on PR: stage 11 usage menu bar]**
 
 An alias is a shortcut command for a profile. Use the following to check that
 `mvp-codex-test` points to `codex-test` and opens Codex. Run this only after
 Codex passed the signed-out check, and quit right away without signing in. Then
-confirm it still shows `Signed out`. **[depends on PR #QUALIFICATION-ROWS]**
+confirm it still shows `Signed out`. **[depends on PR: qualification rows]**
 
 ```sh
 larp cc alias add mvp-codex-test codex-test
