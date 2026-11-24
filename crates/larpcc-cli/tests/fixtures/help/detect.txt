@@ -1,0 +1,9 @@
+Find provider installations for onboarding
+
+Usage: larp cc provider detect [OPTIONS]
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --provider <PROVIDER>                    [possible values: claude, codex]
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

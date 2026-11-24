@@ -9,7 +9,7 @@ from cargo_test_environment import require_private_test_environment
 require_private_test_environment('stage04_check.py')
 
 stage = os.environ.get('LARPCC_STAGE_FILTER', 'stage04_')
-assert stage in ('stage04_', 'stage06_', 'stage07_', 'stage08_', 'stage11_')
+assert stage in ('stage04_', 'stage06_', 'stage07_', 'stage08_', 'stage11_', 'stage19_')
 result = subprocess.run(['cargo', *sys.argv[1:], 'test', '--workspace', '--locked', stage],
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 print(result.stdout, end='')

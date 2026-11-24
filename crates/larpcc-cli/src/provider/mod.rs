@@ -1,5 +1,6 @@
 use crate::registry::{Error, Provider};
 use std::path::{Component, Path};
+pub(crate) mod detect;
 pub(crate) mod evidence;
 pub(crate) mod version;
 pub fn lexical(path: &Path) -> Result<(), &'static str> {

@@ -1472,6 +1472,232 @@
         "arch"
       ],
       "additionalProperties": false
+    },
+    "detected_executable": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "path": {
+          "type": "string"
+        },
+        "resolved_path": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unix"
+            },
+            "dev": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$"
+            },
+            "ino": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,19})$"
+            }
+          },
+          "required": [
+            "kind",
+            "dev",
+            "ino"
+          ],
+          "additionalProperties": false
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "install_kind": {
+          "enum": [
+            "native",
+            "homebrew",
+            "npm",
+            "bun",
+            "unknown"
+          ]
+        },
+        "bindable": {
+          "type": "boolean"
+        },
+        "bind_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "qualified": {
+          "type": "boolean"
+        },
+        "bound": {
+          "type": "boolean"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cdhash": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "anyOf": [
+            {
+              "const": "unapproved"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version_diagnostic": {
+          "enum": [
+            "version_unapproved",
+            "version_probe_unavailable"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "path",
+        "resolved_path",
+        "identity",
+        "size",
+        "install_kind",
+        "bindable",
+        "bind_reason",
+        "qualified",
+        "bound",
+        "sha256",
+        "cdhash",
+        "version",
+        "version_diagnostic"
+      ],
+      "additionalProperties": false
+    },
+    "detected_desktop_app": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "path": {
+          "type": "string"
+        },
+        "resolved_path": {
+          "type": "string"
+        },
+        "bundle_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code_requirement": {
+          "enum": [
+            "passed",
+            "failed",
+            "unavailable"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "path",
+        "resolved_path",
+        "bundle_id",
+        "version",
+        "code_requirement"
+      ],
+      "additionalProperties": false
+    },
+    "provider_detection": {
+      "type": "object",
+      "properties": {
+        "executables": {
+          "type": "array",
+          "maxItems": 48,
+          "items": {
+            "$ref": "#/$defs/detected_executable"
+          }
+        },
+        "desktop_apps": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/detected_desktop_app"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "maxItems": 48,
+          "items": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "$ref": "#/$defs/provider"
+              },
+              "path": {
+                "type": "string"
+              },
+              "reason": {
+                "const": "inside provider home"
+              }
+            },
+            "required": [
+              "provider",
+              "path",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "limited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "executables",
+        "desktop_apps",
+        "skipped",
+        "limited"
+      ],
+      "additionalProperties": false
     }
   },
   "oneOf": [
@@ -1673,6 +1899,35 @@
         },
         "data": {
           "$ref": "#/$defs/evidence"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "provider.detect"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "data": {
+          "$ref": "#/$defs/provider_detection"
         }
       },
       "required": [
@@ -3534,6 +3789,7 @@
             "alias.list",
             "provider.list",
             "provider.evidence",
+            "provider.detect",
             "mcp.list",
             "mcp.matrix",
             "skills.list",

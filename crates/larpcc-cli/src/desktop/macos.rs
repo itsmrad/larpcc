@@ -219,6 +219,7 @@ pub(super) fn validate(
     Ok((app, Some(key)))
 }
 
+pub(super) mod detect;
 pub(super) mod dispatch;
 
 #[link(name = "CoreFoundation", kind = "framework")]

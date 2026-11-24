@@ -313,17 +313,23 @@ pub(crate) fn checked_artifact_with(
     root: &Path,
     before_read: impl FnOnce(&File),
 ) -> Result<CheckedArtifact, Error> {
-    let (file, identity) = platform::open_artifact(path, root)?;
+    checked_artifact_from(|| platform::open_artifact(path, root), before_read, || true)
+}
+pub(crate) fn checked_artifact_from(
+    mut open: impl FnMut() -> Result<(File, crate::platform::FileIdentity), Error>,
+    before_read: impl FnOnce(&File),
+    within_budget: impl Fn() -> bool,
+) -> Result<CheckedArtifact, Error> {
+    let (file, identity) = open()?;
     let before = file.metadata().map_err(|_| Error::ArtifactInvalid)?;
     let size = before.len();
     if size > MAX_BYTES {
         return Err(Error::ArtifactInvalid);
     }
     before_read(&file);
-    let sha256 = digest(&file, size)?;
+    let sha256 = digest(&file, size, within_budget)?;
     let after = file.metadata().map_err(|_| Error::ArtifactInvalid)?;
-    let (verified, current) =
-        platform::open_artifact(path, root).map_err(|_| Error::ArtifactInvalid)?;
+    let (verified, current) = open().map_err(|_| Error::ArtifactInvalid)?;
     let current_size = verified
         .metadata()
         .map_err(|_| Error::ArtifactInvalid)?
@@ -343,7 +349,7 @@ pub(crate) fn checked_artifact_with(
         sha256,
     })
 }
-fn digest(mut file: &File, size: u64) -> Result<[u8; 32], Error> {
+fn digest(mut file: &File, size: u64, within_budget: impl Fn() -> bool) -> Result<[u8; 32], Error> {
     if size > MAX_BYTES {
         return Err(Error::ArtifactInvalid);
     }
@@ -351,6 +357,9 @@ fn digest(mut file: &File, size: u64) -> Result<[u8; 32], Error> {
     let mut remaining = size;
     let mut buffer = [0u8; 64 * 1024];
     while remaining != 0 {
+        if !within_budget() {
+            return Err(Error::ArtifactInvalid);
+        }
         let length = buffer.len().min(remaining as usize);
         let count = file
             .read(&mut buffer[..length])
@@ -792,7 +801,7 @@ mod tests {
         ));
         file.seek(SeekFrom::Start(0)).unwrap();
         assert!(matches!(
-            digest(&file, MAX_BYTES + 1),
+            digest(&file, MAX_BYTES + 1, || true),
             Err(Error::ArtifactInvalid)
         ));
         assert_eq!(file.stream_position().unwrap(), 0);
@@ -927,7 +936,7 @@ mod tests {
         use std::io::{Seek, SeekFrom};
         file.seek(SeekFrom::Start(0)).unwrap();
         assert_eq!(
-            digest(&file, 3)
+            digest(&file, 3, || true)
                 .unwrap()
                 .iter()
                 .map(|b| format!("{b:02x}"))
@@ -935,6 +944,9 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         file.seek(SeekFrom::Start(0)).unwrap();
-        assert!(matches!(digest(&file, 4), Err(Error::ArtifactInvalid)));
+        assert!(matches!(
+            digest(&file, 4, || true),
+            Err(Error::ArtifactInvalid)
+        ));
     }
 }

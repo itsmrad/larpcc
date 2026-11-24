@@ -336,6 +336,9 @@ impl CheckedApp {
 }
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(target_os = "macos")]
+pub(crate) use macos::detect::collect as detect_app;
 /// Static code-directory hash of a signed Mach-O (provider evidence); never validates or runs it.
 #[cfg(target_os = "macos")]
 pub(crate) fn code_directory_hash(path: &Path) -> Result<Vec<u8>, Error> {

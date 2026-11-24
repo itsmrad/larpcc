@@ -3,6 +3,7 @@ Manage native provider bindings
 Usage: larp cc provider [OPTIONS] <COMMAND>
 
 Commands:
+  detect    Find provider installations for onboarding
   bind      Bind an absolute native executable
   list      List provider bindings
   evidence  Print identity and SHA-256 of the bound executable (runs nothing)
