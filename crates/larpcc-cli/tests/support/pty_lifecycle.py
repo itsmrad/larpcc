@@ -15,7 +15,8 @@ import termios
 import time
 
 record = Path(os.environ["LARPCC_FAKE_RECORD"])
-deadline = time.monotonic() + 8
+started = time.monotonic()
+deadline = started + 8
 final_signal = signal.SIGQUIT if os.environ.get("LARPCC_PTY_FINAL_SIGNAL") == "QUIT" else signal.SIGINT
 report_read, report_write = os.pipe()
 control_read, control_write = os.pipe()
@@ -35,6 +36,10 @@ if harness == 0:
         if os.read(start_read, 2) != b"fg":
             os._exit(6)
         os.close(start_read)
+        # Like a job-control shell, give the job default interrupt and quit handling even when
+        # this harness was started with them ignored (e.g. as a background job).
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        signal.signal(signal.SIGQUIT, signal.SIG_DFL)
         os.execve(sys.argv[1], sys.argv[1:], dict(os.environ))
     os.close(start_read)
     os.setpgid(child, child)
@@ -59,10 +64,27 @@ if harness == 0:
 os.close(report_write)
 os.close(control_read)
 
+result = None
+marks = []
+def mark(name):
+    marks.append(f"{name}@{time.monotonic() - started:.2f}s")
+
+def exited():
+    global result
+    if result is None:
+        pid, status = os.waitpid(harness, os.WNOHANG)
+        if pid:
+            result = status
+    return result is not None
+
 def wait_for(predicate):
     while time.monotonic() < deadline:
         if predicate():
+            mark(predicate.__name__)
             return
+        # Before the final interrupt, a harness exit is a failure: report it, not a timeout.
+        if predicate is not exited and exited():
+            raise AssertionError(f"PTY harness exited early with wait status {result}")
         time.sleep(0.01)
     raise TimeoutError("PTY condition exceeded eight seconds")
 
@@ -71,6 +93,7 @@ def report(expected):
     if remaining <= 0 or not select.select([report_read], [], [], remaining)[0]:
         raise TimeoutError("PTY report timed out")
     assert os.read(report_read, len(expected)) == expected
+    mark(expected.decode())
 
 complete = False
 try:
@@ -106,23 +129,36 @@ try:
     if os.environ.get("LARPCC_PTY_AUTH"):
         other = subprocess.run(sys.argv[1:], env=dict(os.environ), capture_output=True, timeout=2)
         assert other.returncode == 1 and b'profile authentication operation is busy' in other.stderr
+        mark("busy")
     os.write(control_write, b"fg")
     report(b"resumed")
     os.write(master, b"\x1c" if final_signal == signal.SIGQUIT else b"\x03")
-    result = None
-    def exited():
-        global result
-        pid, status = os.waitpid(harness, os.WNOHANG)
-        if pid:
-            result = status
-            return True
-        return False
     wait_for(exited)
-    complete = True
     assert os.WIFEXITED(result) and os.WEXITSTATUS(result) == 0, result
+    complete = True
     print("real PTY stdin/out/err, foreground group, Ctrl-Z/fg, resize and Ctrl-C passed")
 finally:
     if not complete:
+        exited()
+        appeared = None
+        if record.exists():
+            appeared = round(record.stat().st_mtime - time.time() + time.monotonic() - started, 2)
+        # The terminal is never read during the run; show what the session printed.
+        output = bytearray()
+        while select.select([master], [], [], 0)[0]:
+            try:
+                chunk = os.read(master, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output.extend(chunk)
+        print(
+            f"PTY failure after {time.monotonic() - started:.2f}s: harness wait status {result},"
+            f" record written at (s) {appeared}, phases {marks}, terminal output {bytes(output)!r}",
+            file=sys.stderr,
+        )
+    if not complete and result is None:
         try:
             os.kill(harness, signal.SIGKILL)
         except ProcessLookupError:
