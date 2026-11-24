@@ -76,6 +76,8 @@ struct ProfilePage: View {
                     .foregroundStyle(.secondary)
             }
 
+            UsageSection(store: store, profile: profile)
+
             catalogSection("MCP Servers", items: snapshot.servers, kind: .mcp,
                            empty: "No MCP servers in the catalog.")
             catalogSection("Skills", items: snapshot.skills, kind: .skill,

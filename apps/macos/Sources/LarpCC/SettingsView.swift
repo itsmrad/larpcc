@@ -99,11 +99,13 @@ struct SettingsView: View {
             case .addSkill: AddSkillSheet(store: store)
             }
         }
-        .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply() }
+        .onAppear { (AppearanceMode(rawValue: appearance) ?? .system).apply(); showRequestedProfile() }
+        .onChange(of: store.requestedProfileID) { _, _ in showRequestedProfile() }
         .onChange(of: appearance) { _, value in (AppearanceMode(rawValue: value) ?? .system).apply() }
         .onChange(of: store.snapshot?.profiles.map(\.id)) { _, ids in
             // Leave a profile page only once the profile is really gone (e.g. after Delete).
             if case let .profile(id) = selection, let ids, !ids.contains(id) { selection = .page(.general) }
+            showRequestedProfile()
         }
         .onChange(of: selection) { old, _ in
             if historyMove { historyMove = false; return }
@@ -113,6 +115,16 @@ struct SettingsView: View {
     }
 
     // MARK: Sidebar
+
+    /// Shows the profile the menu bar asked for. Without metadata the request waits for it;
+    /// a profile that no longer exists drops the request.
+    private func showRequestedProfile() {
+        guard let id = store.requestedProfileID, let profiles = store.snapshot?.profiles else { return }
+        store.requestedProfileID = nil
+        guard profiles.contains(where: { $0.id == id }) else { return }
+        search = ""
+        selection = .profile(id)
+    }
 
     private var sidebar: some View {
         List(selection: $selection) {
@@ -129,7 +141,7 @@ struct SettingsView: View {
             if let snapshot = store.snapshot {
                 Section {
                     ForEach(snapshot.profiles.filter { matches($0.name + " " + $0.provider.title + " " + $0.aliases.joined(separator: " ")) }) { profile in
-                        ProfileSidebarRow(profile: profile)
+                        ProfileSidebarRow(profile: profile, usage: store.usage[profile.id])
                             .tag(Selection.profile(profile.id))
                     }
                 } header: {
@@ -304,17 +316,20 @@ struct SettingsView: View {
 
 private struct ProfileSidebarRow: View {
     let profile: Profile
+    let usage: UsageReport?
     var body: some View {
+        let labelOpacity = profile.readiness == .off ? 0.55 : 1.0
         HStack(spacing: 10) {
             // Not a Label: the sidebar restyles Label icons, which washes out the marks.
             ProviderGlyph(provider: profile.provider)
-            Text(profile.name).lineLimit(1)
+                .opacity(labelOpacity)
+            Text(profile.name).lineLimit(1).opacity(labelOpacity)
             Spacer(minLength: 4)
+            UsageHint(report: usage)
             if profile.readiness != .off {
                 StatusDot(color: profile.readiness.color)
             }
         }
-        .opacity(profile.readiness == .off ? 0.55 : 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
     }
