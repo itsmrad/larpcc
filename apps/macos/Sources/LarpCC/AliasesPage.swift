@@ -71,8 +71,7 @@ struct AliasesPage: View {
 
             Section {
                 LabeledContent("Command name") {
-                    TextField("Command name", text: $newName,
-                              prompt: Text("command-name").foregroundColor(SettingsTypography.supportingInk))
+                    TextField("Command name", text: $newName, prompt: Text(""))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.leading)
