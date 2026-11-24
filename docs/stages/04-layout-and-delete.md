@@ -102,11 +102,26 @@ Acquire per-ID lifecycle guard first, then registry lock; shared order applies
 to launch/auth/delete/share. Never hold registry lock across logout, prompts or
 child waits. Revalidate snapshot after any unlocked interval. Refuse visible
 Larp-managed activity (profile guard held), guard contention,
-or safety failure. On macOS also inspect only validated official Claude.app /
-ChatGPT.app identities for an exact profile `--user-data-dir` argument match;
-known activity refuses. Unknown/unverifiable inspected app identity, denied or
-incomplete inspection, malformed arguments, timeout or truncation refuses with
-safe diagnostics. Never inspect process environment, tokens or account data.
+or safety failure. On macOS enumerate current-user processes and select
+executables inside Claude.app or ChatGPT.app bundle contents before reading any
+arguments. Keep the official main-app signature requirements and verify nested
+helpers against the corresponding vendor team signature. An exact profile
+`--user-data-dir` argument match refuses deletion. Skip a process that exits or
+whose PID is reused during the scan, and skip denied path lookups that have yet
+to identify a candidate. Other unresolved initial path errors, including
+`ENOENT` when a live unrelated executable is replaced, refuse deletion because
+the scan cannot classify the process. Failed or oversized process enumeration
+and failed signature validation of a live candidate also refuse deletion.
+If the only blockers are live candidates that are mid-exit or whose liveness,
+path, or arguments could not be read conclusively, wait 150 ms and scan again.
+An `ESRCH` from an argument or path recheck counts as inconclusive when the
+same candidate is still alive. The retry checks whether an already identified
+candidate is still alive even if its executable path cannot be read.
+Exited, zombie, or reused PIDs do not carry the earlier uncertainty forward.
+Persistent uncertainty still refuses deletion. Each scan has a two-second
+deadline checked between probes. A first-scan deadline triggers an immediate
+retry. Both retry reasons share at most one retry.
+Never inspect process environment, tokens or account data.
 
 The user must close sessions started outside Larp (including manual terminal
 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` sessions) before confirming `--yes`. This is
