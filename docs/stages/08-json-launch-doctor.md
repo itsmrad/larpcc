@@ -73,7 +73,11 @@ identity, and re-hashes the current bytes (bounded) against the retained
 verified handle. Any change refuses with a null version. The `/dev/null` and
 pipe descriptors and the held probe-home directory exist before that check,
 and the child enters the home with `fchdir`, so the only path lookup after the
-check is the exec itself. The child is then started by exact pathname. Path-reopen/same-user races after checks remain
+check is the exec itself. The `Command` carries no environment builder call;
+the child's environment is only the prepared list passed to `execve`. Rust
+std's own unavoidable pre-fork setup (its CLOEXEC error-report pipe and the
+environment read lock) still runs between the check and fork, as part of the
+stage 3 accepted residual. The child is then started by exact pathname. Path-reopen/same-user races after checks remain
 explicit. Descriptor-bound exec is not used (macOS has none), and the probe
 stays open on macOS under this documented residual.
 

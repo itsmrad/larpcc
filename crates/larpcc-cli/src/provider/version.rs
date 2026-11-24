@@ -442,9 +442,10 @@ fn spawn(
         return Ok(None);
     };
     let home_fd = home.file.as_raw_fd();
+    // No env builder call: std would allocate an env array at spawn, after the final
+    // check. The child's environment is only the prepared list execve receives below.
     let mut command = Command::new(path);
     command
-        .env_clear()
         .stdin(Stdio::from(null))
         .stdout(Stdio::from(out_write))
         .stderr(Stdio::from(err_write));
