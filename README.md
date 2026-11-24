@@ -23,7 +23,8 @@ The installer uses `~/.local/bin/larp` and `~/Applications/LarpCC.app`.
 Use `--prefix /absolute/path/to/bin` to choose another directory for `larp`. The
 installation paths must be free of symlinks. The installer recognizes a previous
 `larp` by its matching SHA-256 extended attribute. To replace any other file
-named `larp`, move it aside or explicitly pass `--replace`. Add the chosen
+named `larp`, move it aside or explicitly pass `--replace`. The installer keeps
+an unrecognized file it replaces and prints the backup path. Add the chosen
 directory to `PATH` if needed. In LarpCC, use **General → larp executable →
 Choose…** to select the installed binary.
 
