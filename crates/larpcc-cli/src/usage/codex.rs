@@ -256,10 +256,8 @@ fn scan_file(
         .map_err(|_| Scan::Invalid)?;
     let tail_cap = (size - offset).min(40 * MIB - budget.bytes);
     let mut input = BufReader::new(file.take(tail_cap));
-    if skip_fragment {
-        if !read_line(&mut input, &mut buffer, budget, 4 * MIB)? {
-            return Ok(());
-        }
+    if skip_fragment && !read_line(&mut input, &mut buffer, budget, 4 * MIB)? {
+        return Ok(());
     }
     for _ in 0..19_999 {
         if !read_line(&mut input, &mut buffer, budget, 4 * MIB)? {
