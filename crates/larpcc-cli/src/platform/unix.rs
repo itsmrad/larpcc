@@ -226,19 +226,16 @@ pub fn inspect_home(path: &Path) -> Result<DirStatus, Error> {
         Err(_) => DirStatus::Unsafe("access control cannot be verified".into()),
     })
 }
-fn trusted(path: &Path, meta: &fs::Metadata) -> Result<(), Error> {
-    if meta.uid() != 0 && meta.uid() != uid() {
-        return Err(unsafe_path(path, "is owned by an untrusted principal"));
-    }
-    if meta.mode() & 0o022 != 0 {
-        return Err(unsafe_path(
-            path,
-            if meta.is_dir() {
-                "has a foreign-writable ancestor"
-            } else {
-                "is writable by group or other users"
-            },
-        ));
+fn trusted(path: &Path, meta: &fs::Metadata, ancestry: Ancestry) -> Result<(), Error> {
+    if let Some(reason) = trust_reason(
+        meta.mode(),
+        meta.uid(),
+        meta.gid(),
+        uid(),
+        meta.is_dir(),
+        ancestry,
+    ) {
+        return Err(unsafe_path(path, reason));
     }
     acl(path)
 }
@@ -247,9 +244,12 @@ fn resolve(
     path: &Path,
     hops: &mut usize,
     handles: &mut Vec<CheckedObject>,
+    ancestry: Ancestry,
+    has_suffix: bool,
 ) -> Result<PathBuf, Error> {
     let mut current = PathBuf::from("/");
-    for component in path.components() {
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
         use std::path::Component;
         match component {
             Component::RootDir | Component::CurDir => continue,
@@ -265,6 +265,8 @@ fn resolve(
                 ));
             }
         }
+        // A link's target is still an ancestor when the original spelling has more components.
+        let is_ancestor = has_suffix || components.peek().is_some();
         let meta = fs::symlink_metadata(&current).map_err(|e| io_error("inspect", &current, e))?;
         if meta.file_type().is_symlink() {
             *hops += 1;
@@ -283,9 +285,14 @@ fn resolve(
             } else {
                 current.parent().unwrap_or(Path::new("/")).join(target)
             };
-            current = resolve(&target, hops, handles)?;
+            current = resolve(&target, hops, handles, ancestry, is_ancestor)?;
         } else {
-            trusted(&current, &meta)?;
+            let scope = if is_ancestor {
+                ancestry
+            } else {
+                Ancestry::Strict
+            };
+            trusted(&current, &meta, scope)?;
             if meta.is_dir() {
                 let file = open(&current, ObjectKind::Directory, false)?;
                 let opened = file
@@ -313,7 +320,7 @@ pub fn anchor(path: &Path) -> Result<AnchoredPath, Error> {
     loop {
         match fs::symlink_metadata(parent) {
             Ok(_) => {
-                resolve(parent, &mut 0, &mut ancestors)?;
+                resolve(parent, &mut 0, &mut ancestors, Ancestry::Strict, false)?;
                 break;
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -325,7 +332,7 @@ pub fn anchor(path: &Path) -> Result<AnchoredPath, Error> {
         }
     }
     let root_meta = fs::metadata("/").map_err(|e| io_error("inspect", Path::new("/"), e))?;
-    trusted(Path::new("/"), &root_meta)?;
+    trusted(Path::new("/"), &root_meta, Ancestry::Strict)?;
     Ok(AnchoredPath { ancestors })
 }
 pub fn create_file(path: &Path) -> Result<CheckedObject, Error> {
@@ -374,7 +381,14 @@ enum Own {
     Require,
 }
 pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), Error> {
-    executable_policy(path, root, Own::Reject)
+    executable_policy(path, root, Own::Reject, Ancestry::ProviderExecutable)
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn system_executable(
+    path: &Path,
+    root: &Path,
+) -> Result<(PathBuf, FileIdentity), Error> {
+    executable_policy(path, root, Own::Reject, Ancestry::Strict)
 }
 // The running image, not whatever now occupies its path, defines self.
 #[cfg(target_os = "linux")]
@@ -441,10 +455,15 @@ pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
 pub(crate) fn running_identity(_path: &Path) -> Result<FileIdentity, Error> {
     Err(Error::NamespaceUnverified)
 }
-fn executable_policy(path: &Path, root: &Path, own: Own) -> Result<(PathBuf, FileIdentity), Error> {
+fn executable_policy(
+    path: &Path,
+    root: &Path,
+    own: Own,
+    ancestry: Ancestry,
+) -> Result<(PathBuf, FileIdentity), Error> {
     let invalid = |reason: &str| unsafe_path(path, reason);
     let mut handles = Vec::new();
-    let resolved = resolve(path, &mut 0, &mut handles)?;
+    let resolved = resolve(path, &mut 0, &mut handles, ancestry, false)?;
     let canonical_root = canonical_missing(root)?;
     if contains_path(&resolved, &canonical_root)? {
         return Err(invalid("is inside the Larp CC data directory"));
@@ -618,24 +637,32 @@ pub fn contains_path(path: &Path, root: &Path) -> Result<bool, Error> {
 }
 
 pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
-    open_artifact_policy(path, root, Own::Reject)
+    open_artifact_policy(path, root, Own::Reject, Ancestry::ProviderExecutable)
+}
+pub(crate) fn open_larp_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
+    open_artifact_policy(path, root, Own::Reject, Ancestry::Strict)
 }
 /// Alias source: the same trusted executable pipeline, accepting only the running Larp image.
 pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, PathBuf), Error> {
     let path = std::env::current_exe().map_err(|e| io_error("inspect", root, e))?;
     let path = fs::canonicalize(&path).map_err(|e| io_error("resolve", &path, e))?;
-    let (file, identity) =
-        open_artifact_policy(&path, root, Own::Require).map_err(|error| match error {
+    let (file, identity) = open_artifact_policy(&path, root, Own::Require, Ancestry::Strict)
+        .map_err(|error| match error {
             Error::NamespaceUnverified => Error::AliasImageUnverified,
             error => error,
         })?;
     Ok((file, identity, path))
 }
-fn open_artifact_policy(path: &Path, root: &Path, own: Own) -> Result<(File, FileIdentity), Error> {
-    let (resolved, expected) = executable_policy(path, root, own)?;
+fn open_artifact_policy(
+    path: &Path,
+    root: &Path,
+    own: Own,
+    ancestry: Ancestry,
+) -> Result<(File, FileIdentity), Error> {
+    let (resolved, expected) = executable_policy(path, root, own, ancestry)?;
     let file = open(&resolved, ObjectKind::File, false)?;
     let meta = file.metadata().map_err(|e| io_error("inspect", path, e))?;
-    trusted(&resolved, &meta)?;
+    trusted(&resolved, &meta, Ancestry::Strict)?;
     acl_file(&file, path)?;
     if !meta.is_file() || meta.mode() & 0o111 == 0 || identity(&meta) != expected {
         return Err(Error::ArtifactInvalid);
@@ -1074,7 +1101,7 @@ pub(crate) fn read_skill_object(
     {
         return Err(unsafe_path(path, "is not a regular package object"));
     }
-    trusted(path, &meta)?;
+    trusted(path, &meta, Ancestry::Strict)?;
     acl_file(&file, path)?;
     Ok(CheckedObject {
         file,
