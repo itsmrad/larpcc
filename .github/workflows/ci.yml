@@ -150,6 +150,35 @@ jobs:
             if (-not $text.Contains("L07 $fixtureProfile process timing:") -or -not $text.Contains("L07 $fixtureProfile output collected_ms=")) { throw "missing native grandchild timing for $fixtureProfile" }
           }
 
+      # TEMP flake proof (remove before merge): each fixed flaky test 20 times on its OS.
+      - if: runner.os == 'Windows'
+        name: "TEMP flake proof: L07 grandchild 20 times"
+        run: |
+          for ($i = 1; $i -le 20; $i++) {
+            Write-Output "L07 run $i/20"
+            cargo +stable test --test windows_launch --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked l07_bounded_grandchild_inherits_exact_selected_home -- --exact 2>&1 | Tee-Object -Variable out
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if (($out -join "`n") -notmatch 'test result: ok\. 1 passed; 0 failed;') { throw "L07 did not run" }
+          }
+      - if: runner.os == 'Linux'
+        name: "TEMP flake proof: PTY auth prompt 20 times"
+        shell: bash
+        run: |
+          for i in {1..20}; do
+            echo "auth prompt run $i/20"
+            cargo +stable test --features synthetic-launch --target-dir "$LARPCC_TEST_PARENT/synthetic-target" --locked --test admission auth_confirmation_and_snapshot_races_use_real_terminal -- --exact | tee "$RUNNER_TEMP/auth.log"
+            grep -Eq '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/auth.log"
+          done
+      - if: runner.os == 'macOS'
+        name: "TEMP flake proof: PTY lifecycle tests 20 times"
+        shell: bash
+        run: |
+          for i in {1..20}; do
+            echo "PTY lifecycle run $i/20"
+            cargo +stable test --features synthetic-launch --target-dir "$LARPCC_TEST_PARENT/synthetic-target" --locked --test admission --test unix_launch -- auth_uses_real_foreground_pty_job_control_resize_and_interrupt real_pty_foreground_interrupt_suspend_resume_and_resize | tee "$RUNNER_TEMP/pty.log"
+            test "$(grep -Ec '^test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/pty.log")" -eq 2
+          done
+
       - if: runner.os == 'Windows'
         name: Checkout exact vulnerable J2 for isolated negative control
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
