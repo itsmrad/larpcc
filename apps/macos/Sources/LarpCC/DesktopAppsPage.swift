@@ -17,7 +17,7 @@ struct DesktopAppsPage: View {
             } header: {
                 Text("Applications")
             } footer: {
-                Text("App not installed? Install it, then choose Bind. Bindings are shared by provider; recorded versions are notes, not qualification.")
+                Text(DesktopAppBindingCopy.applicationsFooter(isFixture: store.isFixture))
                     .font(.footnote)
                     .foregroundStyle(SettingsTypography.supportingInk)
             }
@@ -52,8 +52,7 @@ struct DesktopAppsPage: View {
         return LabeledContent {
             Button("Bind…") { self.binding = BindTarget(provider: provider, kind: .app) }
                 .accessibilityLabel("Bind \(provider.desktopApp)")
-                .disabledReason(store.busy ? "Wait for the current operation to finish." :
-                    (!store.isFixture && provider == .claude ? "Claude.app binding is closed while qualification is pending." : nil))
+                .disabledReason(DesktopAppBindingCopy.bindDisabledReason(isFixture: store.isFixture, provider: provider, busy: store.busy))
         } label: {
             HStack(spacing: SettingsSpacing.control) {
                 DesktopAppIcon(provider: provider)
@@ -73,7 +72,7 @@ struct DesktopAppsPage: View {
                             .truncationMode(.middle)
                             .help(path)
                     } else {
-                        Text(binding?.state == .invalid ? "Choose the installed app again with Bind." : "Choose an installed app with Bind.")
+                        Text(DesktopAppBindingCopy.absentPathText(isFixture: store.isFixture, provider: provider, state: binding?.state))
                             .font(SettingsTypography.supporting)
                             .foregroundStyle(SettingsTypography.supportingInk)
                     }
@@ -135,5 +134,34 @@ struct DesktopAppsPage: View {
         if binding.state == .invalid { return "App binding needs attention. Choose Bind again." }
         if store.busy { return "Wait for the current operation to finish." }
         return nil
+    }
+}
+
+/// Live Claude.app binding stays closed. Sample Claude and live ChatGPT keep Bind guidance.
+private enum DesktopAppBindingCopy {
+    static let claudeClosedReason = "Claude.app binding is closed while qualification is pending."
+
+    static func claudeBindingClosed(isFixture: Bool, provider: Provider) -> Bool {
+        !isFixture && provider == .claude
+    }
+
+    static func applicationsFooter(isFixture: Bool) -> String {
+        let notes = "Bindings are shared by provider; recorded versions are notes, not qualification."
+        if claudeBindingClosed(isFixture: isFixture, provider: .claude) {
+            return "ChatGPT not installed? Install it, then choose Bind. \(claudeClosedReason) \(notes)"
+        }
+        return "App not installed? Install it, then choose Bind. \(notes)"
+    }
+
+    static func absentPathText(isFixture: Bool, provider: Provider, state: DesktopBinding.State?) -> String {
+        if claudeBindingClosed(isFixture: isFixture, provider: provider) {
+            return claudeClosedReason
+        }
+        return state == .invalid ? "Choose the installed app again with Bind." : "Choose an installed app with Bind."
+    }
+
+    static func bindDisabledReason(isFixture: Bool, provider: Provider, busy: Bool) -> String? {
+        if busy { return "Wait for the current operation to finish." }
+        return claudeBindingClosed(isFixture: isFixture, provider: provider) ? claudeClosedReason : nil
     }
 }
