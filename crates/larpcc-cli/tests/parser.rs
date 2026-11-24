@@ -33,6 +33,7 @@ fn help_fixtures_and_missing_subcommands() {
         (vec!["cc", "alias", "remove"], "alias-remove"),
         (vec!["cc", "profile"], "profile"),
         (vec!["cc", "provider"], "provider"),
+        (vec!["cc", "provider", "detect"], "detect"),
         (vec!["cc", "provider", "bind"], "bind"),
         (vec!["cc", "provider", "list"], "providers"),
         (vec!["cc", "run"], "run"),

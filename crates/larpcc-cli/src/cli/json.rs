@@ -197,6 +197,9 @@ pub(super) fn execute_json(
         CcAction::Provider {
             command: ProviderAction::Evidence { .. },
         } => "provider.evidence",
+        CcAction::Provider {
+            command: ProviderAction::Detect { .. },
+        } => "provider.detect",
         CcAction::Doctor { .. } => "doctor",
         CcAction::Provider { .. } => "provider.bind",
         CcAction::Profile { command } => match command {
@@ -272,6 +275,7 @@ pub(super) fn execute_json(
         CcAction::Status { .. } => unreachable!(),
         CcAction::Provider {command:ProviderAction::List} => r.metadata_json(command,None),
         CcAction::Provider {command:ProviderAction::Evidence {provider}} => crate::provider::evidence::collect(&r,provider).map(|e| e.json()),
+        CcAction::Provider {command:ProviderAction::Detect {provider}} => crate::provider::detect::collect(&r,provider),
         CcAction::Doctor {profile,detect_versions} => super::doctor::data(&r,profile.as_ref(),detect_versions),
         CcAction::Provider {command:ProviderAction::Bind {provider,executable,replace}} => r.bind(provider,executable,replace).map(|outcome| json!({"changed":outcome != crate::registry::BindOutcome::Unchanged,"profile_id":null,"name":null,"warnings":[]})),
         CcAction::Profile {command: action} => match action {

@@ -302,6 +302,11 @@ impl SkillsCommand {
 
 #[derive(Subcommand)]
 enum ProviderAction {
+    /// Find provider installations for onboarding
+    Detect {
+        #[arg(long, value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
+        provider: Option<Provider>,
+    },
     #[command(about = "Bind an absolute native executable")]
     Bind {
         #[arg(value_parser = PossibleValuesParser::new(Provider::ALL.map(Provider::as_str)).try_map(|s| s.parse::<Provider>().map_err(|_| "invalid provider")))]
@@ -532,6 +537,9 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
     if cli.remote_request {
         let unsupported = match &command {
             CcAction::Usage(_) | CcAction::Settings { .. } => None,
+            CcAction::Provider {
+                command: ProviderAction::Detect { .. },
+            } => Some("provider.detect"),
             CcAction::Profile {
                 command: ProfileAction::PlanLabel(_),
             } => Some("profile.plan-label"),
@@ -606,6 +614,20 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
             "parse",
             "usage",
             "These preconditions are only accepted by status.",
+        );
+    }
+    if matches!(
+        &command,
+        CcAction::Provider {
+            command: ProviderAction::Detect { .. }
+        }
+    ) && !crate::provider::detect::SUPPORTED
+    {
+        return json_or_usage(
+            cli.json,
+            "provider.detect",
+            "unsupported",
+            crate::provider::detect::UNSUPPORTED_MESSAGE,
         );
     }
     if cli.json {
@@ -684,6 +706,10 @@ pub(crate) fn run_with_status_rows(rows: &[StatusRow]) -> ExitCode {
         CcAction::Logout { name, yes } => return operation(Operation::Logout, name, vec![], yes),
         CcAction::Provider { command } => {
             return match Registry::locate().and_then(|r| match command {
+                ProviderAction::Detect { provider } => {
+                    crate::provider::detect::collect(&r.expecting(expected), provider)
+                        .map(|data| crate::provider::detect::human(&data))
+                }
                 ProviderAction::Evidence { provider } => {
                     crate::provider::evidence::collect(&r.expecting(expected), provider)
                         .map(|e| e.human())

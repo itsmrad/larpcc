@@ -1883,5 +1883,56 @@
       "os": "macos",
       "arch": "aarch64"
     }
+  },
+  {
+    "schema": 1,
+    "command": "provider.detect",
+    "ok": true,
+    "revision": "0",
+    "data": {
+      "executables": [],
+      "desktop_apps": [],
+      "skipped": [
+        {
+          "provider": "codex",
+          "path": "/fixture/.codex/bin/codex",
+          "reason": "inside provider home"
+        }
+      ],
+      "limited": false
+    }
+  },
+  {
+    "schema": 1,
+    "command": "provider.detect",
+    "ok": true,
+    "revision": "0",
+    "data": {
+      "executables": [
+        {
+          "provider": "codex",
+          "path": "/fixture/bin/codex",
+          "resolved_path": "/fixture/codex/2.0.0",
+          "identity": {
+            "kind": "unix",
+            "dev": "10",
+            "ino": "1234"
+          },
+          "size": "1024",
+          "install_kind": "native",
+          "bindable": true,
+          "bind_reason": null,
+          "qualified": false,
+          "bound": false,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+          "cdhash": null,
+          "version": null,
+          "version_diagnostic": "version_probe_unavailable"
+        }
+      ],
+      "desktop_apps": [],
+      "skipped": [],
+      "limited": false
+    }
   }
 ]
