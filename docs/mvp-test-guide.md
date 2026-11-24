@@ -81,7 +81,8 @@ xattr -dr com.apple.quarantine "$HOME/Applications/LarpCC.app"
 
 ## 4. Check versions
 
-**[depends on PR #35]** **[depends on PR: qualification rows]**
+The `doctor` command is on main. The approved provider versions come from the
+test build. **[depends on PR: qualification rows]**
 
 Use the default LarpCC data folder, `~/Library/Application Support/larpcc`, so
 the command line, app and menu bar see the same profiles. Clear any custom
