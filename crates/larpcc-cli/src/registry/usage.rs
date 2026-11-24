@@ -449,8 +449,15 @@ impl Registry {
 
     pub(crate) fn change_usage(&self, mutation: Mutation) -> Result<Value, Error> {
         let root = self.root();
-        if self.expected.is_some() {
-            store::snapshot(root, self.expected)?;
+        // An absent registry is at revision zero. Refuse a stale write
+        // without creating its lock. Existing registries use the writer lock.
+        if self.expected.is_some_and(|revision| revision != 0)
+            && matches!(
+                std::fs::symlink_metadata(root.join("registry.json")),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound
+            )
+        {
+            return Err(Error::Conflict);
         }
         let _lock = store::lock(root, Duration::from_secs(10))?;
         let data = store::load(root)?;

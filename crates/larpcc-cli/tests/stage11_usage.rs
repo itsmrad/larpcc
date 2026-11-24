@@ -101,6 +101,47 @@ fn stage11_settings_stale_revision_leaves_fresh_root_absent() {
 }
 
 #[test]
+fn stage11_settings_guarded_write_reports_busy() {
+    use std::process::Stdio;
+
+    let fixture = Fixture::new();
+    fixture.profile(&["add", "claude-work", "--provider", "claude"], 0);
+    let binary = fixture.install_larp();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.root.join("registry.lock"))
+        .unwrap();
+    lock.lock().unwrap();
+
+    // The common test harness's timeout equals the registry's lock timeout.
+    let run = |guard: &[&str]| {
+        let args = [
+            &["cc", "--json", "settings", "usage", "interval", "300"][..],
+            guard,
+        ]
+        .concat();
+        spawn(
+            fixture
+                .command_for(&binary, &args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .unwrap()
+    };
+    let guarded = run(&["--expected-revision", "1"]);
+    let unguarded = run(&[]);
+    let guarded = guarded.wait_with_output().unwrap();
+    let unguarded = unguarded.wait_with_output().unwrap();
+    for output in [guarded, unguarded] {
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(envelope(&output)["error"]["code"], "busy");
+    }
+    assert!(!fixture.root.join("usage.json").exists());
+}
+
+#[test]
 fn stage11_settings_rejects_positional_json_records() {
     let fixture = Fixture::new();
     profiles(&fixture);
