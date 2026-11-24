@@ -54,7 +54,6 @@ extension Provider {
 struct ProviderGlyph: View {
     let provider: Provider
     var size: CGFloat = 16
-    var columnWidth: CGFloat? = nil
     @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
@@ -62,7 +61,7 @@ struct ProviderGlyph: View {
         ProviderMark(provider: provider)
             .fill(prominence == .increased ? Color.white : Color(nsColor: .labelColor))
             .frame(width: size, height: size)
-            .frame(width: columnWidth ?? size + 4, height: columnWidth ?? size + 4)
+            .frame(width: size + 4, height: size + 4)
             .accessibilityLabel(provider.title)
     }
 }

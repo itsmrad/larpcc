@@ -236,18 +236,3 @@ enum UsageTime {
         seconds < 60 ? "less than a minute" : formatter.string(from: seconds) ?? ""
     }
 }
-
-/// Sidebar hint: the tighter window's percent left, shown only when it is getting low.
-struct UsageHint: View {
-    let report: UsageReport?
-    @Environment(\.backgroundProminence) private var prominence
-    var body: some View {
-        if let left = report?.lowestLeftPercent, left < 25 {
-            Text("\(Int(left.rounded()))%")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(prominence == .increased ? Color.white : left < 10 ? .red : .orange)
-                .help("\(Int(left.rounded()))% of a usage window left")
-                .accessibilityLabel("\(Int(left.rounded())) percent usage left")
-        }
-    }
-}
