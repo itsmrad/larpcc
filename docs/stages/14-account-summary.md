@@ -151,10 +151,10 @@ status" and "no implementation may capture native stdout to manufacture a
 JSON account result" are amended for `status.account` only: native output is
 read solely by the exact row's parser and is never forwarded.
 
-`usage` is `null` in this amendment. The stage 11 contract owns the usage
-window shape. Whichever of stage 11 and stage 14 merges second widens
-`usage` to stage 11's per-profile local summary (or null). Until then the
-human graph has no JSON counterpart.
+`usage` was `null` in this amendment. The stage 11 contract owns the usage
+window shape. Stage 11 merged second and widened `usage` to the selected
+profile's stage 11 LOCAL usage row (or null); see
+[stage 11](11-usage.md#account-status-stage-14).
 
 Profile extras JSON (display name, launch arguments) is **not** frozen here.
 Adding fields to `profile` changes every profile-bearing envelope, so it lands

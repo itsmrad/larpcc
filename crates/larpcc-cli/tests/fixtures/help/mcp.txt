@@ -1,0 +1,18 @@
+Manage reference-only MCP definitions and per-profile switches
+
+Usage: larp cc mcp [OPTIONS] <COMMAND>
+
+Commands:
+  add       Add a reference-only server definition (disabled unless sync-all is on)
+  remove    Remove a definition, its switches and its renders
+  enable    Enable a server for one profile or for all profiles
+  disable   Disable a server for one profile or for all profiles
+  list      List definitions by reference name only
+  matrix    Show the per-profile switch matrix
+  sync-all  Inherit definitions on all current and future profiles (on) or stop (off)
+  sync      Render all profiles or explicitly resume an interrupted transaction
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help

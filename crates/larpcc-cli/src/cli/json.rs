@@ -62,6 +62,23 @@ fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
             1,
         ),
         Error::SkillNotFound => ("not_found", "Skill was not found.", 1),
+        Error::McpNotFound => ("not_found", "MCP server was not found.", 1),
+        Error::McpInvalid => ("usage", "MCP definition input is invalid.", 2),
+        Error::SecretLiteral => (
+            "secret_literal",
+            "Literal values are refused; use references only.",
+            1,
+        ),
+        Error::SecretReference => (
+            "secret_reference",
+            "A reference is missing, invalid or unsupported.",
+            1,
+        ),
+        Error::Unsupported => (
+            "unsupported",
+            "This MCP transport or adapter is unsupported.",
+            1,
+        ),
         Error::AliasNotFound => ("not_found", "Alias was not found.", 1),
         Error::AliasInvalid => (
             "drift",
@@ -105,7 +122,15 @@ fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
         ),
     }
 }
-fn failure(command: &str, error: Error) -> ExitCode {
+pub(super) fn failure(command: &str, error: Error) -> ExitCode {
+    if command == "status.account" && matches!(error, Error::AuthBusy) {
+        return json_error(
+            command,
+            "busy",
+            "Profile authentication operation is busy.",
+            1,
+        );
+    }
     let (code, message, exit) = failure_details(error);
     json_error(command, code, message, exit)
 }
@@ -119,11 +144,12 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         } => "app.bind",
         CcAction::App { .. } => "app.open",
         CcAction::Skills { command } => command.action().command(),
+        CcAction::Mcp { command } => command.command(),
         CcAction::Alias { command } => command.command(),
         CcAction::Run { .. } => "run",
         CcAction::Login { .. } => "login",
         CcAction::Logout { .. } => "logout",
-        CcAction::Status { .. } => "status",
+        CcAction::Status { .. } => unreachable!(),
         CcAction::Provider {
             command: ProviderAction::List,
         } => "provider.list",
@@ -193,8 +219,9 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         CcAction::App {command:AppCommand::Bind {provider,path,recorded_version,replace}} => r.bind_desktop(provider,path,recorded_version,replace).map(|changed| json!({"changed":changed,"profile_id":null,"name":null,"warnings":[]})),
         CcAction::App {command:AppCommand::Open {name}} => r.open_desktop(&name,true).map(|receipt| json!({"profile_id":receipt.profile_id.to_string(),"provider":receipt.provider,"surface":receipt.surface,"outcome":receipt.outcome,"native_auth":receipt.native_auth})),
         CcAction::Skills {command} => r.skills(command.into_action()),
+        CcAction::Mcp {command} => r.mcp(command.into_action()),
         CcAction::Alias {command} => command.execute(&r),
-        CcAction::Status {name} => r.metadata_json(command,Some(&name)),
+        CcAction::Status { .. } => unreachable!(),
         CcAction::Provider {command:ProviderAction::List} => r.metadata_json(command,None),
         CcAction::Provider {command:ProviderAction::Bind {provider,executable,replace}} => r.bind(provider,executable,replace).map(|outcome| json!({"changed":outcome != crate::registry::BindOutcome::Unchanged,"profile_id":null,"name":null,"warnings":[]})),
         CcAction::Profile {command: action} => match action {

@@ -5,10 +5,11 @@ Usage: larp cc [OPTIONS] <COMMAND>
 Commands:
   app       Bind or open a verified desktop app (ChatGPT on macOS; Claude closed)
   skills    Manage explicit skill packages and per-profile sharing
+  mcp       Manage reference-only MCP definitions and per-profile switches
   provider  Manage native provider bindings
   run       Launch a profile (qualification pending; disabled in this build)
   login     Authenticate a profile
-  status    Show native authentication status
+  status    Show profile account status
   logout    Log out a profile
   profile   Manage profile records (no login, no provider launch)
   alias     Manage root-bound alias commands (no PATH or shell edits)
