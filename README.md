@@ -2,7 +2,85 @@
 
 Larp CC manages named Claude Code and Codex profile records, distinct state directories, and explicit native executable bindings. Names are labels; immutable numeric IDs determine the directories. Renaming preserves both. Forgetting removes metadata and keeps the directory.
 
-**Provider execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]`, human `status NAME` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. Binding a path does not qualify a provider, version, installation or account-isolation claim.
+Use LarpCC only for your own accounts. Separate profiles are a convenience. Do
+not use them to share or resell accounts. LarpCC cannot guarantee that a provider
+will not restrict or suspend an account. Use it at your own risk and follow each
+provider's terms.
+
+**Provider CLI execution is disabled pending stage 3 qualification.** Ordinary `larp cc run NAME [-- ARGS...]`, `login NAME [--yes]` and `logout NAME [--yes]` refuse immediately after argument parsing, before root lookup, registry access, provider probes or process creation. Debug, release, installed and all-features binaries use the same gate. `larp cc status NAME` reads profile metadata and reports the account as `not_qualified` while qualification rows are empty, without running the provider. Binding a path does not qualify a provider, version, installation or account-isolation claim. On macOS, desktop dispatch has a separate admission gate for the official ChatGPT.app.
+
+## Install on macOS (local, unsigned)
+
+Use macOS 14 or newer with Rust 1.89 or newer and Apple's Swift build tools
+(Swift 5.9 or newer). From the repository root, preview and run the installer.
+
+```sh
+./scripts/install-macos.sh --dry-run
+./scripts/install-macos.sh
+```
+
+The installer uses `~/.local/bin/larp` and `~/Applications/LarpCC.app`.
+Use `--prefix /absolute/path/to/bin` to choose another directory for `larp`. The
+installation paths must be free of symlinks. The installer recognizes a previous
+`larp` by its matching SHA-256 extended attribute. To replace any other file
+named `larp`, move it aside or explicitly pass `--replace`. The installer keeps
+every replaced binary and app in timestamped backup directories beside the
+install targets. It verifies both installed targets before reporting success
+and prints the backup paths even if verification fails. Move those directories
+to the Trash when you no longer need them.
+
+Add the chosen directory to `PATH` if needed. In LarpCC, use **General → larp
+executable → Choose…** to select the installed binary.
+
+To build and install manually with the default paths, run these commands from
+the repository root.
+
+```sh
+cargo build --release --locked --bin larp --target-dir "$PWD/target"
+./apps/macos/scripts/bundle.sh
+mkdir -p -m 0755 "$HOME/.local/bin" "$HOME/Applications"
+```
+
+For a manual upgrade, move the existing `larp` aside first. The following
+commands require an unused destination and mark the new binary for future
+installer upgrades.
+
+```sh
+larp_bin="$HOME/.local/bin/larp"
+test ! -e "$larp_bin" && test ! -L "$larp_bin" &&
+  install -m 0755 target/release/larp "$larp_bin" &&
+  larp_hash=$(shasum -a 256 < "$larp_bin") &&
+  xattr -w dev.larpcc.installer.sha256 "${larp_hash%% *}" "$larp_bin"
+```
+
+Quit any running LarpCC settings app. If you already installed LarpCC, move the
+old `~/Applications/LarpCC.app` to the Trash in Finder. Then copy the new bundle.
+
+```sh
+ditto apps/macos/dist/LarpCC.app "$HOME/Applications/LarpCC.app"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+If macOS blocks your self-built unsigned app due to quarantine, you can clear
+the quarantine attribute for that bundle.
+
+```sh
+xattr -dr com.apple.quarantine "$HOME/Applications/LarpCC.app"
+```
+
+### Known limitations
+
+The installer assumes no other process modifies the install destinations while
+it runs. Wait for the installer to finish before moving, editing, or replacing
+either target or its parent directory.
+
+### Uninstall
+
+Quit LarpCC. Remove the `larp` file you installed from your chosen prefix and
+move the installed `~/Applications/LarpCC.app` to the Trash. Keep the profile data
+directory (`LARPCC_HOME` or `~/Library/Application Support/larpcc`).
+
+## Command-line use
 
 Requires Rust 1.89 or newer:
 
@@ -141,9 +219,10 @@ Help and version exit 0. Usage errors and rebinds missing `--replace` exit 2; lo
 [JSON envelope](docs/contracts/cli-v1.md) to stdout, with empty stderr and exit
 0/1/2. Errors contain fixed safe messages, without supplied values or raw OS
 errors. Help/version work without root IO. JSON run/login/logout refuse
-`json_native_io` before root IO; JSON status is local metadata only, with
-`native_auth: not_observed`. It never queries an account. Unsupported future
-commands remain parser errors.
+`json_native_io` before root IO. JSON `status NAME` returns a `status.account`
+summary. Use `status NAME --no-account` for the local metadata-only `status`
+response with `native_auth: not_observed`. Unsupported future commands remain
+parser errors.
 
 Registry commands accept `--expected-revision REV`. The registry lock protects
 comparison before name resolution or mutation effects; a stale revision returns
