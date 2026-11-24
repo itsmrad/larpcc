@@ -206,6 +206,60 @@ fn stage19_overlapping_configured_roots_close_setup_in_either_order() {
 }
 
 #[test]
+fn stage19_overlap_denies_before_edge_metadata_in_either_order() {
+    let temp = private_dir();
+    let path = temp.path();
+    let actual = path.join("actual");
+    let alias = path.join("alias");
+    fs::create_dir(&actual).unwrap();
+    // A directory edge can be opened and rejected only after metadata. A file
+    // makes that path NotADirectory; PermissionDenied is the allow callback
+    // refusing before the lookup.
+    let edge = actual.join("private-state");
+    fs::write(&edge, b"sentinel").unwrap();
+    symlink("actual", &alias).unwrap();
+    let mut roots = [alias.join("private-state"), edge.join("nested")];
+    for _ in 0..2 {
+        let mut guard = Exclusions::new(Some(path));
+        let error = guard.register(&roots, || true).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&edge).unwrap(), b"sentinel");
+        roots.reverse();
+    }
+}
+
+#[test]
+fn stage19_same_basename_elsewhere_stays_available() {
+    let temp = private_dir();
+    let path = temp.path();
+    let home = path.join("claude/Élodie");
+    let protected = home.join("notes/custom-state");
+    let nested = path.join("projects/custom-state/state");
+    let candidate = path.join("bin/custom-state");
+    fs::create_dir_all(protected.parent().unwrap()).unwrap();
+    fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    fs::create_dir_all(candidate.parent().unwrap()).unwrap();
+    let mut roots = [protected.clone(), nested.clone()];
+    for _ in 0..2 {
+        let mut guard = Exclusions::new(Some(&home));
+        guard.register(&roots, || true).unwrap();
+        for root in [&protected, &nested] {
+            assert!(matches!(
+                walk(root, |p, parent| guard.allows_child(p, parent), false),
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+            ));
+        }
+        // The leaf is absent. Denial would be PermissionDenied; NotFound means
+        // the guard allowed the metadata lookup under the other parent.
+        assert!(matches!(
+            walk(&candidate, |p, parent| guard.allows_child(p, parent), false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        ));
+        roots.reverse();
+    }
+}
+
+#[test]
 fn stage19_skipped_path_matches_frozen_detection_fixture() {
     let fixture: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

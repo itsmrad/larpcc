@@ -1,12 +1,18 @@
 use super::fs::walk_parent;
 use std::{
-    cell::RefCell,
     ffi::{OsStr, OsString},
     fs::File,
     io,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Component, Path, PathBuf},
 };
+
+struct Planned {
+    path: PathBuf,
+    parent: PathBuf,
+    leaf: OsString,
+    done: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Kind {
@@ -50,7 +56,7 @@ impl Exclusions {
         within_budget: impl Fn() -> bool,
     ) -> io::Result<()> {
         let mut missing_edges = Vec::new();
-        let traversed = RefCell::new(Vec::new());
+        let mut planned = Vec::with_capacity(paths.len());
         for path in paths {
             if !path.is_absolute()
                 || path.file_name().is_none()
@@ -59,57 +65,74 @@ impl Exclusions {
                 return Err(io::ErrorKind::InvalidInput.into());
             }
             self.insert(path);
-        }
-        for path in paths {
-            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-                return Err(io::ErrorKind::InvalidInput.into());
-            };
-            let mut absent = None;
-            let mapped = walk_parent(
+            let path = normalize(path);
+            let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?.to_owned();
+            let leaf = path
+                .file_name()
+                .ok_or(io::ErrorKind::InvalidInput)?
+                .to_owned();
+            planned.push(Planned {
+                path,
                 parent,
-                |part, directory| {
-                    if !within_budget() || !self.allows_child(part, directory) {
-                        return false;
-                    }
-                    if let Some(directory) = directory {
-                        let Ok(visited) = edge(directory, part) else {
-                            return false;
-                        };
-                        traversed.borrow_mut().push(visited);
-                    }
-                    true
-                },
-                |part, directory| {
-                    absent = Some(edge(directory, part));
-                },
-            );
-            match mapped {
-                Ok(entry) => {
-                    let directory = entry.directory.ok_or(io::ErrorKind::NotADirectory)?;
-                    let physical = entry.path.join(name);
-                    let protected = edge(&directory, &physical)?;
-                    // An overlap exposed by a later mapping invalidates the
-                    // setup even when its alias was unknown during traversal.
-                    if traversed
-                        .borrow()
-                        .iter()
-                        .any(|(id, name)| protected.0 == *id && same_name(&protected.1, name))
-                    {
-                        return Err(io::ErrorKind::PermissionDenied.into());
-                    }
-                    self.edges.push(protected);
-                    self.insert(&physical);
+                leaf,
+                done: false,
+            });
+        }
+        loop {
+            let Some(index) = (0..planned.len()).find(|&index| {
+                !planned[index].done && parent_walk_is_safe(&planned[index], &planned)
+            }) else {
+                // No remaining root can be walked without entering a leaf whose
+                // parent identity is still unknown.
+                if planned.iter().any(|root| !root.done) {
+                    return Err(io::ErrorKind::PermissionDenied.into());
                 }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    // Keep the first absent component closed for this scan if
-                    // another process creates it after the guarded lookup.
-                    missing_edges.push(absent.ok_or(error)??);
-                }
-                Err(error) => return Err(error),
-            }
+                break;
+            };
+            self.map_configured(&planned, index, &mut missing_edges, &within_budget)?;
+            planned[index].done = true;
         }
         self.edges.extend(missing_edges);
         Ok(())
+    }
+
+    fn map_configured(
+        &mut self,
+        planned: &[Planned],
+        index: usize,
+        missing_edges: &mut Vec<((u64, u64), OsString)>,
+        within_budget: &impl Fn() -> bool,
+    ) -> io::Result<()> {
+        let parent = planned[index].parent.clone();
+        let name = planned[index].leaf.clone();
+        let mut absent = None;
+        let mapped = walk_parent(
+            &parent,
+            |part, directory| {
+                within_budget()
+                    && self.allows_child(part, directory)
+                    && !blocks_unresolved_leaf(part, planned)
+            },
+            |part, directory| {
+                absent = Some(edge(directory, part));
+            },
+        );
+        match mapped {
+            Ok(entry) => {
+                let directory = entry.directory.ok_or(io::ErrorKind::NotADirectory)?;
+                let physical = entry.path.join(name);
+                self.edges.push(edge(&directory, &physical)?);
+                self.insert(&physical);
+                Ok(())
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // Keep the first absent component closed for this scan if
+                // another process creates it after the guarded lookup.
+                missing_edges.push(absent.ok_or(error)??);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn allows_child(&self, path: &Path, parent: Option<&File>) -> bool {
@@ -200,20 +223,49 @@ fn comparable(path: &Path) -> PathBuf {
 }
 
 fn same_name(a: &OsStr, b: &OsStr) -> bool {
-    if a == b {
-        return true;
+    #[cfg(not(target_os = "macos"))]
+    {
+        a == b
     }
     #[cfg(target_os = "macos")]
     {
-        let (a, b) = (a.as_bytes(), b.as_bytes());
-        if a.is_ascii() && b.is_ascii() {
-            a.eq_ignore_ascii_case(b)
-        } else {
-            macos_name_eq(a, b)
+        a == b || {
+            let (a, b) = (a.as_bytes(), b.as_bytes());
+            if a.is_ascii() && b.is_ascii() {
+                a.eq_ignore_ascii_case(b)
+            } else {
+                macos_name_eq(a, b)
+            }
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    false
+}
+
+fn parent_walk_is_safe(root: &Planned, planned: &[Planned]) -> bool {
+    let mut walked = PathBuf::new();
+    for component in root.parent.components() {
+        walked.push(component);
+        if blocks_unresolved_leaf(&walked, planned) {
+            return false;
+        }
+    }
+    true
+}
+
+/// A same-basename component whose configured parent is not resolved yet.
+/// Strict ancestors are ordinary prefixes (`…/claude/…/claude`); every other
+/// match can be an alias of the protected leaf, so the walk must not enter it.
+fn blocks_unresolved_leaf(part: &Path, planned: &[Planned]) -> bool {
+    let Some(name) = part.file_name() else {
+        return false;
+    };
+    let part = comparable(part);
+    planned.iter().any(|root| {
+        if root.done || !same_name(name, &root.leaf) {
+            return false;
+        }
+        let root_path = comparable(&root.path);
+        part == root_path || !root_path.starts_with(&part)
+    })
 }
 
 #[cfg(target_os = "macos")]
