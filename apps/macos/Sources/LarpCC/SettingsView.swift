@@ -82,7 +82,7 @@ struct SettingsView: View {
                 .toolbar { toolbar }
                 .safeAreaInset(edge: .bottom, spacing: 0) { messageBar }
         }
-        .task { store.startRefresh(); store.scheduleLiveRefresh() }
+        .task { store.startRefresh() }
         .confirmationDialog("Stop this change?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("Stop", role: .destructive) { store.cancel() }
             Button("Keep Waiting", role: .cancel) {}

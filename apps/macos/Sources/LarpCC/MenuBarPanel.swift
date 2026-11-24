@@ -217,7 +217,11 @@ struct MenuBarPanel: View {
             expandedID = nil
             launchFeedback = nil
             hasKeyboardFocus = true
+            store.setUsageView(.menuBar, visible: true)
             store.menuBarPanelOpened()
+        }
+        .onDisappear {
+            if !isSnapshot { store.setUsageView(.menuBar, visible: false) }
         }
         // A selection or an open card whose row has gone (list emptied, profile switched off) is dropped.
         .onChange(of: items) { _, items in
@@ -240,7 +244,7 @@ struct MenuBarPanel: View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("LarpCC").font(.system(size: 13, weight: .bold))
-                Text(statusLine).foregroundStyle(.secondary)
+                Text(statusLine).foregroundStyle(MenuBarInk.supportingInk)
             }
             Spacer(minLength: 8)
             if store.usageLoading || store.busy {
@@ -666,7 +670,7 @@ private struct MenuBarProfileSummary: View {
                     ProfileRing(provider: profile.provider, session: report?.fiveHour)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.name).font(.system(size: 13)).lineLimit(1)
-                        Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                        Text(subtitle).font(.system(size: 11)).foregroundStyle(MenuBarInk.supportingInk).monospacedDigit()
                     }
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.down")
@@ -694,7 +698,7 @@ private struct MenuBarProfileSummary: View {
             CardRow {
                 Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(MenuBarInk.supportingInk)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -720,7 +724,7 @@ private struct MenuBarProfileSummary: View {
     private func meterRow(_ kind: UsageWindowKind, _ window: UsageWindow) -> some View {
         let level = UsageLevel(leftPercent: window.leftPercent)
         return GridRow {
-            Text(kind.title).foregroundStyle(.secondary)
+            Text(kind.title).foregroundStyle(MenuBarInk.supportingInk)
             UsageMeter(leftPercent: window.leftPercent, level: level)
             Text("\(Int(window.leftPercent.rounded()))%")
                 .fontWeight(.semibold)
@@ -729,7 +733,7 @@ private struct MenuBarProfileSummary: View {
             // Fixed widths keep every card's meter the same length.
             Label(resetText(window), systemImage: "clock")
                 .labelStyle(ResetLabelStyle())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(MenuBarInk.supportingInk)
                 .frame(width: 58, alignment: .trailing)
         }
         .monospacedDigit()
@@ -859,16 +863,16 @@ private extension UsageLevel {
     }
 
     /// For the percentage text, which needs more contrast than the meter and ring.
-    var textTint: Color? { self == .critical ? criticalTextRed : tint }
+    var textTint: Color? {
+        switch self {
+        case .normal: return nil
+        case .low: return MenuBarInk.warningInk
+        case .critical: return MenuBarInk.criticalInk
+        }
+    }
 }
 
-/// The system red in dark mode. In light mode the system red is too pale on the white
-/// cards, so text uses a deeper red (4.5:1 or better) and the meter and ring a slightly
-/// deeper one (3:1 or better, also on a selected card).
-private let criticalTextRed = Color(nsColor: NSColor(name: nil) { appearance in
-    isDark(appearance) ? NSColor(srgbRed: 1, green: 0.49, blue: 0.47, alpha: 1)
-                       : NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)
-})
+/// Meter and ring red, with a deeper shade on light cards.
 private let criticalGraphicRed = Color(nsColor: NSColor(name: nil) { appearance in
     isDark(appearance) ? .systemRed : NSColor(srgbRed: 0.843, green: 0, blue: 0.082, alpha: 1)
 })
