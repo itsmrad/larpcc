@@ -96,6 +96,15 @@ impl Registry {
         expected_id: Option<u64>,
         prepare: impl FnOnce(&Value) -> Result<T, Error>,
     ) -> Result<(Value, T), Error> {
+        self.with_status_profile_metadata(name, expected_id, |metadata, _| prepare(metadata))
+    }
+
+    pub(crate) fn with_status_profile_metadata<T>(
+        &self,
+        name: &super::ProfileName,
+        expected_id: Option<u64>,
+        prepare: impl FnOnce(&Value, &super::Profile) -> Result<T, Error>,
+    ) -> Result<(Value, T), Error> {
         let _ancestors = crate::platform::anchor(self.root())?.ancestors;
         let (data, _lock) = store::snapshot(self.root(), self.expected)?;
         self.observed.set(Some(data.revision));
@@ -116,7 +125,7 @@ impl Registry {
             None => "unbound",
         };
         let metadata = json!({"profile":profile,"detected_versions":[{"provider":p.provider,"surface":"cli","binding":binding(cli.map(|b| b.executable.as_path()),None,state)}],"native_auth":"not_observed","native_rows":[],"diagnostics":[]});
-        let prepared = prepare(&metadata)?;
+        let prepared = prepare(&metadata, p)?;
         Ok((metadata, prepared))
     }
 }

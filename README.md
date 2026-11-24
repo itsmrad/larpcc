@@ -123,6 +123,11 @@ macOS. Keep older Larp binaries and native sessions stopped while migrating.
 Windows refuses legacy profile-tree moves. See the stage 04 contract for
 [migration recovery](docs/stages/04-layout-and-delete.md#v2-migration-transaction).
 
+On Windows, `larp cc usage` and usage settings changes, including
+`profile plan-label`, exit 2 with `unsupported` before opening files.
+`larp cc settings usage` shows LOCAL mode with no profile data. Account
+status reports `usage: null`. See the [Stage 11 usage contract](docs/stages/11-usage.md).
+
 Explicit skill packages can be shared with all active CLI profiles:
 
 ```sh

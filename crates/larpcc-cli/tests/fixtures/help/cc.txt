@@ -3,6 +3,8 @@ Manage Claude Code and Codex profiles
 Usage: larp cc [OPTIONS] <COMMAND>
 
 Commands:
+  usage     Read LOCAL usage for one or all active profiles
+  settings  Read or change usage settings
   app       Bind or open a verified desktop app (ChatGPT on macOS; Claude closed)
   skills    Manage explicit skill packages and per-profile sharing
   mcp       Manage reference-only MCP definitions and per-profile switches

@@ -2,10 +2,10 @@
 
 #[cfg(unix)]
 mod unix;
-#[cfg(unix)]
-pub(crate) use unix::Profiles;
 #[cfg(all(test, unix))]
 pub(crate) use unix::before_unlink;
+#[cfg(unix)]
+pub(crate) use unix::{Entries, Profiles, same_mount};
 
 #[cfg(windows)]
 mod windows;

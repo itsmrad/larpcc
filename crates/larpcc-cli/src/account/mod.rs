@@ -3,7 +3,10 @@ mod parser;
 
 use crate::{
     launch::admission::{self, Admitted, ArtifactRow, Operation},
-    registry::{Error, ProfileName, Registry},
+    registry::{
+        Error, ProfileName, Registry,
+        usage::data::{clock, graph},
+    },
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -75,6 +78,8 @@ pub(crate) struct Summary {
     metadata: Value,
     account: Account,
     version: Option<&'static str>,
+    usage: Option<Value>,
+    read_clock: i64,
 }
 
 impl Summary {
@@ -84,7 +89,7 @@ impl Summary {
             "profile": metadata["profile"].take(),
             "provider_version": self.version,
             "account": self.account.json(),
-            "usage": null,
+            "usage": self.usage,
             "diagnostics": metadata["diagnostics"].take(),
         })
     }
@@ -95,8 +100,9 @@ impl Summary {
         let provider = profile["provider"].as_str().unwrap_or_default();
         let version = self.version.unwrap_or("version unknown");
         format!(
-            "{name} ({provider} {version})\n{}\nusage: not available\n",
-            self.account.human()
+            "{name} ({provider} {version})\n{}\n{}",
+            self.account.human(),
+            graph::status_graph(self.usage.as_ref(), self.read_clock),
         )
     }
 }
@@ -191,14 +197,24 @@ pub(crate) fn status(
     json: bool,
     rows: &[StatusRow],
 ) -> Result<Summary, Error> {
+    let read_clock = clock::now();
     let artifacts: Vec<_> = rows.iter().map(|row| row.artifact.clone()).collect();
-    let (metadata, prepared) = registry.with_status_metadata(name, expected_id, |metadata| {
-        prepare(registry, name, metadata, rows, &artifacts)
-    })?;
-    finish(metadata, prepared, json)
+    let (metadata, (prepared, usage)) =
+        registry.with_status_profile_metadata(name, expected_id, |metadata, profile| {
+            let prepared = prepare(registry, name, metadata, rows, &artifacts)?;
+            let usage = registry.local_usage_row(profile, read_clock).ok().flatten();
+            Ok((prepared, usage))
+        })?;
+    finish(metadata, prepared, json, usage, read_clock)
 }
 
-fn finish(metadata: Value, prepared: Prepared<'_>, json: bool) -> Result<Summary, Error> {
+fn finish(
+    metadata: Value,
+    prepared: Prepared<'_>,
+    json: bool,
+    usage: Option<Value>,
+    read_clock: i64,
+) -> Result<Summary, Error> {
     let (admitted, row) = match prepared {
         Prepared::Observe(admitted, row) => (admitted, row),
         Prepared::Complete(account) => {
@@ -206,6 +222,8 @@ fn finish(metadata: Value, prepared: Prepared<'_>, json: bool) -> Result<Summary
                 metadata,
                 account,
                 version: None,
+                usage,
+                read_clock,
             });
         }
     };
@@ -246,6 +264,8 @@ fn finish(metadata: Value, prepared: Prepared<'_>, json: bool) -> Result<Summary
         metadata,
         account,
         version,
+        usage,
+        read_clock,
     })
 }
 

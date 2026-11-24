@@ -6,6 +6,15 @@ use std::{fmt, io, path::PathBuf};
     reason = "The shared catalog includes synthetic-only and OS-specific errors, never reachable from ordinary run."
 )]
 pub enum Error {
+    UsagePlanLabel,
+    UsageUnsupported,
+    StatuslineExists,
+    StatuslineUnverifiable,
+    LiveDisabled,
+    UsageMode,
+    UsageInterval,
+    UsageRemoteUnsupported,
+    UsageConfirmation,
     Conflict,
     Drift,
     SkillNotFound,
@@ -105,6 +114,23 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::LiveDisabled => f.write_str("LIVE usage is unavailable in this build"),
+            Self::UsagePlanLabel => f.write_str("provide a valid plan label or --clear"),
+            Self::UsageUnsupported => f.write_str("only Claude supports statusLine capture"),
+            Self::StatuslineExists => f.write_str("this profile already has its own statusLine"),
+            Self::StatuslineUnverifiable => {
+                f.write_str("could not confirm that this profile has no statusLine")
+            }
+            Self::UsageMode => f.write_str("inherit requires --profile"),
+            Self::UsageInterval => {
+                f.write_str("the refresh interval must be off or 300–86400 seconds")
+            }
+            Self::UsageRemoteUnsupported => {
+                f.write_str("this usage operation is unavailable on remote requests")
+            }
+            Self::UsageConfirmation => {
+                f.write_str("enabling LIVE usage requires --acknowledge-risk")
+            }
             Self::InvalidVersionLabel => {
                 f.write_str("recorded version label is invalid or exceeds 128 bytes")
             }
