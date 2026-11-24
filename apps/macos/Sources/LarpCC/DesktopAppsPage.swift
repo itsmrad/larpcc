@@ -25,6 +25,7 @@ struct DesktopAppsPage: View {
                 if snapshot.profiles.isEmpty {
                     UnavailablePane(title: "No profiles yet", symbol: "person.crop.circle.badge.plus",
                                     message: "Create a profile to give its desktop app a separate data folder.")
+                        .foregroundStyle(SettingsTypography.supportingInk, SettingsTypography.supportingInk)
                     Button("New Profile…") { store.sheet = .addProfile }
                 }
                 ForEach(snapshot.profiles) { profile in
