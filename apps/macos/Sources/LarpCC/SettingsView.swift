@@ -384,11 +384,40 @@ private struct ProfileSidebarRow: View {
                 .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
             Spacer(minLength: SettingsSpacing.tight)
             UsageHint(report: usage)
-            if profile.readiness != .off {
-                StatusDot(color: profile.readiness.color)
-            }
+            SidebarReadiness(readiness: profile.readiness)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct SidebarReadiness: View {
+    let readiness: Readiness
+    @Environment(\.backgroundProminence) private var prominence
+
+    private var symbol: String {
+        switch readiness {
+        case .ready: return "checkmark.circle"
+        case .attention: return "exclamationmark.triangle"
+        case .off: return "minus.circle"
+        }
+    }
+
+    private var ink: Color {
+        if prominence == .increased { return .white }
+        switch readiness {
+        case .ready: return SettingsTypography.successInk
+        case .attention: return SettingsTypography.warningInk
+        case .off: return SettingsTypography.supportingInk
+        }
+    }
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(SettingsTypography.caption.weight(.semibold))
+            .foregroundStyle(ink)
+            .frame(width: 14)
+            .help(readiness.title)
+            .accessibilityHidden(true)
     }
 }
 
@@ -396,7 +425,6 @@ private struct ProfileSidebarRow: View {
 private struct UsageHint: View {
     let report: UsageReport?
     @Environment(\.backgroundProminence) private var prominence
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         if let left = report?.lowestLeftPercent, left < 25 {
@@ -411,10 +439,7 @@ private struct UsageHint: View {
 
     private func ink(critical: Bool) -> Color {
         if prominence == .increased { return .white }
-        if colorScheme == .dark {
-            return critical ? Color(red: 1, green: 0.62, blue: 0.61) : Color(red: 1, green: 0.73, blue: 0.45)
-        }
-        return critical ? Color(red: 0.65, green: 0.10, blue: 0.12) : Color(red: 0.54, green: 0.30, blue: 0.06)
+        return critical ? SettingsTypography.criticalInk : SettingsTypography.warningInk
     }
 }
 

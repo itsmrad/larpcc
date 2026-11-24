@@ -18,6 +18,19 @@ enum SettingsTypography {
     static let body: Font = .body
     static let supporting: Font = .callout
     static let caption: Font = .caption
+
+    /// Secondary text on a Settings surface in either appearance.
+    static let supportingInk = adaptiveInk(light: (0.35, 0.35, 0.35), dark: (0.76, 0.76, 0.76))
+    static let criticalInk = adaptiveInk(light: (0.65, 0.10, 0.12), dark: (1, 0.62, 0.61))
+    static let warningInk = adaptiveInk(light: (0.54, 0.30, 0.06), dark: (1, 0.73, 0.45))
+    static let successInk = adaptiveInk(light: (0.13, 0.40, 0.23), dark: (0.47, 0.83, 0.56))
+
+    private static func adaptiveInk(light: (CGFloat, CGFloat, CGFloat), dark: (CGFloat, CGFloat, CGFloat)) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let (red, green, blue) = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+        })
+    }
 }
 
 /// The few values that differ between themes. Views read these instead of branching on the theme.
@@ -129,6 +142,16 @@ extension View {
     func settingsAnimation<Value: Equatable>(value: Value) -> some View {
         modifier(SettingsAnimation(value: value))
     }
+
+    /// Disables a control when a reason is present. Keep important reasons visible nearby too.
+    /// The surrounding view carries the tooltip so the disabled control can still be explained.
+    func disabledReason(_ reason: String?) -> some View {
+        ZStack {
+            self.disabled(reason != nil)
+                .accessibilityHint(reason ?? "")
+        }
+        .help(reason ?? "")
+    }
 }
 
 private struct SettingsAnimation<Value: Equatable>: ViewModifier {
@@ -213,7 +236,7 @@ private struct ClassicFormStyle: FormStyle {
                         if !section.footer.isEmpty {
                             VStack(alignment: .leading, spacing: SettingsSpacing.tight) { section.footer }
                                 .font(SettingsTypography.supporting)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(SettingsTypography.supportingInk)
                                 .padding(.horizontal, tokens.formRowInset)
                         }
                     }
@@ -238,7 +261,7 @@ private struct FormRowLabel<Label: View>: View {
                     if index == 0 {
                         part
                     } else {
-                        part.font(SettingsTypography.supporting).foregroundStyle(.secondary)
+                        part.font(SettingsTypography.supporting).foregroundStyle(SettingsTypography.supportingInk)
                     }
                 }
             }
@@ -267,6 +290,7 @@ private struct ClassicToggleStyle: ToggleStyle {
             Toggle(isOn: configuration.$isOn) { configuration.label }
                 .labelsHidden()
                 .toggleStyle(.switch)
+                .controlSize(.small)
         }
     }
 }

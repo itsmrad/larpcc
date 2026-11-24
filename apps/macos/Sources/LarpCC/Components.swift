@@ -120,13 +120,6 @@ struct DesktopAppIcon: View {
 }
 
 extension Readiness {
-    var color: Color {
-        switch self {
-        case .ready: return .green
-        case .attention: return .yellow
-        case .off: return .secondary
-        }
-    }
     var title: String {
         switch self {
         case .ready: return "Configured"
@@ -207,7 +200,7 @@ struct RowLabel<Icon: View>: View {
         Label {
             Text(title)
             if let subtitle, !subtitle.isEmpty {
-                Text(subtitle)
+                Text(subtitle).foregroundStyle(SettingsTypography.supportingInk)
             }
         } icon: {
             icon
