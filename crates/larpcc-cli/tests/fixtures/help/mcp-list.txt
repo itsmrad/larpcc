@@ -1,0 +1,8 @@
+List definitions by reference name only
+
+Usage: larp cc mcp list [OPTIONS]
+
+Options:
+      --json                                   Emit one local metadata JSON envelope
+      --expected-revision <EXPECTED_REVISION>  Refuse if the registry revision has changed
+  -h, --help                                   Print help
