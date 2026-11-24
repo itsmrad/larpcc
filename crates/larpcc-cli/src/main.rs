@@ -8,9 +8,20 @@ mod platform;
 mod provider;
 mod registry;
 mod share;
+#[cfg(windows)]
 fn main() -> std::process::ExitCode {
-    #[cfg(windows)]
-    platform::pin_startup_image();
+    cli::start_windows(std::env::args_os(), std::env::current_exe, || {
+        platform::pin_startup_image();
+        run()
+    })
+}
+
+#[cfg(not(windows))]
+fn main() -> std::process::ExitCode {
+    run()
+}
+
+fn run() -> std::process::ExitCode {
     // argv[0] classification precedes every parser and early gate.
     if let Some(code) = cli::gate() {
         return code;

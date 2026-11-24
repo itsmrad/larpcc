@@ -211,6 +211,8 @@ public enum ClientError: Error, LocalizedError, Sendable, Equatable {
 public protocol LarpClient: Sendable {
     func snapshot() async throws -> Snapshot
     func perform(_ action: LarpAction) async throws -> String
+    /// Usage limits keyed by profile ID; profiles with no data are absent.
+    func usage(source: UsageSource) async throws -> [String: UsageReport]
 }
 
 // Sample mode has no filesystem, process, provider or network access.

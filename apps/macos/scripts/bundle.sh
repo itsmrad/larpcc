@@ -7,8 +7,12 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 # SwiftPM records the deployment target as the SDK version, which makes macOS
 # draw the app in its compatibility style. Record the real SDK instead.
+if ! sdk_version="$(xcrun --show-sdk-version)" || [[ -z "$sdk_version" ]]; then
+  echo 'Could not determine the macOS SDK version.' >&2
+  exit 1
+fi
 swift build -c release --product LarpCC \
-  -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$(xcrun --show-sdk-version)"
+  -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$sdk_version"
 bin_dir="$(swift build -c release --show-bin-path)"
 # Only create/replace the executable and metadata inside this package's output.
 app='dist/LarpCC.app'

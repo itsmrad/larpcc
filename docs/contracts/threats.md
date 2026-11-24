@@ -50,6 +50,22 @@ Standard 8-4-4-4-12 hex GUIDs and lowercase hex and Nix base32 hashes can be use
 in command paths. The finite shape list leaves other secret formats possible,
 so callers must provide only known non-secret paths.
 
+## Provider executable ancestry (D41)
+
+The macOS executable validator trusts group-write on existing provider executable
+ancestor directories owned by root or the current effective user with gid 80
+(`admin`) and no other-write bit. This supports the stock Homebrew layout,
+including symlinks from `bin` into `Caskroom`. Members of `admin` can already use
+`sudo` to become root, which is already a trusted owner. The validator still
+rejects group/other write on executable files and extended allow ACEs on
+executable files and ancestry. Managed paths and package sources keep their
+strict checks.
+
+Stage 3's SHA-256 checked-handle admission pins the exact executable bytes for
+every account operation. Admission refuses if a replacement in `Caskroom`
+changes those bytes. A plain `run` without admission before qualification rows
+exist still trusts `admin` members to the same extent as root.
+
 ## Usage (stage 11, D14)
 
 Scope: [stage 11](../stages/11-usage.md). The user accepted LIVE's ban risk

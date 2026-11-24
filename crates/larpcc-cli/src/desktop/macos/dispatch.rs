@@ -344,9 +344,9 @@ fn launch(
         .stderr(Stdio::null());
     // System executable validation is separate from the retained vendor target.
     let (_, open_identity) =
-        platform::executable(Path::new("/usr/bin/open"), &target.snapshot.root.path)?;
+        platform::system_executable(Path::new("/usr/bin/open"), &target.snapshot.root.path)?;
     let (resolved, current_identity) =
-        platform::executable(Path::new("/usr/bin/open"), &target.snapshot.root.path)?;
+        platform::system_executable(Path::new("/usr/bin/open"), &target.snapshot.root.path)?;
     if open_identity != current_identity {
         return Err(Error::AdmissionChanged);
     }

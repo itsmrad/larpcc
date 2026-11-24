@@ -22,6 +22,15 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - if: runner.os == 'macOS'
+        name: Check local macOS installer
+        shell: bash
+        run: |
+          bash -n scripts/install-macos.sh
+          ./scripts/install-macos.sh --help
+          ./scripts/install-macos.sh --dry-run
+          runner_temp=$(cd -P -- "$RUNNER_TEMP" && pwd -P)
+          ./scripts/install-macos.sh --prefix "$runner_temp/custom bin" --dry-run
       - run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
       - if: runner.os != 'Windows'
         run: python crates/larpcc-cli/tests/support/prepare_parent.py
@@ -85,6 +94,9 @@ jobs:
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
         env:
           LARPCC_STAGE_FILTER: stage08_
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
+        env:
+          LARPCC_STAGE_FILTER: stage11_
       - if: runner.os == 'Windows'
         run: |
           cargo +stable test --bin larp --locked platform::windows::tests::w01_w03_existing_security_refuses_without_changing_contents_or_acl -- --exact --nocapture 2>&1 | Tee-Object -Variable cleanupEvidence
@@ -163,6 +175,9 @@ jobs:
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
         env:
           LARPCC_STAGE_FILTER: stage08_
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
+        env:
+          LARPCC_STAGE_FILTER: stage11_
       - run: cargo +1.89 test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
       - run: python crates/larpcc-cli/tests/support/stage14_check.py +1.89
         env:

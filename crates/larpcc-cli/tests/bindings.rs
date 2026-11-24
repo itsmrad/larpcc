@@ -3,6 +3,103 @@ use common::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::{fs, process::Stdio};
+
+#[cfg(target_os = "macos")]
+#[test]
+fn d41_admin_write_is_limited_to_provider_executable_ancestry() {
+    use std::{
+        os::unix::fs::{MetadataExt, chown, symlink},
+        path::Path,
+        process::Command,
+    };
+
+    let groups = Command::new("/usr/bin/id").arg("-G").output().unwrap();
+    assert!(groups.status.success(), "id -G failed: {}", stderr(&groups));
+    let groups = stdout(&groups);
+    let groups: Vec<u32> = groups
+        .split_whitespace()
+        .map(|gid| gid.parse().unwrap())
+        .collect();
+    assert!(
+        groups.contains(&80),
+        "D41 requires membership in admin (gid 80); id -G: {groups:?}"
+    );
+    let non_admin = groups
+        .iter()
+        .copied()
+        .find(|&gid| gid != 80)
+        .expect("D41 needs a non-admin group for the refusal fixture");
+    let set_mode = |path: &Path, gid, mode| {
+        chown(path, None, Some(gid))
+            .unwrap_or_else(|error| panic!("D41 could not set gid {gid} on {path:?}: {error}"));
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        let meta = fs::symlink_metadata(path).unwrap();
+        assert_eq!(meta.gid(), gid);
+        assert_eq!(meta.mode() & 0o7777, mode);
+    };
+
+    let mut f = Fixture::new();
+    let bin = f.temp.path().join("bin");
+    let cask = f.temp.path().join("Caskroom");
+    let native = cask.join("native");
+    let link = bin.join("provider");
+    let directory_link = bin.join("cask");
+    for dir in [&bin, &cask] {
+        create_directory(dir);
+        set_mode(dir, 80, 0o775);
+    }
+    create_file(&native, &[0xcf, 0xfa, 0xed, 0xfe]);
+    set_mode(&native, 80, 0o755);
+    symlink("../Caskroom/native", &link).unwrap();
+    symlink("../Caskroom", &directory_link).unwrap();
+
+    let bind = |path: &Path, code| {
+        f.run(
+            &[
+                "cc",
+                "provider",
+                "bind",
+                "claude",
+                path.to_str().unwrap(),
+                "--replace",
+            ],
+            code,
+        )
+    };
+    bind(&native, 0);
+    bind(&link, 0);
+    bind(&directory_link.join("native"), 0);
+
+    set_mode(&bin, non_admin, 0o775);
+    assert!(stderr(&bind(&link, 1)).contains("has a foreign-writable ancestor"));
+    set_mode(&bin, 80, 0o775);
+    set_mode(&cask, 80, 0o1777);
+    assert!(stderr(&bind(&link, 1)).contains("has a foreign-writable ancestor"));
+    set_mode(&cask, 80, 0o775);
+    set_mode(&native, 80, 0o775);
+    assert!(stderr(&bind(&link, 1)).contains("is writable by group or other users"));
+    set_mode(&native, 80, 0o755);
+
+    let grant = Command::new("/bin/chmod")
+        .args(["+a", "everyone allow list"])
+        .arg(&cask)
+        .output()
+        .unwrap();
+    assert!(grant.status.success(), "{}", stderr(&grant));
+    assert!(stderr(&bind(&link, 1)).contains("has an extended ACL that grants access"));
+    let clear = Command::new("/bin/chmod")
+        .arg("-N")
+        .arg(&cask)
+        .output()
+        .unwrap();
+    assert!(clear.status.success(), "{}", stderr(&clear));
+
+    set_mode(&f.root, 80, 0o770);
+    assert!(stderr(&f.profile(&["list"], 1)).contains("group and other access must be removed"));
+    f.root = cask.join("managed");
+    assert!(stderr(&f.profile(&["list"], 1)).contains("has a foreign-writable ancestor"));
+}
+
 #[test]
 fn binders_serialize_and_noop_does_not_revalidate_or_increment() {
     let f = Fixture::new();
