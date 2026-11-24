@@ -11,11 +11,6 @@ fi
 out="${1:?usage: scripts/snapshots.sh <output dir>}"
 mkdir -p "$out" && out="$(cd "$out" && pwd)" || exit 1
 
-# Link like scripts/bundle.sh, or macOS draws the compatibility style (small window corners).
-swift build --product LarpCC \
-  -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$(xcrun --show-sdk-version)" || exit 1
-bin="$(swift build --show-bin-path)/LarpCC"
-
 os="$(sw_vers -productVersion)"
 os_major="${os%%.*}"
 themes=()
@@ -25,6 +20,15 @@ for theme in ${SNAPSHOT_THEMES:-tahoe sequoia sonoma}; do
   if [[ "$theme" == tahoe && "$os_major" -lt 26 ]]; then skipped+=" tahoe"; continue; fi
   themes+=("$theme")
 done
+if [[ -z "${themes[0]:-}" ]]; then
+  echo "No snapshot themes are available on macOS $os." >&2
+  exit 1
+fi
+
+# Link like scripts/bundle.sh, or macOS draws the compatibility style (small window corners).
+swift build --product LarpCC \
+  -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$(xcrun --show-sdk-version)" || exit 1
+bin="$(swift build --show-bin-path)/LarpCC"
 
 pages=(general mcp skills aliases desktop about)
 # Every profile in the sample data, so new sample profiles are picked up automatically.
@@ -38,15 +42,30 @@ done <<< "$profile_ids"
 
 log="$out/render.log"
 : > "$log"
+render_start="$(mktemp "$out/.render-start.XXXXXX")" || exit 1
+trap 'rm -f "$render_start"' EXIT
 failed=()
-# Runs the app with a time limit and records its stderr.
 render() {
   local name="$1"; shift
-  if perl -e 'alarm shift; exec @ARGV' 60 "$bin" -ApplePersistenceIgnoreState YES "$@" 2> >(sed "s|^|$name: |" >> "$log"); then
-    echo "ok   $name"
-  else
+  local arg path
+  local outputs=("$out/$name")
+  for arg in "$@"; do
+    if [[ "$arg" == --menubar-status-snapshot=* ]]; then outputs+=("${arg#*=}"); fi
+  done
+  rm -f "${outputs[@]}" && touch "$render_start" || exit 1
+  if ! perl -e 'alarm shift; exec @ARGV' 60 "$bin" -ApplePersistenceIgnoreState YES "$@" 2> >(sed "s|^|$name: |" >> "$log"); then
     echo "FAIL $name"; failed+=("$name")
+    return
   fi
+  local valid=true
+  for path in "${outputs[@]}"; do
+    if [[ ! -f "$path" || ! -s "$path" || ! "$path" -nt "$render_start" ]]; then
+      echo "FAIL ${path##*/}: missing, empty or stale"
+      failed+=("${path##*/}")
+      valid=false
+    fi
+  done
+  if "$valid"; then echo "ok   $name"; fi
 }
 
 for theme in "${themes[@]}"; do
@@ -69,6 +88,12 @@ for theme in "${themes[@]}"; do
   done
 done
 
+# Each theme has five panel variants per appearance and one combined status-item PNG.
+expected_count=$(( ${#themes[@]} * (2 * (${#pages[@]} + 5) + 1) ))
+shopt -s nullglob
+pngs=("$out"/*.png)
+actual_count=${#pngs[@]}
+count_summary="$actual_count of $expected_count expected PNGs"
 {
   echo '# LarpCC snapshots'
   echo
@@ -76,15 +101,18 @@ done
   echo "- Themes drawn on this macOS: ${themes[*]}${skipped:+ (skipped:$skipped, needs macOS 26)}"
   echo "- Settings capture: $(grep -o 'method=[a-z]*' "$log" | sort | uniq -c | awk '{printf "%s%s x%s", sep, $2, $1; sep=", "}')"
   echo "- Sample data only (FixtureLarpClient). Status item images hold a light bar above a dark bar."
+  echo "- $count_summary"
+  [[ "$actual_count" -ne "$expected_count" ]] && echo "- FAILED: snapshot count mismatch"
   [[ ${#failed[@]} -gt 0 ]] && echo "- FAILED: ${failed[*]} (see render.log)"
   echo
   echo '## Files'
   echo
-  (cd "$out" && ls -1 *.png 2>/dev/null) | sed 's/^/- /'
-} > "$out/index.md"
+  for path in ${pngs[@]+"${pngs[@]}"}; do echo "- ${path##*/}"; done
+} > "$out/index.md" || exit 1
 
-echo "$(ls -1 "$out"/*.png 2>/dev/null | wc -l | tr -d ' ') PNGs in $out"
+echo "$count_summary in $out"
 if [[ ${#failed[@]} -gt 0 ]]; then
   echo "Failed: ${failed[*]}" >&2
   exit 1
 fi
+[[ "$actual_count" -eq "$expected_count" ]]
