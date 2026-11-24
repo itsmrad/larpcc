@@ -113,20 +113,25 @@ Absolute symlinks, trailing slashes, `/var` versus `/private/var`, and two
 canonical paths for one directory (an APFS firmlink) cannot hide a match. If
 that target's identity cannot be established, because stat fails or it is not
 a directory, deletion is refused. Re-check process identity after that
-resolution, and only then clear a directory that is not the profile. A valid
+resolution, and only then clear a directory that is not the profile. The
+expected path's device and inode, or its absence, is recorded from that open.
+Before each scan attempt and before clearing, the pathname is stated again
+without reopening; appearance, disappearance, replacement, or a lookup error
+refuses deletion. A valid
 argument vector with no `--user-data-dir` clears the process. Skip a process
 that exits or whose PID is reused during the scan, and skip denied path
 lookups that have yet to identify a candidate.
 
 If the initial path lookup returns `ENOENT`, as can happen after a running
 executable is unlinked, read its bounded argument vector between process
-start-time probes. The stamp taken before that read, and the stamp taken after
-directory resolution, can show that the process exited or its PID was reused.
-`ESRCH` or missing arguments prove exit or reuse only when the probe after that
-read shows the process is gone or its PID was reused. A matching live stamp,
+start-time probes. The first probe can show that the process is already absent.
+It cannot show that the PID was reused; reuse is established by a follow-up
+probe, after the argument read or after directory resolution, whose start time
+differs. `ESRCH` or missing arguments prove the process is gone or the PID was
+reused only when the probe after that read shows it. A matching live stamp,
 including one with the exiting flag set, refuses deletion. On this fallback, an
-exiting process or unreadable arguments return terminal Busy and do not retry. A matching directory identity
-also refuses deletion. A valid argument vector with no `--user-data-dir`, or
+exiting process or unreadable arguments return terminal Busy and do not retry.
+A matching directory identity also refuses deletion. A valid argument vector with no `--user-data-dir`, or
 whose directory identity is not the profile and whose start time is still the
 same live process, clears the process. Other unresolved initial path errors,
 failed or oversized enumeration, and failed signature validation of a live

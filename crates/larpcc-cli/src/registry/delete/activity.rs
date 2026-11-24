@@ -105,6 +105,8 @@ trait ProcessTable {
     fn args(&self, pid: i32) -> Result<Option<Vec<u8>>, Error>;
     /// `follow` resolves the argv spelling. The expected directory is opened once and kept.
     fn profile_dir(&self, path: &[u8], follow: bool) -> Result<DirHit, ScanError>;
+    /// Pathname state only. Does not open a new descriptor.
+    fn stat_dir(&self, path: &[u8]) -> Result<Recorded, ScanError>;
 }
 
 #[cfg(any(test, target_os = "macos"))]
@@ -130,25 +132,81 @@ enum DirHit {
 }
 
 #[cfg(any(test, target_os = "macos"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recorded {
+    Absent,
+    Present(DirId),
+    #[cfg(not(unix))]
+    Unsupported,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone)]
 struct Expected {
     spellings: HashSet<Vec<u8>>,
     ids: HashSet<DirId>,
+    pinned: Vec<(Vec<u8>, Recorded)>,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+impl Expected {
+    fn recheck(&self, table: &impl ProcessTable) -> Result<(), ScanError> {
+        for (spelling, state) in &self.pinned {
+            if table.stat_dir(spelling)? != *state {
+                return Err(ScanError::Busy);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(any(test, target_os = "macos"))]
 fn pin_expected(
     table: &impl ProcessTable,
     spellings: HashSet<Vec<u8>>,
+    check_deadline: &impl Fn() -> Result<(), ScanError>,
 ) -> Result<(Expected, Vec<std::fs::File>), ScanError> {
     let mut ids = HashSet::new();
     let mut held = Vec::new();
+    let mut pinned = Vec::new();
     for spelling in &spellings {
-        if let DirHit::Found(found) = table.profile_dir(spelling, false)? {
-            ids.insert(found.id);
-            held.extend(found.file);
-        }
+        check_deadline()?;
+        let state = match table.profile_dir(spelling, false)? {
+            DirHit::Found(found) => {
+                ids.insert(found.id);
+                held.extend(found.file);
+                Recorded::Present(found.id)
+            }
+            DirHit::Absent => Recorded::Absent,
+            #[cfg(not(unix))]
+            DirHit::Unsupported => Recorded::Unsupported,
+        };
+        pinned.push((spelling.clone(), state));
     }
-    Ok((Expected { spellings, ids }, held))
+    Ok((
+        Expected {
+            spellings,
+            ids,
+            pinned,
+        },
+        held,
+    ))
+}
+
+#[cfg(all(unix, any(test, target_os = "macos")))]
+fn stat_dir_fs(path: &[u8]) -> Result<Recorded, ScanError> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let path = Path::new(std::ffi::OsStr::from_bytes(path));
+    match path.symlink_metadata() {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Recorded::Absent),
+        Err(_) => Err(ScanError::Busy),
+        Ok(meta) if meta.file_type().is_dir() => Ok(Recorded::Present(DirId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        })),
+        Ok(_) => Err(ScanError::Busy),
+    }
 }
 
 #[cfg(all(unix, any(test, target_os = "macos")))]
@@ -247,6 +305,7 @@ fn scan(
     uncertain: &mut HashMap<i32, Option<StartTime>>,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
+    expected.recheck(table)?;
     let previous = std::mem::take(uncertain);
     for pid in table.pids()? {
         check_deadline()?;
@@ -291,6 +350,7 @@ fn scan(
     if !uncertain.is_empty() {
         return Err(ScanError::CandidateUncertain);
     }
+    expected.recheck(table)?;
     Ok(())
 }
 
@@ -469,6 +529,7 @@ mod tests {
         args: Option<Vec<u8>>,
         expected: Option<Vec<u8>>,
         injected: HashMap<Vec<u8>, DirId>,
+        pinned: RefCell<Option<(Expected, Vec<std::fs::File>)>>,
         argv_missing: bool,
         reads: Cell<usize>,
         listings: Cell<usize>,
@@ -494,6 +555,7 @@ mod tests {
                 args: args.map(Vec::from),
                 expected: None,
                 injected: HashMap::new(),
+                pinned: RefCell::new(None),
                 argv_missing: false,
                 reads: Cell::new(0),
                 listings: Cell::new(0),
@@ -510,11 +572,15 @@ mod tests {
             uncertain: &mut HashMap<i32, Option<StartTime>>,
             deadline: impl Fn() -> Result<(), ScanError>,
         ) -> Result<(), ScanError> {
-            let spellings = HashSet::from([self
-                .expected
-                .clone()
-                .unwrap_or_else(|| TARGET.as_bytes().to_vec())]);
-            let (expected, _held) = pin_expected(self, spellings)?;
+            if self.pinned.borrow().is_none() {
+                let spellings = HashSet::from([self
+                    .expected
+                    .clone()
+                    .unwrap_or_else(|| TARGET.as_bytes().to_vec())]);
+                let pinned = pin_expected(self, spellings, &|| Ok(()))?;
+                *self.pinned.borrow_mut() = Some(pinned);
+            }
+            let expected = self.pinned.borrow().as_ref().unwrap().0.clone();
             scan(self, &expected, uncertain, deadline)
         }
     }
@@ -583,6 +649,24 @@ mod tests {
                 let _ = (path, follow);
                 // shortcut: non-unix tests compare the raw spelling; upgrade when delete scans processes there.
                 Ok(DirHit::Unsupported)
+            }
+        }
+
+        fn stat_dir(&self, path: &[u8]) -> Result<Recorded, ScanError> {
+            if !self.injected.is_empty() {
+                return Ok(match self.injected.get(path) {
+                    Some(id) => Recorded::Present(*id),
+                    None => Recorded::Absent,
+                });
+            }
+            #[cfg(unix)]
+            {
+                stat_dir_fs(path)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = path;
+                Ok(Recorded::Unsupported)
             }
         }
     }
@@ -1024,6 +1108,42 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn stage04_delete_expected_directory_drift_across_retry_stays_busy() {
+        for change in ["appear", "disappear", "replace"] {
+            let root = tempfile::tempdir().unwrap();
+            let desktop = root.path().join("desktop");
+            if change != "appear" {
+                std::fs::create_dir(&desktop).unwrap();
+            }
+            let table = Fixture {
+                expected: Some(path_bytes(&desktop)),
+                ..Fixture::candidate(&[], None)
+            };
+            table.stamps.borrow_mut().push_back(Some(Stamp {
+                start: (10, 0),
+                exiting: true,
+            }));
+            let result = retry_scan(
+                |uncertain| table.scan_with_history(uncertain, || Ok(())),
+                || match change {
+                    "appear" => std::fs::create_dir(&desktop).unwrap(),
+                    "disappear" => std::fs::remove_dir(&desktop).unwrap(),
+                    "replace" => {
+                        std::fs::remove_dir(&desktop).unwrap();
+                        std::fs::create_dir(&desktop).unwrap();
+                    }
+                    _ => unreachable!(),
+                },
+            );
+            assert!(
+                matches!(result, Err(Error::AuthBusy)),
+                "{change} returned {result:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn stage04_delete_non_directory_target_stays_busy() {
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("not-a-directory");
@@ -1126,8 +1246,8 @@ mod macos {
         for path in paths {
             spellings.insert(path.as_os_str().as_bytes().to_vec());
         }
-        // One open for the whole quiet check. The retry must not resolve these paths again.
-        let (expected, held) = pin_expected(&table, spellings).map_err(|_| Error::AuthBusy)?;
+        // Open once. Later attempts re-stat the pathname and do not replace these descriptors.
+        let mut pinned = None;
         let result = retry_scan(
             |uncertain| {
                 let deadline = Instant::now() + Duration::from_secs(2);
@@ -1138,12 +1258,19 @@ mod macos {
                         Ok(())
                     }
                 };
-                check_deadline()?;
-                scan(&table, &expected, uncertain, check_deadline)
+                if pinned.is_none() {
+                    pinned = Some(pin_expected(&table, spellings.clone(), &check_deadline)?);
+                }
+                scan(
+                    &table,
+                    &pinned.as_ref().unwrap().0,
+                    uncertain,
+                    check_deadline,
+                )
             },
             || std::thread::sleep(Duration::from_millis(150)),
         );
-        drop(held);
+        drop(pinned);
         result
     }
 
@@ -1274,6 +1401,10 @@ mod macos {
 
         fn profile_dir(&self, path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
             profile_dir_fs(path, follow)
+        }
+
+        fn stat_dir(&self, path: &[u8]) -> Result<Recorded, ScanError> {
+            stat_dir_fs(path)
         }
     }
 
