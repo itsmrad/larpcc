@@ -3,7 +3,19 @@
 Normative schema: [cli-v1.schema.json](cli-v1.schema.json), JSON Schema 2020-12.
 This is a planning contract, not shipped behavior. Import is **OUT OF SCOPE**;
 fresh profiles only. No account/auth output is captured, parsed or inferred. Only explicit bounded
-version text may be parsed by doctor --detect-versions (stage 08).
+version text may be parsed by doctor --detect-versions (stage 08). There are two bounded
+exceptions with distinct scopes:
+1. **Stage 11 usage (D14):** usage windows, reset times and reset-credit counts from the
+   allowlisted LOCAL records and the opt-in LIVE usage response in
+   [stage 11](../stages/11-usage.md). A plan appears only as the user-entered label, the
+   client-recorded LOCAL plan (D29) or the Codex LIVE response plan (D32), never from
+   credentials. Provider-derived plans are never stored; only the user-entered
+   `plan_label` persists (in `usage.json`). No native client output is read.
+2. **Stage 14 account summary (D25/D26):** `status.account` parses an admitted official
+   status run through the exact row's parser ([§Account summary](#account-summary)) and
+   extracts the sign-in state plus any explicitly reported email and plan (either may
+   be absent), shown and never stored.
+Outside these two, account identity and auth inference stay forbidden.
 SwiftUI later executes the installed CLI; no library extraction.
 
 ## Framing and compatibility
@@ -70,7 +82,10 @@ List order: profiles by ASCII name, aliases by ASCII name, MCP/skills by ASCII
 name, switches by numeric ID, detections by provider (`claude`,`codex`) then
 surface (`cli`,`desktop`), diagnostics by code then message. Matrix columns
 match profile name ordering; every row has exactly one boolean per column.
-Rows include disabled entries. No timestamps, PIDs or nondeterministic keys.
+Rows include disabled entries. No timestamps, PIDs or nondeterministic keys, except
+the stage 11 `usage` envelope's `generated_at`/`captured_at`/`resets_at`/`runs_out_at`
+and the row fields `captured_at`/`resets_at`/`runs_out_at` inside `status.account.usage`
+(`generated_at` belongs only to standalone `usage`).
 Secret references sort by kind then name. Schema constraints are structural;
 unique names/IDs, valid cross references, u64 range and matrix dimensions are
 semantic validation requirements. Serialized envelope maximum is 1 MiB;
@@ -130,6 +145,27 @@ values. Matrix row `enabled` is the effective explicit switch vector.
 See [examples](cli-v1.examples.json) for SwiftUI decoding fixtures including
 profile/provider/surfaces/desktop, alias, MCP, skills, matrices, status/doctor,
 mutation, parser failure and closed desktop dispatch.
+
+## Usage limits (stage 11, additive)
+
+Additive amendment, schema stays 1. Read envelopes `usage` and `settings.usage`;
+mutation receipts `settings.usage.live|mode|interval|claude-statusline` and
+`profile.plan-label`; new error codes `live_disabled`, `statusline_exists` and
+`statusline_unverifiable` (all exit 1). Each usage window carries its own
+`captured_at`; extra-window labels use a fixed Larp vocabulary and never carry
+provider bucket names; `settings.usage` reports `live.state`
+(`off|on|needs_acknowledgement`). Grammar, sources,
+reason codes, ordering, normalization and the pace formula are normative in
+[stage 11](../stages/11-usage.md); pace test vectors are in
+[usage-pace-vectors.json](usage-pace-vectors.json). `usage --live --json` is Larp's
+own bounded network request, not native IO, so it is not `json_native_io`;
+per-profile LIVE failures are row reasons in an `ok:true` envelope. Usage rows carry
+no tokens, account IDs, emails, spend, cost or token counts; `plan` is the user label
+(`user`), a client-recorded LOCAL plan (`client_local`) or the Codex LIVE plan
+(`live_endpoint`). `settings.usage.mode` carries the profile ID and
+name for a per-profile override and null/null installation-wide;
+`settings.usage.live|interval` carry null/null; `settings.usage.claude-statusline` and
+`profile.plan-label` carry the profile ID and name.
 
 ## Remote
 
@@ -281,8 +317,10 @@ A value outside those forms makes the parser return `unknown`. These values
 are display data, never stored by producer or consumer, and never a parsing
 API. `provider_version` is the admitted row's exact version, or the approved
 version-only probe's, or null. It is always null for `unavailable`.
-`usage` is null here. The stage 11 amendment widens it to that stage's local
-per-profile summary or null. `revision` is a non-null canonical decimal u64.
+`usage` is the selected profile's stage 11 LOCAL usage row (`usage_profile`,
+from the same reader as `usage PROFILE --local`, `mode:"local"`, never LIVE
+data or a `live_endpoint` plan), or null when that reader is unavailable. The
+stage 11 timestamp exception covers its `captured_at`/`resets_at`/`runs_out_at`. `revision` is a non-null canonical decimal u64.
 
 Exit codes: every completed observation, including `signed_out`, `unknown`,
 `not_qualified` and `unavailable`, exits 0 with one envelope and empty stderr.
