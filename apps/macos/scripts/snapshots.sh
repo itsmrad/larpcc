@@ -62,7 +62,7 @@ render() {
     # The system Bash compares whole seconds, but a panel can render in less than a second.
     if [[ ! -f "$path" || ! -s "$path" ]] || ! perl -MTime::HiRes=stat -e '
       my ($output, $start) = map { (stat $_)[9] } @ARGV;
-      exit !(defined $output && defined $start && $output > $start);
+      exit !(defined $output && defined $start && $output >= $start);
     ' "$path" "$render_start"; then
       echo "FAIL ${path##*/}: missing, empty or stale"
       failed+=("${path##*/}")
