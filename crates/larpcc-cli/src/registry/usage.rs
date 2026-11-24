@@ -369,7 +369,7 @@ impl Registry {
                 "state": if settings.live.enabled { "needs_acknowledgement" } else { "off" },
                 "enabled": settings.live.enabled,
                 "acknowledged_warning": settings.live.acknowledged_warning.filter(|&warning|
-                    warning < CURRENT_WARNING || (!settings.live.enabled && warning == CURRENT_WARNING)),
+                    !settings.live.enabled && warning <= CURRENT_WARNING),
                 "current_warning": CURRENT_WARNING,
                 "verified": false,
             },
