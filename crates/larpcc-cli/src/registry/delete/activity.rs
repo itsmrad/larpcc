@@ -215,8 +215,20 @@ fn scan_without_path(
     let Some(args) = args? else {
         return Ok(());
     };
-    if after.exiting || user_data_dir(&args)?.is_some_and(|dir| expected.contains(dir)) {
+    let dir = user_data_dir(&args)?;
+    if after.exiting || dir.is_some_and(|dir| expected.contains(dir)) {
         return Err(ScanError::Busy);
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(dir) = dir {
+        use std::os::unix::ffi::OsStrExt;
+        // A different spelling cannot establish that the directory is unrelated.
+        let resolved = Path::new(std::ffi::OsStr::from_bytes(dir))
+            .canonicalize()
+            .map_err(|_| ScanError::Busy)?;
+        if expected.contains(resolved.as_os_str().as_bytes()) {
+            return Err(ScanError::Busy);
+        }
     }
     Ok(())
 }
@@ -634,7 +646,7 @@ mod tests {
     #[test]
     fn stage04_delete_checks_argv_when_the_executable_path_is_missing() {
         let start = Some((10, 0));
-        let unrelated = b"--user-data-dir=/fixture/desktop-other\0".as_slice();
+        let unrelated = b"--unrelated\0".as_slice();
         let matching = b"--user-data-dir=/fixture/desktop\0".as_slice();
         for (args, after, argv_missing, expected) in [
             (Some(unrelated), start, false, Ok(())),

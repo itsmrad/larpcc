@@ -114,7 +114,10 @@ If the initial path lookup returns `ENOENT`, as can happen after a running
 executable is unlinked, read its bounded argument vector and compare the process
 start time before and after the read. Skip an exited or reused PID, including
 `ESRCH` from the argument lookup. A matching directory, unreadable or malformed
-arguments, or an inconclusive process identity refuses deletion. A valid
+arguments, or an inconclusive process identity refuses deletion. Before clearing
+a nonmatching absolute directory argument, resolve its filesystem spelling:
+symlinks, `/var` versus `/private/var`, and trailing slashes must not hide a
+profile match. An unresolvable directory argument refuses deletion. A valid
 argument vector without a matching directory clears the process. Other
 unresolved initial path errors, failed or oversized enumeration, and failed
 signature validation of a live candidate also refuse deletion.
