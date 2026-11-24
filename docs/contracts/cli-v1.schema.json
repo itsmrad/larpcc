@@ -1346,6 +1346,132 @@
         "profiles"
       ],
       "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "description": "Stage 08 bound-executable evidence. Read-only; nothing executed; no profile or account data.",
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "path": {
+          "type": "string"
+        },
+        "resolved_path": {
+          "type": "string"
+        },
+        "identity": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "unix"
+                },
+                "dev": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                },
+                "ino": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                }
+              },
+              "required": [
+                "kind",
+                "dev",
+                "ino"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "windows"
+                },
+                "volume": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,19})$"
+                },
+                "file_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{32}$"
+                }
+              },
+              "required": [
+                "kind",
+                "volume",
+                "file_id"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "owner_uid": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,9})$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-7]{4}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,19})$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "cdhash": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "os": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,32}$"
+        },
+        "arch": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,32}$"
+        }
+      },
+      "required": [
+        "provider",
+        "path",
+        "resolved_path",
+        "identity",
+        "owner_uid",
+        "mode",
+        "size",
+        "sha256",
+        "cdhash",
+        "os",
+        "arch"
+      ],
+      "additionalProperties": false
     }
   },
   "oneOf": [
@@ -1518,6 +1644,35 @@
             "bindings"
           ],
           "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "provider.evidence"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "data": {
+          "$ref": "#/$defs/evidence"
         }
       },
       "required": [
@@ -3378,6 +3533,7 @@
             "profile.show",
             "alias.list",
             "provider.list",
+            "provider.evidence",
             "mcp.list",
             "mcp.matrix",
             "skills.list",

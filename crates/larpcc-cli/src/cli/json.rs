@@ -114,6 +114,7 @@ fn failure_details(error: Error) -> (&'static str, &'static str, u8) {
         Error::NewerSchema { .. } => ("newer_schema", "Registry schema is unsupported.", 1),
         Error::Corrupt { .. } => ("corrupt", "Registry metadata is invalid.", 1),
         Error::InvalidExecutable { .. } => ("unsafe_path", "Provider executable is invalid.", 1),
+        Error::Unbound { .. } => ("not_found", "Provider is not bound.", 1),
         Error::Exhausted => ("exhausted", "Registry counters are exhausted.", 1),
         _ => (
             "unsafe_path",
@@ -153,6 +154,10 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         CcAction::Provider {
             command: ProviderAction::List,
         } => "provider.list",
+        CcAction::Provider {
+            command: ProviderAction::Evidence { .. },
+        } => "provider.evidence",
+        CcAction::Doctor { .. } => "doctor",
         CcAction::Provider { .. } => "provider.bind",
         CcAction::Profile { command } => match command {
             ProfileAction::Add { .. } => "profile.add",
@@ -223,6 +228,8 @@ pub(super) fn execute_json(action: CcAction, expected: Option<u64>) -> ExitCode 
         CcAction::Alias {command} => command.execute(&r),
         CcAction::Status { .. } => unreachable!(),
         CcAction::Provider {command:ProviderAction::List} => r.metadata_json(command,None),
+        CcAction::Provider {command:ProviderAction::Evidence {provider}} => crate::provider::evidence::collect(&r,provider).map(|e| e.json()),
+        CcAction::Doctor {profile,detect_versions} => super::doctor::data(&r,profile.as_ref(),detect_versions),
         CcAction::Provider {command:ProviderAction::Bind {provider,executable,replace}} => r.bind(provider,executable,replace).map(|outcome| json!({"changed":outcome != crate::registry::BindOutcome::Unchanged,"profile_id":null,"name":null,"warnings":[]})),
         CcAction::Profile {command: action} => match action {
             ProfileAction::List => r.metadata_json(command,None),
