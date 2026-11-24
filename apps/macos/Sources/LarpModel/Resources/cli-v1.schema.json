@@ -565,7 +565,15 @@
           "$ref": "#/$defs/account"
         },
         "usage": {
-          "type": "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/usage_profile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Stage 11 widening: the selected profile's LOCAL usage row from the same reader as `usage PROFILE --local`, or null. Never LIVE."
         },
         "diagnostics": {
           "type": "array",
@@ -614,7 +622,10 @@
             "remote_timeout",
             "remote_output",
             "remote_outcome_unknown",
-            "catalog_unavailable"
+            "catalog_unavailable",
+            "live_disabled",
+            "statusline_exists",
+            "statusline_unverifiable"
           ]
         },
         "message": {
@@ -777,6 +788,562 @@
         "profile_id",
         "name",
         "warnings"
+      ],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$",
+      "description": "RFC 3339 UTC, whole seconds, Z suffix. Stage 11 usage envelopes only."
+    },
+    "percent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Percent 0-100, at most one decimal place (semantic check)."
+    },
+    "usage_reason": {
+      "enum": [
+        "not_captured",
+        "not_reported",
+        "unsupported",
+        "unverified_version",
+        "reset_since_capture",
+        "reset_time_unknown",
+        "capture_not_installed",
+        "invalid_record",
+        "live_disabled",
+        "sign_in_again",
+        "live_unavailable"
+      ],
+      "description": "Why a window value is null. See docs/stages/11-usage.md."
+    },
+    "pace": {
+      "type": "object",
+      "properties": {
+        "elapsed_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "reserve_percent": {
+          "type": "number",
+          "minimum": -100,
+          "maximum": 100
+        },
+        "runs_out_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lasts_until_reset": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "elapsed_percent",
+        "reserve_percent",
+        "runs_out_at",
+        "lasts_until_reset"
+      ],
+      "additionalProperties": false,
+      "description": "Derived at T=captured_at with E=clamp((W-(R-T))/W,0,1); see 11-usage.md pace rules."
+    },
+    "usage_window": {
+      "type": "object",
+      "properties": {
+        "used_percent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/percent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resets_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "captured_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 31622400
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/usage_reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/pace"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "used_percent",
+        "resets_at",
+        "captured_at",
+        "window_seconds",
+        "reason",
+        "pace"
+      ],
+      "additionalProperties": false,
+      "description": "reason is null exactly when used_percent and resets_at are both non-null; captured_at is this window's own observation time (non-null exactly when used_percent is) and is the pace T."
+    },
+    "usage_extra_label": {
+      "type": "string",
+      "pattern": "^(?:Codex|Other limit [1-9][0-9]{0,2}|Opus|Sonnet|OAuth apps)(?: (?:5h|daily|weekly|monthly|annual|[1-9][0-9]{0,6}m|secondary))?$",
+      "description": "Fixed Larp vocabulary only (stage 11); provider bucket names and identifiers never appear."
+    },
+    "usage_extra_window": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/usage_extra_label"
+        },
+        "used_percent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/percent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resets_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "captured_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 31622400
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/usage_reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/pace"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "used_percent",
+        "resets_at",
+        "captured_at",
+        "window_seconds",
+        "reason",
+        "pace"
+      ],
+      "additionalProperties": false,
+      "description": "pace is null when window_seconds is null."
+    },
+    "reset_credits": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "available",
+            "none",
+            "not_recorded",
+            "unsupported"
+          ]
+        },
+        "count": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_state": {
+          "enum": [
+            "recorded",
+            "none",
+            "not_recorded",
+            "unsupported"
+          ]
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "count",
+        "expires_state",
+        "expires_at"
+      ],
+      "additionalProperties": false,
+      "description": "Tri-state, never absent: available=count>=1, none=count 0, not_recorded/unsupported=count null."
+    },
+    "plan_label": {
+      "type": "string",
+      "pattern": "^(?=.{1,32}$)[A-Za-z0-9](?:[A-Za-z0-9._+/()-]| (?=[A-Za-z0-9._+/()-]))*$",
+      "description": "User-entered display label, or a client-recorded plan value; never read from tokens or credential files."
+    },
+    "plan": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "$ref": "#/$defs/plan_label"
+        },
+        "source": {
+          "enum": [
+            "user",
+            "client_local",
+            "live_endpoint"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "source"
+      ],
+      "additionalProperties": false,
+      "description": "user = the user-entered plan_label (always wins); client_local = plan_type from the LOCAL Codex rollout record (D29); live_endpoint = plan_type from the Codex LIVE usage response (D32). Provider plans are never stored; never from tokens or credential files."
+    },
+    "client_version": {
+      "type": "string",
+      "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
+    },
+    "usage_profile": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "mode": {
+          "enum": [
+            "local",
+            "live"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "enum": [
+                "codex_session_log",
+                "claude_statusline",
+                "live_endpoint"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "captured_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "client_version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/client_version"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/plan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "windows": {
+          "type": "object",
+          "properties": {
+            "five_hour": {
+              "$ref": "#/$defs/usage_window"
+            },
+            "weekly": {
+              "$ref": "#/$defs/usage_window"
+            },
+            "extra": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "$ref": "#/$defs/usage_extra_window"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "five_hour",
+            "weekly",
+            "extra"
+          ],
+          "additionalProperties": false
+        },
+        "reset_credits": {
+          "$ref": "#/$defs/reset_credits"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/diagnostic"
+          }
+        }
+      },
+      "required": [
+        "profile_id",
+        "name",
+        "provider",
+        "mode",
+        "source",
+        "captured_at",
+        "client_version",
+        "plan",
+        "windows",
+        "reset_credits",
+        "diagnostics"
+      ],
+      "additionalProperties": false,
+      "description": "One profile row of `usage`. No tokens, account IDs, emails, spend, cost or token counts."
+    },
+    "usage_settings_profile": {
+      "type": "object",
+      "properties": {
+        "profile_id": {
+          "$ref": "#/$defs/id"
+        },
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "mode": {
+          "enum": [
+            "inherit",
+            "local",
+            "live"
+          ]
+        },
+        "plan_label": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/plan_label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claude_statusline": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "profile_id",
+        "name",
+        "provider",
+        "mode",
+        "plan_label",
+        "claude_statusline"
+      ],
+      "additionalProperties": false,
+      "description": "claude_statusline is the opt-in capture switch for Claude profiles; null for Codex."
+    },
+    "usage_settings": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "local",
+            "live"
+          ]
+        },
+        "live": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "off",
+                "on",
+                "needs_acknowledgement"
+              ]
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "acknowledged_warning": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "current_warning": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "verified": {
+              "const": false
+            }
+          },
+          "required": [
+            "state",
+            "enabled",
+            "acknowledged_warning",
+            "current_warning",
+            "verified"
+          ],
+          "additionalProperties": false
+        },
+        "refresh_interval_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 300,
+              "maximum": 86400
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/usage_settings_profile"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "live",
+        "refresh_interval_seconds",
+        "profiles"
       ],
       "additionalProperties": false
     }
@@ -2530,6 +3097,282 @@
           "const": 1
         },
         "command": {
+          "const": "usage"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "requested_mode": {
+              "enum": [
+                "settings",
+                "local",
+                "live"
+              ]
+            },
+            "generated_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "profiles": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/usage_profile"
+              }
+            }
+          },
+          "required": [
+            "requested_mode",
+            "generated_at",
+            "profiles"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "settings.usage"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/usage_settings"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "settings.usage.live"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "settings.usage.mode"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "settings.usage.interval"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "settings.usage.claude-statusline"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
+          "const": "profile.plan-label"
+        },
+        "ok": {
+          "const": true
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "$ref": "#/$defs/mutation"
+        }
+      },
+      "required": [
+        "schema",
+        "command",
+        "ok",
+        "revision",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": 1
+        },
+        "command": {
           "enum": [
             "profile.list",
             "profile.show",
@@ -2581,7 +3424,14 @@
             "host.catalog.apply",
             "host.catalog.copy",
             "host.catalog.import",
-            "host.catalog.export"
+            "host.catalog.export",
+            "usage",
+            "settings.usage",
+            "settings.usage.live",
+            "settings.usage.mode",
+            "settings.usage.interval",
+            "settings.usage.claude-statusline",
+            "profile.plan-label"
           ]
         },
         "ok": {

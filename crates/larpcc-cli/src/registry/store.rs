@@ -73,6 +73,13 @@ pub(super) fn parse(path: &Path, bytes: &[u8]) -> Result<Data, Error> {
     }
     let data: Data =
         serde_json::from_slice(bytes).map_err(|_| corrupt("invalid registry encoding".into()))?;
+    if data
+        .desktop_signature_cache
+        .as_ref()
+        .is_some_and(|cache| !cache.is_valid())
+    {
+        return Err(corrupt("invalid desktop signature cache".into()));
+    }
     if !matches!(data.version, 1..=3) || data.next_id == 0 {
         return Err(corrupt("invalid version or next_id".into()));
     }
@@ -520,6 +527,7 @@ pub(super) fn mutate_checked(
                 .iter()
                 .any(|a| a.profile_id == data.profiles[index].id)
                 || super::skills::has_profile_references(root, &data, data.profiles[index].id)?
+                || super::mcp::has_profile_references(root, &data, data.profiles[index].id)?
             {
                 return Err(Error::Conflict);
             }
@@ -585,9 +593,14 @@ pub(super) fn mutate_checked(
         } else {
             serialize(&data)?
         };
-        if super::skills::profile_commit(root, &data, &mut registry_lock, expected)? {
+        // MCP prepares without effects first, so its drift refuses before any commit.
+        let mut mcp = super::mcp::profile_prepare(root, &data)?;
+        if super::skills::profile_commit(root, &data, &mut registry_lock, expected, &mut mcp)? {
             applied = true;
-        } else {
+        }
+        if super::mcp::profile_apply(root, &data, mcp, &mut registry_lock, expected)? {
+            applied = true;
+        } else if !applied {
             persist(root, &bytes, &mut applied, &mut created_temp)?;
         }
         Ok(())

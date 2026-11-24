@@ -1331,6 +1331,98 @@ fn stage09_desktop_precondition_precedes_name_and_guard() {
 }
 
 #[test]
+fn stage09_desktop_cache_refresh_requires_registry_lock() {
+    use crate::desktop::{SignatureCache, synthetic::fixture_app};
+
+    let (temp, r) = fixture();
+    let profile = name("codex-45");
+    r.add(profile.clone(), Provider::Codex).unwrap();
+    r.surface(profile.clone(), Surface::Desktop, true).unwrap();
+    let app = temp.path().join("Invented.app");
+    for path in [&app, &app.join("Contents"), &app.join("Contents/MacOS")] {
+        crate::platform::create_directory(path).unwrap();
+    }
+    fixture_file(&app.join("Contents/MacOS/ChatGPT"), b"invented executable");
+    fixture_file(
+        &app.join("Contents/Info.plist"),
+        b"invented bundle metadata",
+    );
+    let lock = store::lock(r.root(), Duration::ZERO).unwrap();
+    let mut data = store::load(r.root()).unwrap();
+    data.desktop_bindings.push(model::DesktopBinding {
+        provider: Provider::Codex,
+        path: app.clone(),
+        recorded_version: None,
+    });
+    store::persist(
+        r.root(),
+        &store::serialize(&data).unwrap(),
+        &mut false,
+        &mut false,
+    )
+    .unwrap();
+    drop(lock);
+
+    let cache: SignatureCache = serde_json::from_value(serde_json::json!({
+        "version": 1, "executable": vec![1; 7], "info": vec![2; 7], "cdhash": vec![3; 20]
+    }))
+    .unwrap();
+    let (target, checked, guard) = r
+        .desktop_target_with(&profile, |provider, path, previous| {
+            assert_eq!(provider, Provider::Codex);
+            assert_eq!(path, app.as_path());
+            assert!(previous.is_none());
+            assert!(matches!(
+                store::lock(r.root(), Duration::ZERO),
+                Err(Error::Busy { .. })
+            ));
+            Ok((fixture_app(path.into()).unwrap(), Some(cache.clone())))
+        })
+        .unwrap();
+    assert_eq!(target.revision, data.revision);
+    drop((target, checked, guard));
+    let loaded = store::load(r.root()).unwrap();
+    assert_eq!(loaded.desktop_signature_cache, Some(cache));
+    assert_eq!(loaded.revision, data.revision);
+
+    let before = bytes(&r);
+    fs::remove_file(r.root().join("registry.lock")).unwrap();
+    assert!(matches!(
+        r.desktop_target_with(&profile, |_, _, _| panic!(
+            "validation requires the registry lock"
+        )),
+        Err(Error::AdmissionChanged)
+    ));
+    assert_eq!(bytes(&r), before);
+    assert!(!r.root().join("registry.lock").exists());
+}
+
+#[test]
+fn stage09_desktop_cache_rejects_unknown_version_and_invalid_cdhash_length() {
+    let (_temp, r) = fixture();
+    r.add(name("codex-45"), Provider::Codex).unwrap();
+    let mut registry: serde_json::Value = serde_json::from_slice(&bytes(&r)).unwrap();
+    for (version, length, valid) in [
+        (1, 19, false),
+        (1, 20, true),
+        (1, 32, true),
+        (1, 33, false),
+        (2, 20, false),
+    ] {
+        registry["desktop_signature_cache"] = serde_json::json!({
+            "version": version, "executable": vec![1; 7], "info": vec![2; 7], "cdhash": vec![3; length]
+        });
+        write(&r, registry.to_string());
+        let result = store::load(r.root());
+        if valid {
+            assert!(result.unwrap().desktop_signature_cache.is_some());
+        } else {
+            assert!(matches!(result, Err(Error::Corrupt { .. })));
+        }
+    }
+}
+
+#[test]
 fn stage09_desktop_recheck_revision_binding_surface_and_pending_gate() {
     let (_temp, r) = fixture();
     r.add(name("codex-45"), Provider::Codex).unwrap();

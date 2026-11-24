@@ -47,10 +47,22 @@ jobs:
             cargo +stable test --test stage04_delete --locked stage04_delete -- --exact | tee stage04-delete.log
             grep -Fq 'test result: ok. 1 passed; 0 failed;' stage04-delete.log
           done
+      - if: runner.os == 'macOS'
+        name: Repeat full stage04_delete suite 10 times
+        shell: bash
+        run: |
+          for iteration in {1..10}; do
+            echo "stage04_delete suite run $iteration/10"
+            cargo +stable test --test stage04_delete --locked | tee stage04-delete-suite.log
+            grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' stage04-delete-suite.log
+          done
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
         env:
           LARPCC_STAGE_FILTER: stage06_
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +stable
+        env:
+          LARPCC_STAGE_FILTER: stage07_
       - if: runner.os == 'Windows'
         run: |
           cargo +stable test --bin larp --locked platform::windows::tests::w01_w03_existing_security_refuses_without_changing_contents_or_acl -- --exact --nocapture 2>&1 | Tee-Object -Variable cleanupEvidence
@@ -120,5 +132,8 @@ jobs:
       - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
         env:
           LARPCC_STAGE_FILTER: stage06_
+      - run: python crates/larpcc-cli/tests/support/stage04_check.py +1.89
+        env:
+          LARPCC_STAGE_FILTER: stage07_
       - run: cargo +1.89 test --workspace --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
       - run: cargo +1.89 test --bin larpcc-synthetic --features synthetic-launch --target-dir "${{ env.LARPCC_TEST_PARENT }}/synthetic-target" --locked
