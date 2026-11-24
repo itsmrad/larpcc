@@ -1,0 +1,279 @@
+[
+  {
+    "name": "five_hour_reserve_lasts",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 30.0,
+    "expect": {
+      "elapsed_percent": 60.0,
+      "reserve_percent": 30.0,
+      "runs_out_at": "2026-11-21T14:00:00Z",
+      "lasts_until_reset": true
+    }
+  },
+  {
+    "name": "five_hour_deficit_runs_out",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 90.0,
+    "expect": {
+      "elapsed_percent": 60.0,
+      "reserve_percent": -30.0,
+      "runs_out_at": "2026-11-21T12:20:00Z",
+      "lasts_until_reset": false
+    }
+  },
+  {
+    "name": "five_hour_runs_out_floor_seconds",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 70.0,
+    "expect": {
+      "elapsed_percent": 60.0,
+      "reserve_percent": -10.0,
+      "runs_out_at": "2026-11-21T13:17:08Z",
+      "lasts_until_reset": false
+    }
+  },
+  {
+    "name": "five_hour_unused_lasts",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 0.0,
+    "expect": {
+      "elapsed_percent": 60.0,
+      "reserve_percent": 60.0,
+      "runs_out_at": "2026-11-21T14:00:00Z",
+      "lasts_until_reset": true
+    }
+  },
+  {
+    "name": "five_hour_at_limit_now",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 100.0,
+    "expect": {
+      "elapsed_percent": 60.0,
+      "reserve_percent": -40.0,
+      "runs_out_at": "2026-11-21T12:00:00Z",
+      "lasts_until_reset": false
+    }
+  },
+  {
+    "name": "five_hour_window_start_used_unknown_runout",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T17:00:00Z",
+    "used_percent": 5.0,
+    "expect": {
+      "elapsed_percent": 0.0,
+      "reserve_percent": -5.0,
+      "runs_out_at": null,
+      "lasts_until_reset": null
+    }
+  },
+  {
+    "name": "five_hour_window_start_unused",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T17:00:00Z",
+    "used_percent": 0.0,
+    "expect": {
+      "elapsed_percent": 0.0,
+      "reserve_percent": 0.0,
+      "runs_out_at": "2026-11-21T17:00:00Z",
+      "lasts_until_reset": true
+    }
+  },
+  {
+    "name": "skew_within_tolerance_clamps",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T17:01:40Z",
+    "used_percent": 5.0,
+    "expect": {
+      "elapsed_percent": 0.0,
+      "reserve_percent": -5.0,
+      "runs_out_at": null,
+      "lasts_until_reset": null
+    }
+  },
+  {
+    "name": "skew_tolerance_boundary_inclusive",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T17:05:00Z",
+    "used_percent": 5.0,
+    "expect": {
+      "elapsed_percent": 0.0,
+      "reserve_percent": -5.0,
+      "runs_out_at": null,
+      "lasts_until_reset": null
+    }
+  },
+  {
+    "name": "skew_beyond_tolerance_no_pace",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T17:05:01Z",
+    "used_percent": 5.0,
+    "expect": null
+  },
+  {
+    "name": "reset_at_capture_no_pace",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T12:00:00Z",
+    "used_percent": 10.0,
+    "expect": null
+  },
+  {
+    "name": "reset_before_capture_no_pace",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T11:59:59Z",
+    "used_percent": 10.0,
+    "expect": null
+  },
+  {
+    "name": "third_elapsed_rounding_deficit",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T15:20:00Z",
+    "used_percent": 50.0,
+    "expect": {
+      "elapsed_percent": 33.3,
+      "reserve_percent": -16.7,
+      "runs_out_at": "2026-11-21T13:40:00Z",
+      "lasts_until_reset": false
+    }
+  },
+  {
+    "name": "third_elapsed_rounding_reserve",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T15:20:00Z",
+    "used_percent": 10.0,
+    "expect": {
+      "elapsed_percent": 33.3,
+      "reserve_percent": 23.3,
+      "runs_out_at": "2026-11-21T15:20:00Z",
+      "lasts_until_reset": true
+    }
+  },
+  {
+    "name": "near_reset_at_limit",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T12:01:00Z",
+    "used_percent": 100.0,
+    "expect": {
+      "elapsed_percent": 99.7,
+      "reserve_percent": -0.3,
+      "runs_out_at": "2026-11-21T12:00:00Z",
+      "lasts_until_reset": false
+    }
+  },
+  {
+    "name": "five_hour_tenth_percent",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 0.1,
+    "expect": {
+      "elapsed_percent": 60.0,
+      "reserve_percent": 59.9,
+      "runs_out_at": "2026-11-21T14:00:00Z",
+      "lasts_until_reset": true
+    }
+  },
+  {
+    "name": "weekly_half_reserve_lasts",
+    "window_seconds": 604800,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-25T00:00:00Z",
+    "used_percent": 20.0,
+    "expect": {
+      "elapsed_percent": 50.0,
+      "reserve_percent": 30.0,
+      "runs_out_at": "2026-11-25T00:00:00Z",
+      "lasts_until_reset": true
+    }
+  },
+  {
+    "name": "weekly_deficit_runs_out",
+    "window_seconds": 604800,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-24T23:59:59Z",
+    "used_percent": 75.0,
+    "expect": {
+      "elapsed_percent": 50.0,
+      "reserve_percent": -25.0,
+      "runs_out_at": "2026-11-22T16:00:00Z",
+      "lasts_until_reset": false
+    }
+  },
+  {
+    "name": "used_unknown",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": null,
+    "expect": null
+  },
+  {
+    "name": "reset_unknown",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": null,
+    "used_percent": 30.0,
+    "expect": null
+  },
+  {
+    "name": "extra_window_length_unreported",
+    "window_seconds": null,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 30.0,
+    "expect": null
+  },
+  {
+    "name": "not_captured",
+    "window_seconds": 18000,
+    "captured_at": null,
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 30.0,
+    "expect": null
+  },
+  {
+    "name": "extra_observed_two_hours_before_row",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T10:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 10.0,
+    "expect": {
+      "elapsed_percent": 20.0,
+      "reserve_percent": 10.0,
+      "runs_out_at": "2026-11-21T14:00:00Z",
+      "lasts_until_reset": true
+    }
+  },
+  {
+    "name": "same_window_observed_at_row_time",
+    "window_seconds": 18000,
+    "captured_at": "2026-11-21T12:00:00Z",
+    "resets_at": "2026-11-21T14:00:00Z",
+    "used_percent": 10.0,
+    "expect": {
+      "elapsed_percent": 60.0,
+      "reserve_percent": 50.0,
+      "runs_out_at": "2026-11-21T14:00:00Z",
+      "lasts_until_reset": true
+    }
+  }
+]

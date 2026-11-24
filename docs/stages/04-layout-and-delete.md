@@ -108,10 +108,19 @@ arguments. Keep the official main-app signature requirements and verify nested
 helpers against the corresponding vendor team signature. An exact profile
 `--user-data-dir` argument match refuses deletion. Skip a process that exits or
 whose PID is reused during the scan, and skip denied path lookups that have yet
-to identify a candidate. Once identified, a live candidate with unverifiable
-identity or denied, malformed, or truncated arguments still refuses deletion.
-Failed or oversized process enumeration also refuses. If the scan reaches its
-two-second deadline, retry the whole scan once with a fresh two-second budget.
+to identify a candidate. Other unresolved initial path errors, including
+`ENOENT` when a live unrelated executable is replaced, refuse deletion because
+the scan cannot classify the process. Failed or oversized process enumeration
+and failed signature validation of a live candidate also refuse deletion.
+If the only blockers are live candidates that are mid-exit or whose liveness,
+path, or arguments could not be read conclusively, wait 150 ms and scan again.
+An `ESRCH` from an argument or path recheck counts as inconclusive when the
+same candidate is still alive. The retry checks whether an already identified
+candidate is still alive even if its executable path cannot be read.
+Exited, zombie, or reused PIDs do not carry the earlier uncertainty forward.
+Persistent uncertainty still refuses deletion. Each scan has a two-second
+deadline checked between probes. A first-scan deadline triggers an immediate
+retry. Both retry reasons share at most one retry.
 Never inspect process environment, tokens or account data.
 
 The user must close sessions started outside Larp (including manual terminal
@@ -131,7 +140,11 @@ publish `state:deleting` before removing anything. All reads may show tombstone;
 launch/toggles/rename/forget refuse it. Delete/recover resumes idempotently.
 First remove verified owned aliases/launchers and sharing references, then
 remove the folder, then remove identity metadata and journal; next_id never
-moves backward. Journal is the recovery source for multi-file catalog/manifest
+moves backward. The delete journal records the MCP cleanup alongside aliases
+and skills. Recovery verifies the recorded render ownership and metadata,
+removes the profile's switches and render, and advances the MCP catalog
+revision once. A profile without MCP entries leaves the MCP catalog untouched.
+Journal is the recovery source for multi-file catalog/manifest
 cleanup; readers refuse affected state until committed. Never advertise an
 atomic multi-file rename. Every journal step has fsync+idempotent resume semantics.
 Drift before tombstone fails unchanged; drift afterwards leaves tombstone and

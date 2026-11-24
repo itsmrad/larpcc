@@ -6,7 +6,6 @@ fn ordinary_run_refuses_before_root_or_environment_inspection() {
     for args in [
         vec!["cc", "run", "missing"],
         vec!["cc", "login", "missing"],
-        vec!["cc", "status", "missing"],
         vec!["cc", "logout", "missing", "--yes"],
         vec!["cc", "run", "work", "--", "--config", "synthetic"],
     ] {
@@ -24,6 +23,18 @@ fn ordinary_run_refuses_before_root_or_environment_inspection() {
         );
     }
     assert!(!f.root.exists());
+}
+
+#[test]
+fn stage14_closed_status_observes_metadata_without_a_provider() {
+    let f = Fixture::new();
+    f.profile(&["add", "codex-45", "--provider", "codex"], 0);
+    let output = exec(f.command(&["cc", "status", "codex-45", "--json"]), 0);
+    let value = envelope(&output);
+    assert_eq!(value["command"], "status.account");
+    assert_eq!(value["data"]["account"]["state"], "not_qualified");
+    assert!(value["data"]["provider_version"].is_null());
+    assert!(!f.root.join("auth-locks").exists());
 }
 
 #[test]

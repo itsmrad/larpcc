@@ -1,0 +1,24 @@
+Add a reference-only server definition (disabled unless sync-all is on)
+
+Usage: larp cc mcp add [OPTIONS] <--command <ABSOLUTE>|--url <SAFE_URL>> <NAME>
+
+Arguments:
+  <NAME>  Server name: 1-32 characters from a-z, 0-9, '-', '_', starting with a letter
+
+Options:
+      --command <ABSOLUTE>
+          Absolute path of a local server executable
+      --json
+          Emit one local metadata JSON envelope
+      --arg <SAFE_ARG>
+          Only --stdio or --transport=stdio; pass as --arg=--stdio
+      --expected-revision <EXPECTED_REVISION>
+          Refuse if the registry revision has changed
+      --env-ref <VAR>
+          Environment variable NAME passed by reference, never its value
+      --url <SAFE_URL>
+          https URL whose path is exactly /mcp or /sse
+      --header-ref <HEADER=ENV_VAR>
+          HEADER=ENV_VAR reference, never a header value
+  -h, --help
+          Print help
