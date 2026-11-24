@@ -181,8 +181,11 @@ Every new bind, provider-list row, and synthetic run validates again in this ord
    Case-insensitive Windows containment uses resolved local volume paths and component boundaries.
    Alias-to-root escape is refused.
 3. Verify target is regular, trusted-owned and not foreign-writable; Unix requires at least one
-   execute bit. Unix trusted owners are euid or uid 0 for the binary and its ancestry; foreign
-   group/other write bits are rejected, including sticky foreign-writable parents. macOS
+   execute bit. Unix trusted owners are euid or uid 0 for the binary and its ancestry. Group and
+   other write bits are rejected, with one macOS exception (D41). An existing ancestor directory
+   of a provider executable may be group-writable if its gid is 80 (`admin`), its owner is euid
+   or uid 0, and its other-write bit is clear. The sticky bit gives no exemption. Executable
+   files, symlink objects, managed paths and package sources retain their existing checks. macOS
    conservatively rejects every extended allow ACE on executable ancestry/target, avoiding a second
    principal/permission parser; unknown ACL semantics/query errors refuse. Root ownership for
    managed objects remains euid only. Windows executable/ancestor owners may be user, SYSTEM,
@@ -207,8 +210,9 @@ both stored and resolved path plus validated identity. Execute the **resolved** 
 stored symlink spelling. Unix explicitly supplies stored path as argv0 to `execve`; Windows
 argv0 follows std's resolved executable command-line construction, no stored-argv0 promise. Unix
 permits symlinked installation paths only after validating every link's containing ancestry, chain
-and final ancestry (bounded 40 hops; loop/error refuses); symlink owner euid/root and parent
-non-foreign-writable. Windows rejects **all** reparse points on every installation-path component,
+and final ancestry (bounded 40 hops; loop/error refuses). Each symlink must be owned by euid/root,
+and the ancestor rules above, including D41, apply to its parent and the final file's ancestry.
+Windows rejects **all** reparse points on every installation-path component,
 including final file symlinks and junctions. This conservative Windows limitation is explicit; no
 shim workaround.
 

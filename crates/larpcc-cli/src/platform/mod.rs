@@ -35,6 +35,76 @@ pub use windows::*;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(any(unix, test))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ancestry {
+    Strict,
+    ProviderExecutable,
+}
+
+#[cfg(any(unix, test))]
+fn trust_reason(
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    euid: u32,
+    is_dir: bool,
+    ancestry: Ancestry,
+) -> Option<&'static str> {
+    if uid != 0 && uid != euid {
+        return Some("is owned by an untrusted principal");
+    }
+    let forbidden = if cfg!(target_os = "macos")
+        && ancestry == Ancestry::ProviderExecutable
+        && is_dir
+        && gid == 80
+    {
+        0o002
+    } else {
+        0o022
+    };
+    (mode & forbidden != 0).then_some(if is_dir {
+        "has a foreign-writable ancestor"
+    } else {
+        "is writable by group or other users"
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn executable_ancestry_trust_matrix() {
+    for ancestry in [Ancestry::Strict, Ancestry::ProviderExecutable] {
+        for is_dir in [false, true] {
+            for uid in [0, 501, 502] {
+                for gid in [20, 80] {
+                    for mode in [0o755, 0o775, 0o757, 0o777, 0o1775, 0o1777] {
+                        let expected = match (uid, mode & 0o022) {
+                            (502, _) => Some("is owned by an untrusted principal"),
+                            (_, 0) => None,
+                            (_, 0o020)
+                                if cfg!(target_os = "macos")
+                                    && is_dir
+                                    && gid == 80
+                                    && ancestry == Ancestry::ProviderExecutable =>
+                            {
+                                None
+                            }
+                            _ if is_dir => Some("has a foreign-writable ancestor"),
+                            _ => Some("is writable by group or other users"),
+                        };
+                        assert_eq!(
+                            trust_reason(mode, uid, gid, 501, is_dir, ancestry),
+                            expected,
+                            "mode={mode:o} uid={uid} gid={gid} is_dir={is_dir} provider={}",
+                            ancestry == Ancestry::ProviderExecutable,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(all(test, windows))]
 #[path = "../../tests/fixtures/windows/private.rs"]
 pub(crate) mod fixture_private;
@@ -145,6 +215,9 @@ pub(crate) fn inspect_replaceable(path: &Path) -> Result<Option<CheckedObject>, 
 pub(crate) fn open_artifact(path: &Path, root: &Path) -> Result<(File, FileIdentity), Error> {
     windows::open_artifact_checked(path, root)
 }
+
+#[cfg(windows)]
+pub(crate) use open_artifact as open_larp_artifact;
 
 #[cfg(windows)]
 pub(crate) fn open_current_larp(root: &Path) -> Result<(File, FileIdentity, PathBuf), Error> {
