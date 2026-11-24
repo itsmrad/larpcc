@@ -85,6 +85,19 @@ impl Registry {
             })
             .collect())
     }
+    /// One provider's stored executable under the revision-checked snapshot. Validates
+    /// and reads no executable, so another provider's binding is never touched.
+    pub(crate) fn binding_path(&self, provider: Provider) -> Result<Option<PathBuf>, Error> {
+        let _ancestors = crate::platform::anchor(self.root())?.ancestors;
+        let _fixed = store::fixed(self.root())?;
+        let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        self.observed.set(Some(data.revision));
+        Ok(data
+            .bindings
+            .iter()
+            .find(|b| b.provider == provider)
+            .map(|b| b.executable.clone()))
+    }
     pub fn bind(&self, p: Provider, exe: PathBuf, replace: bool) -> Result<BindOutcome, Error> {
         store::bind(self.root(), p, exe, replace, self.expected).map(|(outcome, revision)| {
             self.observed.set(Some(revision));
