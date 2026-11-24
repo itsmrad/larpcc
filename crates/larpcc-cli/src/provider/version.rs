@@ -427,34 +427,56 @@ fn spawn(
     let Some(exec) = Exec::prepare(path, argv, env) else {
         return Ok(None);
     };
+    // Every descriptor the child needs exists before the final revalidation: the
+    // checked home directory (entered with fchdir, never by pathname), /dev/null and
+    // both pipes. Spawn then does no path lookup besides the documented exec itself.
+    let Ok(Some(home)) = crate::platform::inspect(cwd, crate::platform::ObjectKind::Directory)
+    else {
+        return Ok(None);
+    };
+    let Ok(null) = std::fs::File::open("/dev/null") else {
+        return Ok(None);
+    };
+    let (Ok((out_read, out_write)), Ok((err_read, err_write))) = (std::io::pipe(), std::io::pipe())
+    else {
+        return Ok(None);
+    };
+    let home_fd = home.file.as_raw_fd();
     let mut command = Command::new(path);
     command
         .env_clear()
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // SAFETY: the hook only calls async-signal-safe execve on storage prepared before
-    // fork. Exec failure returns Err, so std never falls back to a shell or PATH search.
+        .stdin(Stdio::from(null))
+        .stdout(Stdio::from(out_write))
+        .stderr(Stdio::from(err_write));
+    // SAFETY: the hook only calls async-signal-safe fchdir/execve on a descriptor and
+    // storage prepared before fork. Exec failure returns Err, so std never falls back
+    // to a shell or PATH search.
     unsafe {
         command.pre_exec(move || {
             // Bind the whole Send/Sync struct; disjoint field capture would move raw pointers.
             let exec = &exec;
+            if libc::fchdir(home_fd) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             libc::execve(exec.path.as_ptr(), exec.argv.as_ptr(), exec.envp.as_ptr());
             Err(std::io::Error::last_os_error())
         });
     }
-    // Everything else is prepared; the revalidation is the last step before fork/exec.
+    // The revalidation is the last step before fork/exec.
     if !revalidate() {
         return Ok(None);
     }
-    let Ok(mut child) = command.spawn() else {
+    let spawned = command.spawn();
+    // Close the parent's copies of the child's write ends, or the pipes never reach EOF.
+    drop(command);
+    drop(home);
+    let Ok(mut child) = spawned else {
         return Ok(None);
     };
     let deadline = Instant::now() + TIMEOUT;
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
+    let mut out_pipe = Some(out_read);
+    let mut err_pipe = Some(err_read);
     let mut rejected = false;
     loop {
         let mut fds = Vec::new();
@@ -622,6 +644,45 @@ mod tests {
         assert_eq!((flood.0, sink.len()), (1, MAX_OUTPUT));
         let mut empty = &b""[..];
         assert_eq!(read_bounded(&mut empty, &mut sink, MAX_OUTPUT), Step::Eof);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn stage08_spawn_enters_held_home_without_pathname_chdir() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = std::env::var_os("LARPCC_TEST_PARENT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into());
+        let temp = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(parent)
+            .unwrap();
+        let (home, moved) = (temp.path().join("home"), temp.path().join("moved"));
+        std::fs::create_dir(&home).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // The final revalidation renames the home away: a pathname chdir would now fail.
+        let mut checked = false;
+        let captured = spawn(Path::new("/bin/pwd"), &[], &[], &home, || {
+            std::fs::rename(&home, &moved).unwrap();
+            checked = true;
+            true
+        })
+        .unwrap()
+        .expect("child started in the held directory");
+        assert!(checked);
+        assert_eq!(captured.exit, Some(0));
+        assert!(captured.stderr.is_empty());
+        let mut expected = std::fs::canonicalize(&moved)
+            .unwrap()
+            .into_os_string()
+            .into_encoded_bytes();
+        expected.push(b'\n');
+        assert_eq!(captured.stdout, expected);
+        // A refused revalidation starts nothing.
+        assert!(
+            spawn(Path::new("/bin/pwd"), &[], &[], &moved, || false)
+                .unwrap()
+                .is_none()
+        );
     }
     fn descriptor() -> VersionDescriptor {
         VersionDescriptor {

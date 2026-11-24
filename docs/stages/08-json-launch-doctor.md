@@ -70,8 +70,10 @@ using the checked handle-relative profile removal.
 The probe follows the stage 3 dispatch contract. The last step before process
 creation re-resolves the stored binding, requires the same resolved path and
 identity, and re-hashes the current bytes (bounded) against the retained
-verified handle. Any change refuses with a null version. The child is then
-started by exact pathname. Path-reopen/same-user races after checks remain
+verified handle. Any change refuses with a null version. The `/dev/null` and
+pipe descriptors and the held probe-home directory exist before that check,
+and the child enters the home with `fchdir`, so the only path lookup after the
+check is the exec itself. The child is then started by exact pathname. Path-reopen/same-user races after checks remain
 explicit. Descriptor-bound exec is not used (macOS has none), and the probe
 stays open on macOS under this documented residual.
 
