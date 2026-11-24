@@ -8,7 +8,6 @@ use std::{
 };
 
 struct Planned {
-    path: PathBuf,
     parent: PathBuf,
     leaf: OsString,
     done: bool,
@@ -72,7 +71,6 @@ impl Exclusions {
                 .ok_or(io::ErrorKind::InvalidInput)?
                 .to_owned();
             planned.push(Planned {
-                path,
                 parent,
                 leaf,
                 done: false,
@@ -110,8 +108,8 @@ impl Exclusions {
             &parent,
             |part, directory| {
                 within_budget()
-                    && self.allows_child(part, directory)
                     && !blocks_unresolved_leaf(part, planned)
+                    && self.allows_child(part, directory)
             },
             |part, directory| {
                 absent = Some(edge(directory, part));
@@ -251,21 +249,28 @@ fn parent_walk_is_safe(root: &Planned, planned: &[Planned]) -> bool {
     true
 }
 
-/// A same-basename component whose configured parent is not resolved yet.
-/// Strict ancestors are ordinary prefixes (`…/claude/…/claude`); every other
-/// match can be an alias of the protected leaf, so the walk must not enter it.
+/// Any matching name can be the protected leaf until its parent is resolved,
+/// even when the component is a lexical ancestor of the configured path.
 fn blocks_unresolved_leaf(part: &Path, planned: &[Planned]) -> bool {
     let Some(name) = part.file_name() else {
         return false;
     };
-    let part = comparable(part);
-    planned.iter().any(|root| {
-        if root.done || !same_name(name, &root.leaf) {
-            return false;
-        }
-        let root_path = comparable(&root.path);
-        part == root_path || !root_path.starts_with(&part)
-    })
+    planned
+        .iter()
+        .any(|root| !root.done && same_name(name, &root.leaf))
+}
+
+#[cfg(test)]
+#[test]
+fn stage19_unresolved_leaf_guard_rejects_lexical_ancestor_before_lookup() {
+    let part = Path::new("/fixture/state");
+    let root = Planned {
+        parent: part.join("settings"),
+        leaf: "state".into(),
+        done: false,
+    };
+    assert!(blocks_unresolved_leaf(part, std::slice::from_ref(&root)));
+    assert!(!parent_walk_is_safe(&root, std::slice::from_ref(&root)));
 }
 
 #[cfg(target_os = "macos")]

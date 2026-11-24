@@ -42,48 +42,23 @@ pub(super) fn collect(registry: &Registry, provider: Option<Provider>) -> Result
         skipped: BTreeSet::new(),
         managed_root: registry.root().to_owned(),
     };
-    let mut protected = Vec::new();
-    for name in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
-        protected.extend(provider_home(name)?);
-    }
-    if let Some(home) = &home {
-        for path in [
-            ".config/Claude",
-            ".config/ChatGPT",
-            ".config/claude",
-            ".config/chatgpt",
-            "Library/Application Support/Claude",
-            "Library/Application Support/ChatGPT",
-            "Library/Containers/com.anthropic.claudefordesktop",
-            "Library/Containers/com.openai.chat",
-            "Library/Caches/com.anthropic.claudefordesktop",
-            "Library/Caches/com.openai.chat",
-        ] {
-            protected.push(home.join(path));
-        }
-    }
-    for name in [
+    let provider_homes = [
+        provider_home("CLAUDE_CONFIG_DIR")?,
+        provider_home("CODEX_HOME")?,
+    ];
+    let xdg_homes = [
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
         "XDG_CACHE_HOME",
         "XDG_STATE_HOME",
-    ] {
-        if let Some(root) = absolute_env(name) {
-            for app in [
-                "Claude",
-                "claude",
-                "ChatGPT",
-                "chatgpt",
-                "Codex",
-                "codex",
-                "com.openai.chat",
-                "com.openai.codex",
-                "com.anthropic.claudefordesktop",
-            ] {
-                protected.push(root.join(app));
-            }
-        }
-    }
+    ]
+    .into_iter()
+    .filter_map(absolute_env);
+    let protected = protected_roots(
+        home.as_deref(),
+        provider_homes.into_iter().flatten(),
+        xdg_homes,
+    );
     scan.exclusions
         .register(&protected, || Instant::now() < deadline)
         .map_err(|_| Error::ForbiddenSource)?;
@@ -162,6 +137,48 @@ pub(super) fn collect(registry: &Registry, provider: Option<Provider>) -> Result
     let result = scan.results(desktop);
     snapshot.binding_path(first)?;
     Ok(result)
+}
+
+fn protected_roots(
+    home: Option<&Path>,
+    provider_homes: impl IntoIterator<Item = PathBuf>,
+    xdg_homes: impl IntoIterator<Item = PathBuf>,
+) -> Vec<PathBuf> {
+    let mut protected: Vec<_> = provider_homes.into_iter().collect();
+    if let Some(home) = home {
+        protected.extend(
+            [
+                ".config/Claude",
+                ".config/ChatGPT",
+                ".config/claude",
+                ".config/chatgpt",
+                "Library/Application Support/Claude",
+                "Library/Application Support/ChatGPT",
+                "Library/Containers/com.anthropic.claudefordesktop",
+                "Library/Containers/com.openai.chat",
+                "Library/Caches/com.anthropic.claudefordesktop",
+                "Library/Caches/com.openai.chat",
+            ]
+            .map(|path| home.join(path)),
+        );
+    }
+    for root in xdg_homes {
+        protected.extend(
+            [
+                "Claude",
+                "claude",
+                "ChatGPT",
+                "chatgpt",
+                "Codex",
+                "codex",
+                "com.openai.chat",
+                "com.openai.codex",
+                "com.anthropic.claudefordesktop",
+            ]
+            .map(|app| root.join(app)),
+        );
+    }
+    protected
 }
 
 fn absolute_env(name: &str) -> Option<PathBuf> {

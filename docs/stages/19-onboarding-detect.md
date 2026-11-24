@@ -91,8 +91,13 @@ For each configured exclusion, detection walks its parent without looking up
 the protected leaf. It blocks the configured spelling, the resolved spelling
 and the protected name under that parent directory's device and inode. The
 identity check also covers system aliases of the parent. A missing ancestor
-is blocked for this scan. An ambiguous mapping stops detection before the
-search. The snapshot cannot identify an alias of the protected leaf itself,
+is blocked for this scan. While a protected parent is unresolved, setup
+defers any parent walk with a component matching the protected leaf's name.
+If a walk encounters such a component through a symlink, it stops before
+looking up that component. If setup cannot establish the mapping safely,
+detection is unavailable. This can affect otherwise unrelated directories
+that share a protected leaf's name, including lexical ancestors of that leaf.
+The snapshot cannot identify an alias of the protected leaf itself,
 or a new target of a concurrently retargeted ancestor. The registry snapshot
 retains the existing path-based registry checks after detection's guarded
 root preflight.

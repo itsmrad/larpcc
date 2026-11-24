@@ -146,7 +146,7 @@ fn stage19_configured_provider_root_is_excluded_before_walk() {
 #[test]
 fn stage19_nonmatching_ancestors_and_siblings_are_allowed() {
     let temp = private_dir();
-    let home = temp.path().join("claude/Élodie");
+    let home = temp.path().join("workspaces/Élodie");
     let config = home.join(".config");
     fs::create_dir_all(&config).unwrap();
     let root = config.join("claude");
@@ -161,6 +161,59 @@ fn stage19_nonmatching_ancestors_and_siblings_are_allowed() {
         walk(&root, |p, parent| guard.allows_child(p, parent), false),
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
     ));
+}
+
+#[test]
+fn stage19_registers_conventional_home_and_xdg_through_symlinked_home() {
+    let temp = private_dir();
+    let actual = temp.path().join("home");
+    let alias = temp.path().join("home-alias");
+    let xdg = [".config", ".local/share", ".cache", ".local/state"];
+    for parent in xdg.into_iter().chain([
+        "Library/Application Support",
+        "Library/Containers",
+        "Library/Caches",
+        "settings",
+        ".local/bin",
+    ]) {
+        fs::create_dir_all(actual.join(parent)).unwrap();
+    }
+    symlink("home", &alias).unwrap();
+    private_executable(&actual.join(".local/bin/codex"));
+
+    for home in [&actual, &alias] {
+        let roots = protected_roots(
+            Some(home),
+            [
+                home.join("settings/claude-data"),
+                home.join("settings/codex-data"),
+            ],
+            xdg.map(|parent| home.join(parent)),
+        );
+        let mut guard = Exclusions::new(Some(home));
+        guard.register(&roots, || true).unwrap();
+
+        for root in &roots {
+            let physical = actual.join(root.strip_prefix(home).unwrap());
+            for path in [root, &physical] {
+                assert!(
+                    matches!(
+                        walk(path, |p, parent| guard.allows_child(p, parent), false),
+                        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+                    ),
+                    "expected denial before looking up {}",
+                    path.display()
+                );
+            }
+        }
+        let candidate = walk(
+            &home.join(".local/bin/codex"),
+            |p, parent| guard.allows_child(p, parent),
+            false,
+        )
+        .unwrap();
+        assert!(candidate.executable());
+    }
 }
 
 #[test]
