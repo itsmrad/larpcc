@@ -118,6 +118,70 @@ fn stage04_delete_cleans_owned_aliases_and_sharing_references() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn stage04_delete_checks_live_processes_with_unlinked_executables() {
+    use std::{
+        fs, io,
+        process::{Child, Command, Stdio},
+    };
+
+    struct ReapChild(Child);
+    impl Drop for ReapChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let f = Fixture::new();
+    request(&f, &["add", "codex-45", "--provider", "codex"], 0);
+    let desktop = f.root.join("profiles/1/desktop");
+    let other = f.temp.path().join("other-desktop");
+    let executable = f.temp.path().join("delete-test-cat");
+    for (dir, code) in [(&desktop, 1), (&other, 0)] {
+        copy_executable(std::path::Path::new("/bin/cat"), &executable);
+        // Cat blocks on its stdin pipe before it can open the second operand.
+        let mut child = ReapChild(
+            Command::new(&executable)
+                .env_clear()
+                .current_dir(f.temp.path())
+                .args(["-n", "--", "-"])
+                .arg(format!("--user-data-dir={}", dir.display()))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        fs::remove_file(&executable).unwrap();
+
+        let mut path = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        // SAFETY: proc_pidpath can write at most path.len() bytes into path.
+        let len = unsafe {
+            libc::proc_pidpath(
+                child.0.id() as i32,
+                path.as_mut_ptr().cast(),
+                path.len() as u32,
+            )
+        };
+        let errno = io::Error::last_os_error().raw_os_error();
+        assert!(len <= 0, "proc_pidpath returned a path after unlink");
+        assert_eq!(errno, Some(libc::ENOENT), "expected ENOENT after unlink");
+        assert!(child.0.try_wait().unwrap().is_none());
+
+        let out = request(&f, &["delete", "codex-45", "--yes"], code);
+        assert!(child.0.try_wait().unwrap().is_none());
+        if code == 1 {
+            assert_eq!(out["error"]["code"], "busy");
+            assert!(desktop.is_dir());
+        } else {
+            assert_eq!(out["ok"], true);
+            assert!(!desktop.exists());
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn stage04_delete_recovery_refuses_uncertain_desktop_activity() {
     let f = Fixture::new();
     request(&f, &["add", "codex-45", "--provider", "codex"], 0);

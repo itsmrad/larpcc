@@ -1,4 +1,4 @@
-//! Inspect only the argument vector of a verified desktop app.
+//! Check desktop process activity using bounded argument-vector probes.
 
 #[cfg(any(test, target_os = "macos"))]
 use crate::registry::Error;
@@ -158,6 +158,10 @@ fn scan(
             }
             (Ok(None), _) => continue,
             (Err(e), _) if e.kind() == io::ErrorKind::PermissionDenied => continue,
+            (Err(e), _) if e.kind() == io::ErrorKind::NotFound => {
+                scan_without_path(table, pid, expected, &check_deadline)?;
+                continue;
+            }
             (Err(_), _) => return Err(ScanError::Busy),
         };
         let Some(app) = candidate(&path) else {
@@ -183,6 +187,36 @@ fn scan(
     check_deadline()?;
     if !uncertain.is_empty() {
         return Err(ScanError::CandidateUncertain);
+    }
+    Ok(())
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn scan_without_path(
+    table: &impl ProcessTable,
+    pid: i32,
+    expected: &HashSet<Vec<u8>>,
+    check_deadline: impl Fn() -> Result<(), ScanError>,
+) -> Result<(), ScanError> {
+    let Some(before) = table.stamp(pid, None).map_err(|_| ScanError::Busy)? else {
+        return Ok(());
+    };
+    if before.exiting {
+        return Err(ScanError::Busy);
+    }
+    check_deadline()?;
+    let args = table.args(pid);
+    let Some(after) = table
+        .stamp(pid, Some(before.start))
+        .map_err(|_| ScanError::Busy)?
+    else {
+        return Ok(());
+    };
+    let Some(args) = args? else {
+        return Ok(());
+    };
+    if after.exiting || user_data_dir(&args)?.is_some_and(|dir| expected.contains(dir)) {
+        return Err(ScanError::Busy);
     }
     Ok(())
 }
@@ -379,6 +413,7 @@ mod tests {
         }
 
         fn validate(&self, _pid: i32, app: App, main: bool) -> Result<(), Error> {
+            assert_eq!(self.path, Some(HELPER));
             assert_eq!((app, main), (App::ChatGpt, false));
             Ok(())
         }
@@ -550,26 +585,28 @@ mod tests {
     }
 
     #[test]
-    fn stage04_delete_rechecks_a_remembered_candidate_after_path_denial() {
+    fn stage04_delete_rechecks_a_remembered_candidate_after_path_failure() {
         let start = Some((10, 0));
-        for after in [start, None, Some((11, 0))] {
-            let table = Fixture {
-                paths: RefCell::new(VecDeque::from([
-                    Ok(Some(HELPER.into())),
-                    Ok(Some(HELPER.into())),
-                    Ok(Some(HELPER.into())),
-                    Err(io::ErrorKind::PermissionDenied.into()),
-                ])),
-                ..Fixture::candidate(&[start, start, start, after], None)
-            };
-            let result = retry_scan(
-                |uncertain| table.scan_with_history(uncertain, || Ok(())),
-                || (),
-            );
-            assert_eq!(result.is_err(), after == start);
-            assert_eq!(table.listings.get(), 2);
-            assert_eq!(table.reads.get(), 1);
-            assert!(table.stamps.borrow().is_empty());
+        for error in [io::ErrorKind::PermissionDenied, io::ErrorKind::NotFound] {
+            for after in [start, None, Some((11, 0))] {
+                let table = Fixture {
+                    paths: RefCell::new(VecDeque::from([
+                        Ok(Some(HELPER.into())),
+                        Ok(Some(HELPER.into())),
+                        Ok(Some(HELPER.into())),
+                        Err(error.into()),
+                    ])),
+                    ..Fixture::candidate(&[start, start, start, after], None)
+                };
+                let result = retry_scan(
+                    |uncertain| table.scan_with_history(uncertain, || Ok(())),
+                    || (),
+                );
+                assert_eq!(result.is_err(), after == start);
+                assert_eq!(table.listings.get(), 2);
+                assert_eq!(table.reads.get(), 1);
+                assert!(table.stamps.borrow().is_empty());
+            }
         }
     }
 
@@ -595,13 +632,34 @@ mod tests {
     }
 
     #[test]
-    fn stage04_delete_refuses_an_unidentified_executable_with_enoent() {
-        let table = Fixture {
-            paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
-            ..Fixture::candidate(&[], None)
-        };
-        assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
-        assert_eq!(table.reads.get(), 0);
+    fn stage04_delete_checks_argv_when_the_executable_path_is_missing() {
+        let start = Some((10, 0));
+        let unrelated = b"--user-data-dir=/fixture/desktop-other\0".as_slice();
+        let matching = b"--user-data-dir=/fixture/desktop\0".as_slice();
+        for (args, after, argv_missing, expected) in [
+            (Some(unrelated), start, false, Ok(())),
+            (Some(matching), start, false, Err(ScanError::Busy)),
+            (None, start, false, Err(ScanError::Busy)),
+            (
+                Some(b"--user-data-dir\0"),
+                start,
+                false,
+                Err(ScanError::Busy),
+            ),
+            (Some(matching), Some((11, 0)), false, Ok(())),
+            (None, None, false, Ok(())),
+            (None, start, true, Ok(())),
+        ] {
+            let table = Fixture {
+                path: None,
+                paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+                argv_missing,
+                ..Fixture::candidate(&[start, after], args)
+            };
+            assert_eq!(table.scan(|| Ok(())), expected);
+            assert_eq!(table.reads.get(), 1);
+            assert!(table.stamps.borrow().is_empty());
+        }
     }
 }
 
