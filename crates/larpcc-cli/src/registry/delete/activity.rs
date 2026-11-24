@@ -1,4 +1,4 @@
-//! Inspect only the argument vector of a verified desktop app.
+//! Check desktop process activity using bounded argument-vector probes.
 
 #[cfg(any(test, target_os = "macos"))]
 use crate::registry::Error;
@@ -103,6 +103,200 @@ trait ProcessTable {
     fn stamp(&self, pid: i32, previous: Option<StartTime>) -> Result<Option<Stamp>, ScanError>;
     fn validate(&self, pid: i32, app: App, main: bool) -> Result<(), Error>;
     fn args(&self, pid: i32) -> Result<Option<Vec<u8>>, Error>;
+    /// `follow` resolves the argv spelling. The expected directory is opened once and kept.
+    fn profile_dir(&self, path: &[u8], follow: bool) -> Result<DirHit, ScanError>;
+    /// Pathname state only. Does not open a new descriptor.
+    fn stat_dir(&self, path: &[u8]) -> Result<Recorded, ScanError>;
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct DirId {
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+struct FoundDir {
+    id: DirId,
+    file: Option<std::fs::File>,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+enum DirHit {
+    Found(FoundDir),
+    Absent,
+    /// Non-unix tests have no directory identity. That is not a match and not an error.
+    #[cfg(not(unix))]
+    Unsupported,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recorded {
+    Absent,
+    Present(DirId),
+    #[cfg(not(unix))]
+    Unsupported,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone)]
+struct Expected {
+    spellings: HashSet<Vec<u8>>,
+    ids: HashSet<DirId>,
+    pinned: Vec<(Vec<u8>, Recorded)>,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+impl Expected {
+    fn recheck(
+        &self,
+        table: &impl ProcessTable,
+        check_deadline: &impl Fn() -> Result<(), ScanError>,
+    ) -> Result<(), ScanError> {
+        for (spelling, state) in &self.pinned {
+            check_deadline()?;
+            if table.stat_dir(spelling)? != *state {
+                return Err(ScanError::Busy);
+            }
+            check_deadline()?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn pin_expected(
+    table: &impl ProcessTable,
+    spellings: HashSet<Vec<u8>>,
+    check_deadline: &impl Fn() -> Result<(), ScanError>,
+) -> Result<(Expected, Vec<std::fs::File>), ScanError> {
+    let mut ids = HashSet::new();
+    let mut held = Vec::new();
+    let mut pinned = Vec::new();
+    for spelling in &spellings {
+        // An unfinished pin must not be retried: the retry would adopt a new baseline.
+        if let Err(ScanError::Deadline) = check_deadline() {
+            return Err(ScanError::Busy);
+        }
+        let state = match table.profile_dir(spelling, false)? {
+            DirHit::Found(found) => {
+                ids.insert(found.id);
+                held.extend(found.file);
+                Recorded::Present(found.id)
+            }
+            DirHit::Absent => Recorded::Absent,
+            #[cfg(not(unix))]
+            DirHit::Unsupported => Recorded::Unsupported,
+        };
+        pinned.push((spelling.clone(), state));
+        if let Err(ScanError::Deadline) = check_deadline() {
+            return Err(ScanError::Busy);
+        }
+    }
+    Ok((
+        Expected {
+            spellings,
+            ids,
+            pinned,
+        },
+        held,
+    ))
+}
+
+#[cfg(all(unix, any(test, target_os = "macos")))]
+fn stat_dir_fs(path: &[u8]) -> Result<Recorded, ScanError> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let path = Path::new(std::ffi::OsStr::from_bytes(path));
+    match path.symlink_metadata() {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Recorded::Absent),
+        Err(_) => Err(ScanError::Busy),
+        Ok(meta) if meta.file_type().is_dir() => Ok(Recorded::Present(DirId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        })),
+        Ok(_) => Err(ScanError::Busy),
+    }
+}
+
+#[cfg(all(unix, any(test, target_os = "macos")))]
+fn profile_dir_fs(path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let path = Path::new(std::ffi::OsStr::from_bytes(path));
+    let canonical;
+    let path = if follow {
+        canonical = path.canonicalize().map_err(|_| ScanError::Busy)?;
+        canonical.as_path()
+    } else {
+        let listed = match path.symlink_metadata() {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DirHit::Absent),
+            Err(_) => return Err(ScanError::Busy),
+            Ok(meta) if !meta.file_type().is_dir() => return Err(ScanError::Busy),
+            Ok(meta) => DirId {
+                dev: meta.dev(),
+                ino: meta.ino(),
+            },
+        };
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)
+            .map_err(|_| ScanError::Busy)?;
+        let meta = file.metadata().map_err(|_| ScanError::Busy)?;
+        if !meta.is_dir() {
+            return Err(ScanError::Busy);
+        }
+        let id = DirId {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        };
+        // The listing taken before open and the pathname after open must both be this descriptor.
+        if id != listed {
+            return Err(ScanError::Busy);
+        }
+        let now = path.symlink_metadata().map_err(|_| ScanError::Busy)?;
+        if !now.file_type().is_dir() || now.dev() != id.dev || now.ino() != id.ino {
+            return Err(ScanError::Busy);
+        }
+        return Ok(DirHit::Found(FoundDir {
+            id,
+            file: Some(file),
+        }));
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| ScanError::Busy)?;
+    let meta = file.metadata().map_err(|_| ScanError::Busy)?;
+    if !meta.is_dir() {
+        return Err(ScanError::Busy);
+    }
+    let id = DirId {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    };
+    Ok(DirHit::Found(FoundDir {
+        id,
+        file: Some(file),
+    }))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn target_is_profile(
+    table: &impl ProcessTable,
+    dir: &[u8],
+    expected: &Expected,
+) -> Result<bool, ScanError> {
+    match table.profile_dir(dir, true)? {
+        DirHit::Found(found) => Ok(expected.ids.contains(&found.id)),
+        #[cfg(not(unix))]
+        DirHit::Unsupported => Ok(false),
+        DirHit::Absent => Err(ScanError::Busy),
+    }
 }
 
 #[cfg(any(test, target_os = "macos"))]
@@ -140,10 +334,11 @@ fn retry_scan(
 #[cfg(any(test, target_os = "macos"))]
 fn scan(
     table: &impl ProcessTable,
-    expected: &HashSet<Vec<u8>>,
+    expected: &Expected,
     uncertain: &mut HashMap<i32, Option<StartTime>>,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
+    expected.recheck(table, &check_deadline)?;
     let previous = std::mem::take(uncertain);
     for pid in table.pids()? {
         check_deadline()?;
@@ -158,6 +353,10 @@ fn scan(
             }
             (Ok(None), _) => continue,
             (Err(e), _) if e.kind() == io::ErrorKind::PermissionDenied => continue,
+            (Err(e), _) if e.kind() == io::ErrorKind::NotFound => {
+                scan_without_path(table, pid, expected, &check_deadline)?;
+                continue;
+            }
             (Err(_), _) => return Err(ScanError::Busy),
         };
         let Some(app) = candidate(&path) else {
@@ -184,6 +383,64 @@ fn scan(
     if !uncertain.is_empty() {
         return Err(ScanError::CandidateUncertain);
     }
+    // A deadline during the final recheck is not a reason to scan again.
+    match expected.recheck(table, &check_deadline) {
+        Ok(()) => {}
+        Err(ScanError::Deadline) => return Err(ScanError::Busy),
+        Err(error) => return Err(error),
+    }
+    if let Err(ScanError::Deadline) = check_deadline() {
+        return Err(ScanError::Busy);
+    }
+    Ok(())
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn scan_without_path(
+    table: &impl ProcessTable,
+    pid: i32,
+    expected: &Expected,
+    check_deadline: impl Fn() -> Result<(), ScanError>,
+) -> Result<(), ScanError> {
+    let Some(before) = table.stamp(pid, None).map_err(|_| ScanError::Busy)? else {
+        return Ok(());
+    };
+    if before.exiting {
+        return Err(ScanError::Busy);
+    }
+    check_deadline()?;
+    let args = table.args(pid);
+    let Some(after) = table
+        .stamp(pid, Some(before.start))
+        .map_err(|_| ScanError::Busy)?
+    else {
+        // The later stamp proved this PID exited or was reused.
+        return Ok(());
+    };
+    if after.exiting {
+        return Err(ScanError::Busy);
+    }
+    let Some(args) = args? else {
+        // ESRCH or missing argv does not clear a process that is still this start time.
+        return Err(ScanError::Busy);
+    };
+    let dir = user_data_dir(&args)?;
+    if dir.is_some_and(|dir| expected.spellings.contains(dir)) {
+        return Err(ScanError::Busy);
+    }
+    let Some(dir) = dir else {
+        return Ok(());
+    };
+    let matched = target_is_profile(table, dir, expected)?;
+    let Some(again) = table
+        .stamp(pid, Some(before.start))
+        .map_err(|_| ScanError::Busy)?
+    else {
+        return Ok(());
+    };
+    if again.exiting || matched {
+        return Err(ScanError::Busy);
+    }
     Ok(())
 }
 
@@ -193,7 +450,7 @@ fn scan_candidate(
     pid: i32,
     path: &Path,
     (app, main): (App, bool),
-    expected: &HashSet<Vec<u8>>,
+    expected: &Expected,
     start: &mut Option<StartTime>,
     check_deadline: impl Fn() -> Result<(), ScanError>,
 ) -> Result<(), ScanError> {
@@ -219,7 +476,18 @@ fn scan_candidate(
         return Err(ScanError::CandidateUncertain);
     };
     let dir = user_data_dir(&args).map_err(|_| ScanError::CandidateUncertain)?;
-    if dir.is_some_and(|dir| expected.contains(dir)) {
+    if dir.is_some_and(|dir| expected.spellings.contains(dir)) {
+        return Err(ScanError::Busy);
+    }
+    let Some(dir) = dir else {
+        return Ok(());
+    };
+    let matched = target_is_profile(table, dir, expected)?;
+    // Resolution sits between identity checks. Recheck before clearing.
+    if !same_process(table, pid, before, path)? {
+        return Ok(());
+    }
+    if matched {
         return Err(ScanError::Busy);
     }
     Ok(())
@@ -299,7 +567,10 @@ mod tests {
         path: Option<&'static str>,
         paths: RefCell<VecDeque<io::Result<Option<PathBuf>>>>,
         stamps: RefCell<VecDeque<Option<Stamp>>>,
-        args: Option<&'static [u8]>,
+        args: Option<Vec<u8>>,
+        expected: Option<Vec<u8>>,
+        injected: HashMap<Vec<u8>, DirId>,
+        pinned: RefCell<Option<(Expected, Vec<std::fs::File>)>>,
         argv_missing: bool,
         reads: Cell<usize>,
         listings: Cell<usize>,
@@ -307,7 +578,7 @@ mod tests {
     }
 
     impl Fixture {
-        fn candidate(stamps: &[Option<StartTime>], args: Option<&'static [u8]>) -> Self {
+        fn candidate(stamps: &[Option<StartTime>], args: Option<&[u8]>) -> Self {
             Self {
                 path: Some(HELPER),
                 paths: RefCell::default(),
@@ -322,7 +593,10 @@ mod tests {
                         })
                         .collect(),
                 ),
-                args,
+                args: args.map(Vec::from),
+                expected: None,
+                injected: HashMap::new(),
+                pinned: RefCell::new(None),
                 argv_missing: false,
                 reads: Cell::new(0),
                 listings: Cell::new(0),
@@ -339,12 +613,16 @@ mod tests {
             uncertain: &mut HashMap<i32, Option<StartTime>>,
             deadline: impl Fn() -> Result<(), ScanError>,
         ) -> Result<(), ScanError> {
-            scan(
-                self,
-                &HashSet::from([TARGET.as_bytes().to_vec()]),
-                uncertain,
-                deadline,
-            )
+            if self.pinned.borrow().is_none() {
+                let spellings = HashSet::from([self
+                    .expected
+                    .clone()
+                    .unwrap_or_else(|| TARGET.as_bytes().to_vec())]);
+                let pinned = pin_expected(self, spellings, &|| Ok(()))?;
+                *self.pinned.borrow_mut() = Some(pinned);
+            }
+            let expected = self.pinned.borrow().as_ref().unwrap().0.clone();
+            scan(self, &expected, uncertain, deadline)
         }
     }
 
@@ -379,6 +657,7 @@ mod tests {
         }
 
         fn validate(&self, _pid: i32, app: App, main: bool) -> Result<(), Error> {
+            assert_eq!(self.path, Some(HELPER));
             assert_eq!((app, main), (App::ChatGpt, false));
             Ok(())
         }
@@ -388,11 +667,48 @@ mod tests {
             if self.argv_missing {
                 return Ok(None);
             }
-            let args = self.args.ok_or(Error::AuthBusy)?;
+            let args = self.args.as_deref().ok_or(Error::AuthBusy)?;
             let mut packet = 2i32.to_ne_bytes().to_vec();
             packet.extend_from_slice(b"/fixture/Helper\0\0Helper\0");
             packet.extend_from_slice(args);
             Ok(Some(packet))
+        }
+
+        fn profile_dir(&self, path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
+            if !self.injected.is_empty() {
+                return Ok(match self.injected.get(path).copied() {
+                    Some(id) => DirHit::Found(FoundDir { id, file: None }),
+                    None => DirHit::Absent,
+                });
+            }
+            #[cfg(unix)]
+            {
+                profile_dir_fs(path, follow)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = (path, follow);
+                // shortcut: non-unix tests compare the raw spelling; upgrade when delete scans processes there.
+                Ok(DirHit::Unsupported)
+            }
+        }
+
+        fn stat_dir(&self, path: &[u8]) -> Result<Recorded, ScanError> {
+            if !self.injected.is_empty() {
+                return Ok(match self.injected.get(path) {
+                    Some(id) => Recorded::Present(*id),
+                    None => Recorded::Absent,
+                });
+            }
+            #[cfg(unix)]
+            {
+                stat_dir_fs(path)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = path;
+                Ok(Recorded::Unsupported)
+            }
         }
     }
 
@@ -440,8 +756,23 @@ mod tests {
             assert_eq!(table.scan(|| Ok(())), Err(ScanError::CandidateUncertain));
             assert_eq!(table.reads.get(), 1);
         }
-        let table = Fixture::candidate(&stable, Some(b"--user-data-dir=/fixture/desktop-other\0"));
-        assert_eq!(table.scan(|| Ok(())), Ok(()));
+        // A real directory keeps this an unrelated success once spelling is resolved.
+        #[cfg(unix)]
+        {
+            let other = tempfile::tempdir().unwrap();
+            let unrelated = directory_arg(other.path());
+            let table = Fixture::candidate(&[Some((10, 0)); 4], Some(&unrelated));
+            assert_eq!(table.scan(|| Ok(())), Ok(()));
+        }
+        #[cfg(not(unix))]
+        {
+            let table = Fixture::candidate(
+                &[Some((10, 0)); 4],
+                Some(b"--user-data-dir=/fixture/desktop-other\0"),
+            );
+            assert_eq!(table.scan(|| Ok(())), Ok(()));
+            assert!(table.stamps.borrow().is_empty());
+        }
     }
 
     #[test]
@@ -451,14 +782,21 @@ mod tests {
                 path: None,
                 ..Fixture::candidate(&[], None)
             };
+            let fired = Cell::new(false);
             let result = retry_scan(
                 |uncertain| {
                     table.scan_with_history(uncertain, || {
-                        if table.listings.get() == 1 || retry_expired {
-                            Err(ScanError::Deadline)
-                        } else {
-                            Ok(())
+                        if table.listings.get() == 0 {
+                            return Ok(());
                         }
+                        if !fired.get() && table.listings.get() == 1 {
+                            fired.set(true);
+                            return Err(ScanError::Deadline);
+                        }
+                        if retry_expired && table.listings.get() >= 2 {
+                            return Err(ScanError::Deadline);
+                        }
+                        Ok(())
                     })
                 },
                 || panic!("deadline retry should not wait"),
@@ -466,6 +804,31 @@ mod tests {
             assert_eq!(result.is_err(), retry_expired);
             assert_eq!(table.listings.get(), 2);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_deadline_during_final_recheck_stays_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let desktop = root.path().join("desktop");
+        std::fs::create_dir(&desktop).unwrap();
+        let table = Fixture {
+            path: None,
+            expected: Some(path_bytes(&desktop)),
+            ..Fixture::candidate(&[], None)
+        };
+        let checks = Cell::new(0u32);
+        let result = table.scan(|| {
+            let seen = checks.get();
+            checks.set(seen + 1);
+            // Opening recheck and the process loop are checks 0-3. Check 4 is the final recheck.
+            if seen == 4 {
+                Err(ScanError::Deadline)
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result, Err(ScanError::Busy));
     }
 
     #[test]
@@ -550,26 +913,28 @@ mod tests {
     }
 
     #[test]
-    fn stage04_delete_rechecks_a_remembered_candidate_after_path_denial() {
+    fn stage04_delete_rechecks_a_remembered_candidate_after_path_failure() {
         let start = Some((10, 0));
-        for after in [start, None, Some((11, 0))] {
-            let table = Fixture {
-                paths: RefCell::new(VecDeque::from([
-                    Ok(Some(HELPER.into())),
-                    Ok(Some(HELPER.into())),
-                    Ok(Some(HELPER.into())),
-                    Err(io::ErrorKind::PermissionDenied.into()),
-                ])),
-                ..Fixture::candidate(&[start, start, start, after], None)
-            };
-            let result = retry_scan(
-                |uncertain| table.scan_with_history(uncertain, || Ok(())),
-                || (),
-            );
-            assert_eq!(result.is_err(), after == start);
-            assert_eq!(table.listings.get(), 2);
-            assert_eq!(table.reads.get(), 1);
-            assert!(table.stamps.borrow().is_empty());
+        for error in [io::ErrorKind::PermissionDenied, io::ErrorKind::NotFound] {
+            for after in [start, None, Some((11, 0))] {
+                let table = Fixture {
+                    paths: RefCell::new(VecDeque::from([
+                        Ok(Some(HELPER.into())),
+                        Ok(Some(HELPER.into())),
+                        Ok(Some(HELPER.into())),
+                        Err(error.into()),
+                    ])),
+                    ..Fixture::candidate(&[start, start, start, after], None)
+                };
+                let result = retry_scan(
+                    |uncertain| table.scan_with_history(uncertain, || Ok(())),
+                    || (),
+                );
+                assert_eq!(result.is_err(), after == start);
+                assert_eq!(table.listings.get(), 2);
+                assert_eq!(table.reads.get(), 1);
+                assert!(table.stamps.borrow().is_empty());
+            }
         }
     }
 
@@ -595,13 +960,335 @@ mod tests {
     }
 
     #[test]
-    fn stage04_delete_refuses_an_unidentified_executable_with_enoent() {
-        let table = Fixture {
+    fn stage04_delete_checks_argv_when_the_executable_path_is_missing() {
+        let start = Some((10, 0));
+        let unrelated = b"--unrelated\0".as_slice();
+        let matching = b"--user-data-dir=/fixture/desktop\0".as_slice();
+        for (args, after, argv_missing, expected) in [
+            (Some(unrelated), start, false, Ok(())),
+            (Some(matching), start, false, Err(ScanError::Busy)),
+            (None, start, false, Err(ScanError::Busy)),
+            (
+                Some(b"--user-data-dir\0"),
+                start,
+                false,
+                Err(ScanError::Busy),
+            ),
+            (Some(matching), Some((11, 0)), false, Ok(())),
+            (None, None, false, Ok(())),
+            (None, None, true, Ok(())),
+            (None, Some((11, 0)), true, Ok(())),
+            // ESRCH with the same live stamp is not proof the process is gone.
+            (None, start, true, Err(ScanError::Busy)),
+        ] {
+            let table = Fixture {
+                path: None,
+                paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+                argv_missing,
+                ..Fixture::candidate(&[start, after], args)
+            };
+            assert_eq!(table.scan(|| Ok(())), expected);
+            assert_eq!(table.reads.get(), 1);
+            assert!(table.stamps.borrow().is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    fn path_bytes(path: &Path) -> Vec<u8> {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+
+    #[cfg(unix)]
+    fn directory_arg(path: &Path) -> Vec<u8> {
+        let mut arg = b"--user-data-dir=".to_vec();
+        arg.extend(path_bytes(path));
+        arg.push(0);
+        arg
+    }
+
+    #[test]
+    fn stage04_delete_live_enoent_without_argv_stays_busy() {
+        for exiting in [false, true] {
+            let table = Fixture {
+                path: None,
+                paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+                argv_missing: true,
+                ..Fixture::candidate(&[], None)
+            };
+            table.stamps.borrow_mut().extend([
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting: false,
+                }),
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting,
+                }),
+            ]);
+            assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
+            assert_eq!(table.reads.get(), 1);
+            assert!(table.stamps.borrow().is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_signed_candidate_resolves_directory_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let desktop = root.path().join("desktop");
+        std::fs::create_dir(&desktop).unwrap();
+        let link = root.path().join("alias");
+        std::os::unix::fs::symlink(&desktop, &link).unwrap();
+        let slash = root.path().join("desktop-slash");
+        std::fs::create_dir(&slash).unwrap();
+        let mut slash_arg = directory_arg(&slash);
+        slash_arg.pop();
+        slash_arg.extend(b"/\0");
+        for (arg, expected) in [
+            (
+                directory_arg(&link),
+                path_bytes(&desktop.canonicalize().unwrap()),
+            ),
+            (slash_arg, path_bytes(&slash.canonicalize().unwrap())),
+        ] {
+            let table = Fixture {
+                expected: Some(expected),
+                ..Fixture::candidate(&[Some((10, 0)); 4], Some(&arg))
+            };
+            assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
+            assert_eq!(table.reads.get(), 1);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_matches_a_symlinked_ancestor_by_directory_identity() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let real_parent = root.path().join("real");
+        let desktop = real_parent.join("desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        let via_parent = root.path().join("via");
+        std::os::unix::fs::symlink(&real_parent, &via_parent).unwrap();
+        let via = via_parent.join("desktop");
+        let real_meta = std::fs::metadata(&desktop).unwrap();
+        let via_meta = std::fs::metadata(&via).unwrap();
+        assert_eq!(
+            (real_meta.dev(), real_meta.ino()),
+            (via_meta.dev(), via_meta.ino())
+        );
+        // The profile spelling is not the canonical text of the argv path.
+        assert_ne!(
+            path_bytes(&via),
+            path_bytes(&desktop.canonicalize().unwrap())
+        );
+        let expected = path_bytes(&via);
+        let arg = directory_arg(&desktop);
+        let signed = Fixture {
+            expected: Some(expected.clone()),
+            ..Fixture::candidate(&[Some((10, 0)); 4], Some(&arg))
+        };
+        assert_eq!(signed.scan(|| Ok(())), Err(ScanError::Busy));
+        assert_eq!(signed.reads.get(), 1);
+
+        let enoent = Fixture {
+            path: None,
             paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
-            ..Fixture::candidate(&[], None)
+            expected: Some(expected),
+            ..Fixture::candidate(&[], Some(&arg))
+        };
+        enoent.stamps.borrow_mut().extend([
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+        ]);
+        assert_eq!(enoent.scan(|| Ok(())), Err(ScanError::Busy));
+        assert_eq!(enoent.reads.get(), 1);
+        assert!(enoent.stamps.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_matches_injected_identity_when_canonical_spellings_differ() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let expected_dir = root.path().join("expected");
+        let target_dir = root.path().join("target");
+        std::fs::create_dir(&expected_dir).unwrap();
+        std::fs::create_dir(&target_dir).unwrap();
+        assert_ne!(
+            expected_dir.canonicalize().unwrap(),
+            target_dir.canonicalize().unwrap()
+        );
+        let expected_meta = std::fs::metadata(&expected_dir).unwrap();
+        let target_meta = std::fs::metadata(&target_dir).unwrap();
+        assert_ne!(
+            (expected_meta.dev(), expected_meta.ino()),
+            (target_meta.dev(), target_meta.ino())
+        );
+        let id = DirId { dev: 9, ino: 9 };
+        let expected_bytes = path_bytes(&expected_dir);
+        let target_bytes = path_bytes(&target_dir);
+        let arg = directory_arg(&target_dir);
+        let mut injected = HashMap::new();
+        injected.insert(expected_bytes.clone(), id);
+        injected.insert(target_bytes.clone(), id);
+        let signed = Fixture {
+            expected: Some(expected_bytes.clone()),
+            injected,
+            ..Fixture::candidate(&[Some((10, 0)); 4], Some(&arg))
+        };
+        assert_eq!(signed.scan(|| Ok(())), Err(ScanError::Busy));
+        assert!(signed.stamps.borrow().is_empty());
+
+        let mut injected = HashMap::new();
+        injected.insert(expected_bytes.clone(), id);
+        injected.insert(target_bytes, id);
+        let enoent = Fixture {
+            path: None,
+            paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+            expected: Some(expected_bytes),
+            injected,
+            ..Fixture::candidate(&[], Some(&arg))
+        };
+        enoent.stamps.borrow_mut().extend([
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+            Some(Stamp {
+                start: (10, 0),
+                exiting: false,
+            }),
+        ]);
+        assert_eq!(enoent.scan(|| Ok(())), Err(ScanError::Busy));
+        assert!(enoent.stamps.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_expected_directory_drift_across_retry_stays_busy() {
+        for change in ["appear", "disappear", "replace"] {
+            let root = tempfile::tempdir().unwrap();
+            let desktop = root.path().join("desktop");
+            if change != "appear" {
+                std::fs::create_dir(&desktop).unwrap();
+            }
+            let table = Fixture {
+                expected: Some(path_bytes(&desktop)),
+                ..Fixture::candidate(&[], None)
+            };
+            table.stamps.borrow_mut().push_back(Some(Stamp {
+                start: (10, 0),
+                exiting: true,
+            }));
+            let result = retry_scan(
+                |uncertain| table.scan_with_history(uncertain, || Ok(())),
+                || match change {
+                    "appear" => std::fs::create_dir(&desktop).unwrap(),
+                    "disappear" => std::fs::remove_dir(&desktop).unwrap(),
+                    "replace" => {
+                        std::fs::remove_dir(&desktop).unwrap();
+                        std::fs::create_dir(&desktop).unwrap();
+                    }
+                    _ => unreachable!(),
+                },
+            );
+            assert!(
+                matches!(result, Err(Error::AuthBusy)),
+                "{change} returned {result:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_non_directory_target_stays_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("not-a-directory");
+        std::fs::write(&file, b"x").unwrap();
+        let arg = directory_arg(&file);
+        let table = Fixture::candidate(&[Some((10, 0)); 3], Some(&arg));
+        assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_rechecks_identity_after_resolving_a_signed_candidate() {
+        let other = tempfile::tempdir().unwrap();
+        let arg = directory_arg(other.path());
+        let table = Fixture {
+            paths: RefCell::new(VecDeque::from([
+                Ok(Some(HELPER.into())),
+                Ok(Some(HELPER.into())),
+                Ok(Some(HELPER.into())),
+                Ok(Some("/Applications/Other.app/Contents/MacOS/Other".into())),
+            ])),
+            ..Fixture::candidate(&[Some((10, 0)); 4], Some(&arg))
         };
         assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
-        assert_eq!(table.reads.get(), 0);
+        assert!(table.paths.borrow().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_unresolvable_signed_directory_stays_busy() {
+        let table = Fixture::candidate(
+            &[Some((10, 0)); 3],
+            Some(b"--user-data-dir=/fixture/desktop-missing\0"),
+        );
+        assert_eq!(table.scan(|| Ok(())), Err(ScanError::Busy));
+        assert_eq!(table.reads.get(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage04_delete_enoent_resolution_rechecks_the_start_time_before_clearing() {
+        let other = tempfile::tempdir().unwrap();
+        let arg = directory_arg(other.path());
+        for exiting in [false, true] {
+            let table = Fixture {
+                path: None,
+                paths: RefCell::new(VecDeque::from([Err(io::ErrorKind::NotFound.into())])),
+                ..Fixture::candidate(&[], Some(&arg))
+            };
+            table.stamps.borrow_mut().extend([
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting: false,
+                }),
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting: false,
+                }),
+                Some(Stamp {
+                    start: (10, 0),
+                    exiting,
+                }),
+            ]);
+            let expected = if exiting {
+                Err(ScanError::Busy)
+            } else {
+                Ok(())
+            };
+            assert_eq!(table.scan(|| Ok(())), expected);
+            assert_eq!(table.reads.get(), 1);
+            assert!(table.stamps.borrow().is_empty());
+        }
     }
 }
 
@@ -628,7 +1315,13 @@ mod macos {
         let table = NativeProcessTable {
             uid: unsafe { libc::geteuid() },
         };
-        retry_scan(
+        let mut spellings = HashSet::new();
+        for path in paths {
+            spellings.insert(path.as_os_str().as_bytes().to_vec());
+        }
+        // Open once. Later attempts re-stat the pathname and do not replace these descriptors.
+        let mut pinned = None;
+        let result = retry_scan(
             |uncertain| {
                 let deadline = Instant::now() + Duration::from_secs(2);
                 let check_deadline = || {
@@ -638,23 +1331,20 @@ mod macos {
                         Ok(())
                     }
                 };
-                let mut expected = HashSet::new();
-                for path in paths {
-                    check_deadline()?;
-                    expected.insert(path.as_os_str().as_bytes().to_vec());
-                    match path.canonicalize() {
-                        Ok(resolved) => {
-                            expected.insert(resolved.as_os_str().as_bytes().to_vec());
-                        }
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-                        Err(_) => return Err(ScanError::Busy),
-                    }
+                if pinned.is_none() {
+                    pinned = Some(pin_expected(&table, spellings.clone(), &check_deadline)?);
                 }
-                check_deadline()?;
-                scan(&table, &expected, uncertain, check_deadline)
+                scan(
+                    &table,
+                    &pinned.as_ref().unwrap().0,
+                    uncertain,
+                    check_deadline,
+                )
             },
             || std::thread::sleep(Duration::from_millis(150)),
-        )
+        );
+        drop(pinned);
+        result
     }
 
     struct NativeProcessTable {
@@ -780,6 +1470,14 @@ mod macos {
             }
             args.truncate(length);
             Ok(Some(args))
+        }
+
+        fn profile_dir(&self, path: &[u8], follow: bool) -> Result<DirHit, ScanError> {
+            profile_dir_fs(path, follow)
+        }
+
+        fn stat_dir(&self, path: &[u8]) -> Result<Recorded, ScanError> {
+            stat_dir_fs(path)
         }
     }
 
