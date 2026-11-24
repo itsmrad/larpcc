@@ -28,6 +28,8 @@ struct AddServerSheet: View {
         }
     }
     private var problem: String? {
+        if trimmed(name).isEmpty { return "Enter a server name." }
+        if !LarpNames.isValid(trimmed(name)) { return catalogNameHint }
         if store.snapshot?.servers.contains(where: { $0.id == trimmed(name) }) == true { return "A server with that name already exists." }
         return MCPInput.problem(name: trimmed(name), transport: transport)
     }
@@ -38,6 +40,7 @@ struct AddServerSheet: View {
         } content: {
             Section {
                 TextField("Name", text: $name, prompt: Text("files"))
+                    .textFieldStyle(.roundedBorder)
                 Picker("Connects with", selection: $kind) {
                     ForEach(Kind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
@@ -49,14 +52,17 @@ struct AddServerSheet: View {
             case .command: commandFields
             case .url: urlFields
             }
-            Section {
-                EmptyView()
-            } footer: {
-                Text(trimmed(name).isEmpty ? "References are names only. Larp never stores secret values, and LarpCC never starts a server."
-                     : problem ?? "References are names only. Larp never stores secret values, and LarpCC never starts a server.")
-                    .foregroundStyle(.secondary)
-            }
         }
+    }
+
+    private var transportFooter: some View {
+        VStack(alignment: .leading, spacing: SettingsSpacing.tight) {
+            if let problem {
+                Text(problem)
+            }
+            Text("Use environment variable names for references. LarpCC never starts a server.")
+        }
+        .foregroundStyle(SettingsTypography.supportingInk)
     }
 
     private var commandFields: some View {
@@ -65,14 +71,18 @@ struct AddServerSheet: View {
                 Button("Choose…") { if let chosen = choosePath(title: "Choose the server program") { path = chosen } }
             } label: {
                 Text("Program")
-                Text(path.isEmpty ? "None chosen" : path).truncationMode(.middle)
+                Text(path.isEmpty ? "None chosen" : path)
+                    .foregroundStyle(SettingsTypography.supportingInk)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(path)
             }
             Picker("Argument", selection: $stdioArg) {
                 Text("None").tag("")
                 ForEach(MCPInput.allowedArgs, id: \.self) { Text($0).tag($0) }
             }
             ForEach($envRefs) { $field in
-                HStack(spacing: 8) {
+                HStack(spacing: SettingsSpacing.inline) {
                     Text("Environment")
                     Spacer()
                     TextField("Environment variable", text: $field.name, prompt: Text("API_TOKEN"))
@@ -83,21 +93,24 @@ struct AddServerSheet: View {
                 }
             }
             Button("Add Environment Reference") { envRefs.append(RefField()) }
-                .disabled(envRefs.count >= MCPInput.maxRefs)
+                .disabledReason(envRefs.count >= MCPInput.maxRefs ? "Maximum of \(MCPInput.maxRefs) references" : nil)
         } header: {
             Text("Command")
+        } footer: {
+            transportFooter
         }
     }
 
     private var urlFields: some View {
         Section {
             TextField("Address", text: $url, prompt: Text("https://example.com/mcp"))
+                .textFieldStyle(.roundedBorder)
             ForEach($headers) { $field in
-                HStack(spacing: 8) {
+                HStack(spacing: SettingsSpacing.inline) {
                     TextField("Header", text: $field.header, prompt: Text("Authorization"))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
-                    Text("from").foregroundStyle(.secondary)
+                    Text("from").foregroundStyle(SettingsTypography.supportingInk)
                     TextField("Environment variable", text: $field.envVar, prompt: Text("API_TOKEN"))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
@@ -105,17 +118,20 @@ struct AddServerSheet: View {
                 }
             }
             Button("Add Header Reference") { headers.append(HeaderField()) }
-                .disabled(headers.count >= MCPInput.maxRefs)
+                .disabledReason(headers.count >= MCPInput.maxRefs ? "Maximum of \(MCPInput.maxRefs) references" : nil)
         } header: {
             Text("URL")
+        } footer: {
+            transportFooter
         }
     }
 
     private func removeButton(_ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
+            Image(systemName: "minus.circle.fill").foregroundStyle(SettingsTypography.supportingInk)
         }
         .buttonStyle(.borderless)
+        .help("Remove reference")
         .accessibilityLabel("Remove reference")
     }
 }
@@ -129,11 +145,21 @@ struct AddSkillSheet: View {
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
 
-    private var taken: Bool { store.snapshot?.skills.contains { $0.id == trimmed(name) } ?? false }
-    private var valid: Bool { MCPInput.isAbsolutePath(path) && LarpNames.isValid(trimmed(name)) && !taken }
+    private var problem: String? {
+        if path.isEmpty { return "Choose a folder containing SKILL.md." }
+        if !MCPInput.isAbsolutePath(path) { return "Choose a folder with a valid absolute path." }
+        if trimmed(name).isEmpty { return "Enter a skill name." }
+        if !LarpNames.isValid(trimmed(name)) {
+            return catalogNameHint
+        }
+        if store.snapshot?.skills.contains(where: { $0.id == trimmed(name) }) == true {
+            return "A skill with that name already exists."
+        }
+        return nil
+    }
 
     var body: some View {
-        EditSheet(title: "Add Skill", confirm: "Add", canConfirm: valid && !store.busy, error: $error) {
+        EditSheet(title: "Add Skill", confirm: "Add", canConfirm: problem == nil && !store.busy, error: $error) {
             submit(store, .addSkill(path: path, name: trimmed(name)), error: $error, dismiss: dismiss)
         } content: {
             Section {
@@ -145,15 +171,19 @@ struct AddSkillSheet: View {
                     }
                 } label: {
                     Text("Folder")
-                    Text(path.isEmpty ? "A folder containing SKILL.md" : path).truncationMode(.middle)
+                    Text(path.isEmpty ? "None chosen" : path)
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(path)
                 }
                 TextField("Name", text: $name, prompt: Text("code-review"))
+                    .textFieldStyle(.roundedBorder)
             } header: {
                 Text("New Skill")
             } footer: {
-                Text(taken ? "A skill with that name already exists."
-                     : "Larp copies the folder once into its skill store. New skills start on for every active profile.")
-                    .foregroundStyle(.secondary)
+                Text(problem ?? "Larp copies the folder once into its skill store. New skills start on for every active command-line profile.")
+                    .foregroundStyle(SettingsTypography.supportingInk)
             }
         }
     }
@@ -165,3 +195,5 @@ struct AddSkillSheet: View {
         return LarpNames.isValid(String(name.prefix(32))) ? String(name.prefix(32)) : ""
     }
 }
+
+private let catalogNameHint = "Start with a lowercase letter. Use up to 32 lowercase letters, digits, hyphens, or underscores."
