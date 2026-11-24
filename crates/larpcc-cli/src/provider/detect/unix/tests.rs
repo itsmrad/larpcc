@@ -125,7 +125,7 @@ fn stage19_configured_provider_root_is_excluded_before_walk() {
     }
     let renamed = path.join("renamed");
     fs::rename(&actual, &renamed).unwrap();
-    let sibling = renamed.join("codex");
+    let sibling = renamed.join("codéx");
     private_executable(&sibling);
     let relocated = renamed.join("private-state");
     assert!(
@@ -141,6 +141,26 @@ fn stage19_configured_provider_root_is_excluded_before_walk() {
             .is_ok()
     );
     assert!(scan.skipped.contains(&("codex", relocated)));
+}
+
+#[test]
+fn stage19_nonmatching_ancestors_and_siblings_are_allowed() {
+    let temp = private_dir();
+    let home = temp.path().join("claude/Élodie");
+    let config = home.join(".config");
+    fs::create_dir_all(&config).unwrap();
+    let root = config.join("claude");
+    let sibling = config.join("claudé");
+    private_executable(&sibling);
+    let mut guard = Exclusions::new(Some(&home));
+    guard
+        .register(std::slice::from_ref(&root), || true)
+        .unwrap();
+    assert!(walk(&sibling, |p, parent| guard.allows_child(p, parent), false).is_ok());
+    assert!(matches!(
+        walk(&root, |p, parent| guard.allows_child(p, parent), false),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+    ));
 }
 
 #[test]
@@ -163,6 +183,26 @@ fn stage19_fails_closed_when_a_protected_parent_is_ambiguous() {
         walk(&path.join("absent"), |p, parent| guard.allows_child(p, parent), false),
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
     ));
+}
+
+#[test]
+fn stage19_overlapping_configured_roots_close_setup_in_either_order() {
+    let temp = private_dir();
+    let path = temp.path();
+    let actual = path.join("actual");
+    let alias = path.join("alias");
+    let state = actual.join("private-state");
+    fs::create_dir_all(&state).unwrap();
+    symlink("actual", &alias).unwrap();
+    let mut roots = [alias.join("private-state"), state.join("nested")];
+    for _ in 0..2 {
+        let mut guard = Exclusions::new(Some(path));
+        assert!(matches!(
+            guard.register(&roots, || true),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+        roots.reverse();
+    }
 }
 
 #[test]

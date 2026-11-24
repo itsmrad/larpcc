@@ -1,5 +1,6 @@
 use super::fs::walk_parent;
 use std::{
+    cell::RefCell,
     ffi::{OsStr, OsString},
     fs::File,
     io,
@@ -49,6 +50,7 @@ impl Exclusions {
         within_budget: impl Fn() -> bool,
     ) -> io::Result<()> {
         let mut missing_edges = Vec::new();
+        let traversed = RefCell::new(Vec::new());
         for path in paths {
             if !path.is_absolute()
                 || path.file_name().is_none()
@@ -66,13 +68,16 @@ impl Exclusions {
             let mapped = walk_parent(
                 parent,
                 |part, directory| {
-                    within_budget()
-                    && self.allows_child(part, directory)
-                    // Until all aliases are known, do not enter any unresolved
-                    // protected basename while mapping another root's parent.
-                    && !part.file_name().is_some_and(|leaf| paths.iter().any(|path| {
-                        path.file_name().is_some_and(|name| same_name(name, leaf))
-                    }))
+                    if !within_budget() || !self.allows_child(part, directory) {
+                        return false;
+                    }
+                    if let Some(directory) = directory {
+                        let Ok(visited) = edge(directory, part) else {
+                            return false;
+                        };
+                        traversed.borrow_mut().push(visited);
+                    }
+                    true
                 },
                 |part, directory| {
                     absent = Some(edge(directory, part));
@@ -82,7 +87,17 @@ impl Exclusions {
                 Ok(entry) => {
                     let directory = entry.directory.ok_or(io::ErrorKind::NotADirectory)?;
                     let physical = entry.path.join(name);
-                    self.edges.push(edge(&directory, &physical)?);
+                    let protected = edge(&directory, &physical)?;
+                    // An overlap exposed by a later mapping invalidates the
+                    // setup even when its alias was unknown during traversal.
+                    if traversed
+                        .borrow()
+                        .iter()
+                        .any(|(id, name)| protected.0 == *id && same_name(&protected.1, name))
+                    {
+                        return Err(io::ErrorKind::PermissionDenied.into());
+                    }
+                    self.edges.push(protected);
                     self.insert(&physical);
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -185,13 +200,55 @@ fn comparable(path: &Path) -> PathBuf {
 }
 
 fn same_name(a: &OsStr, b: &OsStr) -> bool {
-    if cfg!(target_os = "macos") {
+    if a == b {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
         let (a, b) = (a.as_bytes(), b.as_bytes());
-        // Close on Unicode spellings whose filesystem equivalence we cannot
-        // establish without inspecting the child.
-        !a.is_ascii() || !b.is_ascii() || a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
+        if a.is_ascii() && b.is_ascii() {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            macos_name_eq(a, b)
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn macos_name_eq(a: &[u8], b: &[u8]) -> bool {
+    use std::ffi::c_void;
+    type Cf = *const c_void;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithBytes(
+            allocator: Cf,
+            bytes: *const u8,
+            len: isize,
+            encoding: u32,
+            external: u8,
+        ) -> Cf;
+        fn CFStringCompare(a: Cf, b: Cf, options: usize) -> isize;
+        fn CFRelease(value: Cf);
+    }
+    const UTF8: u32 = 0x0800_0100;
+    const CASE_INSENSITIVE: usize = 1;
+    const NONLITERAL: usize = 16;
+    // SAFETY: byte slices are live; CFString copies the supplied bytes. Null
+    // conversions are ambiguous, and non-null Create results are released once.
+    unsafe {
+        let a = CFStringCreateWithBytes(std::ptr::null(), a.as_ptr(), a.len() as isize, UTF8, 0);
+        let b = CFStringCreateWithBytes(std::ptr::null(), b.as_ptr(), b.len() as isize, UTF8, 0);
+        let matches =
+            a.is_null() || b.is_null() || CFStringCompare(a, b, CASE_INSENSITIVE | NONLITERAL) == 0;
+        if !a.is_null() {
+            CFRelease(a);
+        }
+        if !b.is_null() {
+            CFRelease(b);
+        }
+        matches
     }
 }
 
