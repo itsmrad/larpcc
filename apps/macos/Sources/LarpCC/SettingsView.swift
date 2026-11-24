@@ -318,17 +318,18 @@ private struct ProfileSidebarRow: View {
     let profile: Profile
     let usage: UsageReport?
     var body: some View {
+        let labelOpacity = profile.readiness == .off ? 0.55 : 1.0
         HStack(spacing: 10) {
             // Not a Label: the sidebar restyles Label icons, which washes out the marks.
             ProviderGlyph(provider: profile.provider)
-            Text(profile.name).lineLimit(1)
+                .opacity(labelOpacity)
+            Text(profile.name).lineLimit(1).opacity(labelOpacity)
             Spacer(minLength: 4)
             UsageHint(report: usage)
             if profile.readiness != .off {
                 StatusDot(color: profile.readiness.color)
             }
         }
-        .opacity(profile.readiness == .off ? 0.55 : 1)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(profile.name), \(profile.provider.title), \(profile.readiness.title)")
     }
