@@ -32,23 +32,28 @@ public actor ProcessLarpClient: LarpClient {
         }
         guard e.command == expected else { throw ClientError.invalidResponse }
         guard e.ok else {
-            switch e.error?.code {
-            case "conflict":
+            if e.error?.code == "conflict" {
                 // Exit 2 is a rebind without --replace. Exit 1 is a stale revision, unless the
                 // revision is unchanged: then registry state (aliases, shared items) blocks it.
                 if result.status == 2 && ["app.bind", "provider.bind"].contains(expected) { throw ClientError.alreadyBound }
                 if mutation, let revision, await currentRevision() == revision { throw ClientError.blocked(command: expected) }
-                throw ClientError.conflict
-            case "qualification_pending": throw ClientError.qualificationPending
-            case "unsupported": throw ClientError.unsupportedCommand
-            case let code?: throw ClientError.refused(code: code)
-            case nil: throw ClientError.operationRefused
             }
+            throw Self.refusal(code: e.error?.code)
         }
         if let revision, path == ["mcp", "matrix"] || path == ["skills", "matrix"] || path == ["mcp", "list"] || path == ["skills", "list"] {
             guard e.revision == revision else { throw ClientError.conflict }
         }
         return e
+    }
+
+    private static func refusal(code: String?) -> ClientError {
+        switch code {
+        case "conflict": return .conflict
+        case "qualification_pending": return .qualificationPending
+        case "unsupported": return .unsupportedCommand
+        case let code?: return .refused(code: code)
+        case nil: return .operationRefused
+        }
     }
     private func commandExists(_ path: [String]) async -> Bool {
         guard let output = try? await transport.run(["cc"] + path.prefix(2) + ["--help", "--json"], mutation: false),
@@ -142,7 +147,7 @@ public actor ProcessLarpClient: LarpClient {
         let envelope = try CLIContract.decode(output.stdout, exit: output.status)
         if envelope.command == "parse", !envelope.ok { throw ClientError.commandUnavailable }
         guard envelope.command == "usage" else { throw ClientError.invalidResponse }
-        guard envelope.ok else { throw ClientError.operationRefused }
+        guard envelope.ok else { throw Self.refusal(code: envelope.error?.code) }
         guard case let .usage(usage) = envelope.data else { throw ClientError.invalidResponse }
         return try usage.localReports()
     }
