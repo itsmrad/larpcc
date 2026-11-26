@@ -18,6 +18,14 @@ Both providers and native Windows remain MVP goals. Select the first eligible of
 
 Static operation help must contain: `Profiles select native state, not a verified account, model or endpoint. Native project, configuration and administrator policy still apply. Provider restrictions remain possible.` Auth help additionally contains: `Quiesce relevant sessions before authentication changes. Refresh and logout may affect grants and integrations.` Emit that same routing notice once to stderr before each admitted child; add the auth notice for login/status/logout. No account-derived health/verified-account label. No repeated run confirmation. Provider output for **all** operations passes directly to inherited human terminal/stdio: no capture, log, tee, archive, parsing or redaction promise. Human observation starts before sensitive official flows; secrets/codes stay in the official human-operated flow and out of agent transcripts. No zero-ban promise.
 
+**Stage 11 amendment (D56).** The private Usage operation also uses this
+admission and the per-ID auth guard. It adds LIVE consent before admission and
+uses bounded stdio for an allowlisted usage reply, as specified in
+[Stage 11](11-usage.md#live-mode-opt-in-unverified-against-real-accounts).
+Usage rows are distinct from other operations and remain empty. The row must
+pin the client protocol and cover its authentication backend and profile
+isolation. Usage performs no native-store path checks or credential queries.
+
 ## 3. CLI, precedence and errors
 
 ```text
@@ -62,7 +70,7 @@ Reuse `Registry::launch_target`, provider validation, platform checks and Launch
 Freeze these crate-private responsibilities (Rust field representation can follow existing types; no public library):
 
 ```text
-Operation = Run | Login | Status | Logout
+Operation = Run | Login | Status | Logout | Usage
 ArtifactRow = provider, exact release/build, SHA256, install kind, OS/arch,
               operation, interface, backend/fallback, policy revision,
               fixed argv, env-name policy, native path rules, evidence references

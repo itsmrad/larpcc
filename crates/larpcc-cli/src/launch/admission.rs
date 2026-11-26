@@ -23,6 +23,7 @@ pub(crate) enum Operation {
     Login,
     Status,
     Logout,
+    Usage,
 }
 impl Operation {
     fn label(self) -> &'static str {
@@ -31,6 +32,7 @@ impl Operation {
             Self::Login => "login",
             Self::Status => "status",
             Self::Logout => "logout",
+            Self::Usage => "usage",
         }
     }
 }
@@ -87,6 +89,47 @@ pub(crate) struct AuthGuard {
 fn candidate(row: &ArtifactRow, op: Operation) -> bool {
     row.operation == op && row.os == std::env::consts::OS && row.arch == std::env::consts::ARCH
 }
+#[cfg(all(unix, feature = "synthetic-launch"))]
+thread_local! {
+    static SYNTHETIC_USAGE_ROWS: std::cell::Cell<Option<&'static [ArtifactRow]>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(all(unix, feature = "synthetic-launch"))]
+#[allow(dead_code)] // Only the synthetic driver installs fixture rows.
+pub(crate) fn synthetic_usage_rows(rows: Vec<ArtifactRow>) {
+    SYNTHETIC_USAGE_ROWS.set(Some(rows.leak()));
+}
+
+pub(crate) fn usage_rows() -> &'static [ArtifactRow] {
+    #[cfg(all(unix, feature = "synthetic-launch"))]
+    if let Some(rows) = SYNTHETIC_USAGE_ROWS.get() {
+        return rows;
+    }
+    ROWS
+}
+
+pub(crate) fn usage_qualified() -> bool {
+    cfg!(unix)
+        && usage_rows()
+            .iter()
+            .any(|row| candidate(row, Operation::Usage))
+}
+
+#[cfg(unix)]
+pub(crate) fn usage_argv(provider: Provider) -> &'static [&'static str] {
+    match provider {
+        Provider::Codex => &["app-server"],
+        Provider::Claude => &[
+            "--print",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ],
+    }
+}
+
 pub(crate) fn invoke(
     op: Operation,
     name: &ProfileName,
@@ -243,6 +286,10 @@ pub(crate) fn admit<'a>(
         return Err(Error::ArgConflict {
             label: "argument syntax",
         });
+    }
+    #[cfg(unix)]
+    if op == Operation::Usage && (!row.paths.is_empty() || row.argv != usage_argv(row.provider)) {
+        return Err(Error::ArtifactInvalid);
     }
     let native_held = native_paths(t, row)?;
     let plan = LaunchPlan {

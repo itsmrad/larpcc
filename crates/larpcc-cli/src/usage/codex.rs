@@ -401,6 +401,18 @@ fn category(minutes: Option<i64>) -> Option<&'static str> {
     None
 }
 
+#[cfg(unix)]
+pub(super) fn live_plan(plan: &str) -> Option<&'static str> {
+    match plan {
+        "guest" => Some("guest"),
+        "free_workspace" => Some("free_workspace"),
+        "education" => Some("education"),
+        "quorum" => Some("quorum"),
+        "k12" => Some("k12"),
+        _ => local_plan(plan),
+    }
+}
+
 fn local_plan(plan: &str) -> Option<&'static str> {
     [
         "free",

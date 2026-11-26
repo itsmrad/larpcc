@@ -57,7 +57,7 @@ reference-only renders and fixed redacted output. Provider account restrictions
 cannot be ruled out. Native identity/refresh/logout support requires separately
 authorized finite stage-3 sheets; names/status/desktop receipts prove none of it.
 
-## Stage 11 usage-limits exception (D14)
+## Stage 11 usage limits (D14, amended by D56)
 
 User decision 2026-11-17, explicit and informed (the lead explained the ban
 risk first): show each profile's 5-hour and weekly limits and reset times in the
@@ -65,30 +65,23 @@ CLI and the Mac app, with **both** modes, LOCAL as the default and LIVE opt-in i
 settings. Scope is this feature only, exactly as [stage 11](docs/stages/11-usage.md)
 specifies; every other invariant stays binding.
 
-- Invariant 2 ("no usage meter reading tokens") is amended only for LIVE: when
-  the user has enabled LIVE and acknowledged the warning, Larp reads that
-  profile's own access token in memory for one request to that provider's usage
-  endpoint. It is never stored, logged, refreshed, put in argv/env or sent
-  elsewhere. LOCAL reads no tokens. A usage meter from LOCAL records is allowed.
-- Invariant 3 (no network to Anthropic/OpenAI) is amended only for that LIVE
-  request: one pinned HTTPS host/path per provider, no proxy, no redirects,
-  bounded, no retries. LOCAL and every other command make no provider requests.
+- Invariants 2 and 3 hold for both modes. LIVE requires explicit consent and
+  a qualified official client. That client handles authentication and asks
+  the provider for usage; LarpCC exchanges only the usage protocol over stdio.
 - Invariant 5 is unchanged: LIVE runs only in a foreground `usage` invocation
   (user action, or the GUI's opt-in interval while a usage view is visible).
   No daemon, schedule, login item or background refresh is started by Larp.
 - Stage 04's "never reads auth/history/session contents" is narrowed for LOCAL
   Codex only: a bounded, confined streaming reader extracts allowlisted
   rate-limit and plan fields from the profile's own session logs and retains
-  nothing else. LIVE reads only the named credential fields (token, and the
-  Codex account ID as a request header, D29). Native config values are still
-  never read; the opt-in Claude capture only checks whether a `statusLine` key
+  nothing else. LarpCC does not read native config values; the opt-in Claude capture only checks whether a `statusLine` key
   exists, so it never overwrites a user's own statusLine (D29).
 - Plan: the user-entered label, else the plan the client recorded in the LOCAL
   non-credential data above (D29), else in LIVE the plan in the Codex usage
   response (D32). Never read from tokens or credential files; provider plans are
   held in memory for one invocation and never stored (as D14/D26).
   Account email/plan from status output is stage 14 (D25/D26).
-- Agents never read real tokens or call real endpoints (RULES 4a); LIVE is built
+- LIVE is built
   and tested against fakes and labelled unverified until the user authorizes a
   real-account qualification.
 
@@ -137,8 +130,7 @@ already loaded. Remote native run remains closed pending qualification.
 - The user-invoked system SSH child is the only network transport used by
   Larp for remote management. Remote Larp follows the same safety rules.
   Stage 11 usage is LOCAL-only for remote profiles, even when a host permits
-  LIVE for local callers. A routed request never reads a usage token or
-  contacts a provider endpoint.
+  LIVE for local callers. A routed request never starts an official client to fetch usage.
 
 ## Ordered slices and gates
 
