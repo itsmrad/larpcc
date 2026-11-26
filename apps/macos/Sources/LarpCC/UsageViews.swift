@@ -90,7 +90,7 @@ struct UsageSettingsSection: View {
                     if !store.usageLoading, let error = store.usageError {
                         Text(error).foregroundStyle(SettingsTypography.supportingInk)
                     } else {
-                        UsageUpdatedText(report: store.usage.values.first, loading: store.usageLoading)
+                        UsageUpdatedText(report: store.usage.values.first, loading: store.usageLoading, isFixture: store.isFixture)
                     }
                 }
             } else if !store.usageLoading, let error = store.usageError {
@@ -208,7 +208,7 @@ struct UsageSection: View {
             }
         } footer: {
             if report != nil {
-                UsageUpdatedText(report: report, loading: false)
+                UsageUpdatedText(report: report, loading: false, isFixture: store.isFixture)
                     .font(SettingsTypography.supporting)
             }
         }
@@ -295,13 +295,14 @@ private struct UsageWindowRow: View {
 struct UsageUpdatedText: View {
     let report: UsageReport?
     let loading: Bool
+    let isFixture: Bool
     var body: some View {
         if loading {
             Text("Updating…").foregroundStyle(SettingsTypography.supportingInk)
         } else if let report, let captured = report.capturedAt {
             TimelineView(.everyMinute) { context in
                 let age = context.date.timeIntervalSince(captured)
-                Text("Updated \(age < 60 ? "just now" : UsageTime.span(age) + " ago") · \(report.source.title)")
+                Text("Updated \(age < 60 ? "just now" : UsageTime.span(age) + " ago") · \(isFixture ? "Sample" : report.source.title)")
             }
             .foregroundStyle(SettingsTypography.supportingInk)
         } else {
