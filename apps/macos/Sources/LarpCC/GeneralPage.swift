@@ -70,6 +70,9 @@ struct GeneralPage: View {
             MenuBarSettingsSection(store: store)
 
             Section("Command-line tool") {
+                LabeledContent("Setup") {
+                    Button("Run setup again") { store.sheet = .onboarding }
+                }
                 LabeledContent {
                     HStack(spacing: SettingsSpacing.inline) {
                         if !store.isFixture || store.snapshot == nil {

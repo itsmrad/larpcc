@@ -143,12 +143,14 @@ final class EditingTests: XCTestCase {
         let transport = try ExampleTransport(hangMutations: true)
         let client = ProcessLarpClient(transport: transport)
         _ = try await client.snapshot()
+        let reads = await transport.mutationFlags
+        XCTAssertTrue(reads.allSatisfy { !$0 }, "snapshot reads keep the timeout")
         let task = Task { try await client.perform(.migrate) }
         try await Task.sleep(nanoseconds: 50_000_000)
         task.cancel()
         do { _ = try await task.value; XCTFail() } catch ClientError.outcomeUnknown {}
         let mutation = await transport.mutationFlags
-        XCTAssertEqual(mutation, [false, false, false, false, false, false, true], "reads keep the timeout, mutations do not")
+        XCTAssertEqual(mutation, reads + [true], "only the mutation runs without the read timeout")
     }
 
     func testNamesRejectTrailingNewline() {

@@ -81,6 +81,9 @@ public actor ProcessLarpClient: LarpClient {
         }
         let p = try await request(["profile", "list"])
         guard case let .profiles(profiles) = p.data, let revision = p.revision else { throw ClientError.invalidResponse }
+        let providers = try await request(["provider", "list"], revision: revision)
+        guard providers.revision == revision else { throw ClientError.conflict }
+        guard case let .bindings(bindings) = providers.data else { throw ClientError.invalidResponse }
         let m = try await request(["mcp", "matrix"], revision: revision)
         let s = try await request(["skills", "matrix"], revision: revision)
         let list = try await request(["mcp", "list"], revision: revision)
@@ -97,7 +100,7 @@ public actor ProcessLarpClient: LarpClient {
         func catalog(_ matrix: Matrix) -> [CatalogItem] {
             matrix.rows.map { row in CatalogItem(id: row.name, subtitle: "Local metadata only", profileIDs: Set(zip(columns, row.enabled).filter { $0.1 }.map { $0.0.id })) }
         }
-        let state = Snapshot(revision: revision, profiles: profiles.map {
+        var state = Snapshot(revision: revision, profiles: profiles.map {
             Profile(id: $0.id, name: $0.name, provider: Provider(rawValue: $0.provider)!, cliEnabled: $0.surfaces.cli.enabled,
                     desktopEnabled: $0.surfaces.desktop.enabled,
                     needsAttention: $0.state != "active" || $0.surfaces.cli.state != "ok" || $0.surfaces.desktop.state != "ok" || $0.desktop_binding.state != "ok" || $0.aliases.contains { $0.state != "ok" }, aliases: $0.aliases.map(\.name), displayFolder: $0.surfaces.cli.path,
@@ -106,11 +109,32 @@ public actor ProcessLarpClient: LarpClient {
                     recoverable: $0.state == "deleting")
         }, servers: catalog(mcp), skills: catalog(skill), syncNewServers: metadata.sync_all,
            dataFolder: profiles.first.flatMap { Self.dataFolder(cliPath: $0.surfaces.cli.path, id: $0.id) })
+        for entry in bindings {
+            guard let provider = Provider(rawValue: entry.provider) else { throw ClientError.invalidResponse }
+            if entry.surface == "cli", entry.binding.state == "ok" {
+                state.boundProviders.insert(provider)
+            }
+            if entry.surface == "desktop" {
+                state.desktopBindings[provider] = DesktopBinding(
+                    state: DesktopBinding.State(rawValue: entry.binding.state) ?? .invalid,
+                    displayPath: entry.binding.path, detectedVersion: entry.binding.detected_version,
+                    recordedVersion: entry.binding.recorded_version)
+            }
+        }
         guard generation == token else { throw ClientError.staleSelection }
         try Task.checkCancellation()
         displayed = state
         return state
     }
+    public func detectProviders(revision: String?) async throws -> ProviderDetection {
+        guard let revision, displayed?.revision == revision else { throw ClientError.staleSelection }
+        let token = generation
+        let result = try await request(["provider", "detect"], revision: revision)
+        guard generation == token, result.revision == revision else { throw ClientError.conflict }
+        guard case let .providerDetect(detection) = result.data else { throw ClientError.invalidResponse }
+        return detection
+    }
+
     public func usage(source: UsageSource) async throws -> [String: UsageReport] {
         guard source == .local else { throw ClientError.commandUnavailable }
         let output = try await transport.run(["cc", "usage", "--local", "--json"], mutation: false)
