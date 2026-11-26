@@ -922,6 +922,16 @@ fn pending_auth_signal() -> Option<i32> {
         None
     }
 }
+const USAGE_ENV: &[&str] = &["HOME", "PATH", "USER", "LOGNAME", "TMPDIR", "LANG"];
+
+pub(crate) fn usage_env_keys() -> Vec<std::ffi::OsString> {
+    USAGE_ENV
+        .iter()
+        .filter(|key| std::env::var_os(key).is_some())
+        .map(std::ffi::OsString::from)
+        .collect()
+}
+
 struct AuthExec {
     path: std::ffi::CString,
     _argv: Vec<std::ffi::CString>,
@@ -935,7 +945,7 @@ unsafe impl Send for AuthExec {}
 // SAFETY: all storage is immutable after construction; exec only reads the buffers.
 unsafe impl Sync for AuthExec {}
 impl AuthExec {
-    fn prepare(plan: &crate::launch::LaunchPlan) -> Result<Self, Error> {
+    fn prepare(plan: &crate::launch::LaunchPlan, usage: bool) -> Result<Self, Error> {
         use std::{ffi::CString, os::unix::ffi::OsStrExt};
         let invalid = || Error::Launch {
             path: plan.executable.clone(),
@@ -950,7 +960,15 @@ impl AuthExec {
         for arg in &plan.argv {
             args.push(string(arg.as_bytes())?);
         }
-        let mut inherited = std::env::vars_os().collect::<Vec<_>>();
+        let mut inherited = if usage {
+            USAGE_ENV
+                .iter()
+                .copied()
+                .filter_map(|key| std::env::var_os(key).map(|value| (key.into(), value)))
+                .collect()
+        } else {
+            std::env::vars_os().collect::<Vec<_>>()
+        };
         for (key, value) in &plan.env_delta {
             inherited.retain(|(k, _)| k != key);
             inherited.push((key.clone(), value.clone()));
@@ -997,9 +1015,10 @@ fn auth_command(
     plan: &crate::launch::LaunchPlan,
     signals: &AuthSignals,
     capture: bool,
+    usage: bool,
 ) -> Result<std::process::Command, Error> {
     use std::os::unix::process::CommandExt;
-    let prepared = AuthExec::prepare(plan)?;
+    let prepared = AuthExec::prepare(plan, usage)?;
     let mut command = std::process::Command::new(&plan.executable);
     if let Some(cwd) = &plan.cwd {
         command.current_dir(cwd);
@@ -1035,13 +1054,21 @@ pub(crate) fn auth_capture_command(
     plan: &crate::launch::LaunchPlan,
 ) -> Result<(std::process::Command, AuthSignals), Error> {
     let signals = AuthSignals::install()?;
-    let command = auth_command(plan, &signals, true)?;
+    let command = auth_command(plan, &signals, true, false)?;
+    Ok((command, signals))
+}
+
+pub(crate) fn usage_command(
+    plan: &crate::launch::LaunchPlan,
+) -> Result<(std::process::Command, AuthSignals), Error> {
+    let signals = AuthSignals::install()?;
+    let command = auth_command(plan, &signals, true, true)?;
     Ok((command, signals))
 }
 
 pub(crate) fn auth_spawn_wait(plan: &crate::launch::LaunchPlan) -> Result<AuthExit, Error> {
     let signals = AuthSignals::install()?;
-    let mut command = auth_command(plan, &signals, false)?;
+    let mut command = auth_command(plan, &signals, false, false)?;
     if auth_fault(3) {
         return Ok(AuthExit::Signal(libc::SIGTERM));
     }

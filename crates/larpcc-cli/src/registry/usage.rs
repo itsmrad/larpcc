@@ -16,7 +16,7 @@ const NEXT: &str = "usage.json.next";
 const JOURNAL: &str = "share-journal.json";
 const STAGED_JOURNAL: &str = "usage.json.journal.tmp";
 const LIMIT: u64 = 64 * 1024;
-const CURRENT_WARNING: u32 = 1;
+const CURRENT_WARNING: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -107,6 +107,12 @@ fn unique_profiles<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, O
         }
     }
     d.deserialize_map(Unique)
+}
+
+impl Live {
+    fn acknowledged(&self) -> bool {
+        self.enabled && self.acknowledged_warning == Some(CURRENT_WARNING)
+    }
 }
 
 impl Default for Settings {
@@ -341,15 +347,10 @@ pub(crate) enum Mutation {
     ClaudeStatusline(ProfileName, bool),
     Mode(Option<ProfileName>, Mode),
     Interval(Option<u32>),
+    Live(bool),
 }
 
 impl Registry {
-    pub(crate) fn check_usage_revision(&self) -> Result<(), Error> {
-        let (data, _lock) = store::snapshot(self.root(), self.expected)?;
-        self.observed.set(Some(data.revision));
-        Ok(())
-    }
-
     #[cfg(unix)]
     pub(crate) fn usage_capture_lock(
         &self,
@@ -398,10 +399,16 @@ impl Registry {
         Ok(json!({
             "mode": settings.mode,
             "live": {
-                "state": if settings.live.enabled { "needs_acknowledgement" } else { "off" },
+                "state": if settings.live.acknowledged() {
+                    "on"
+                } else if settings.live.enabled {
+                    "needs_acknowledgement"
+                } else {
+                    "off"
+                },
                 "enabled": settings.live.enabled,
                 "acknowledged_warning": settings.live.acknowledged_warning.filter(|&warning|
-                    !settings.live.enabled && warning <= CURRENT_WARNING),
+                    warning <= CURRENT_WARNING && (!settings.live.enabled || settings.live.acknowledged())),
                 "current_warning": CURRENT_WARNING,
                 "verified": false,
             },
@@ -416,19 +423,83 @@ impl Registry {
         force_local: bool,
         read_clock: i64,
     ) -> Result<Value, Error> {
-        let (data, _lock) = store::snapshot(self.root(), self.expected)?;
+        self.read_usage(name, force_local, false, read_clock)
+    }
+
+    pub(crate) fn read_usage(
+        &self,
+        name: Option<&ProfileName>,
+        force_local: bool,
+        force_live: bool,
+        read_clock: i64,
+    ) -> Result<Value, Error> {
+        let (data, lock) = store::snapshot(self.root(), self.expected)?;
         self.observed.set(Some(data.revision));
+        let settings = load(self.root())?;
+        let can_read_live =
+            settings.live.acknowledged() && crate::launch::admission::usage_qualified();
+        if force_live && !can_read_live {
+            return Err(Error::LiveDisabled);
+        }
         let selected = match name {
             Some(name) => vec![selected(&data, name)?],
             None => profiles(&data),
         };
-        let settings = load(self.root())?;
-        let rows: Vec<_> = selected
-            .into_iter()
-            .map(|profile| read_row(self.root(), profile, &settings, force_local, read_clock))
-            .collect();
+        let _local_lock = if can_read_live && !force_local {
+            drop(lock);
+            None
+        } else {
+            lock
+        };
+        #[cfg(unix)]
+        let deadline = std::time::Instant::now() + data::live_client::BUDGET;
+        let mut rows = Vec::with_capacity(selected.len());
+        for profile in selected {
+            let options = settings.profiles.get(&profile.id.to_string());
+            let mode = options.map_or(Mode::Inherit, |options| options.mode);
+            let mode = if mode == Mode::Inherit {
+                settings.mode
+            } else {
+                mode
+            };
+            #[cfg(unix)]
+            if can_read_live && (force_live || (!force_local && mode == Mode::Live)) {
+                let label = options.and_then(|options| options.plan_label.as_deref());
+                let result = data::live_client::read(
+                    self,
+                    profile,
+                    label,
+                    data.revision,
+                    read_clock,
+                    deadline,
+                );
+                match result {
+                    Ok(row) => rows.push(row),
+                    Err(error) if force_live && name.is_some() => return Err(error),
+                    Err(error) => {
+                        let reason = if matches!(error, Error::QualificationPending) {
+                            "live_disabled"
+                        } else {
+                            "live_unavailable"
+                        };
+                        rows.push(data::missing_live_row(profile, label, reason));
+                    }
+                }
+                continue;
+            }
+            #[cfg(not(unix))]
+            let _ = mode;
+            rows.push(read_row(
+                self.root(),
+                profile,
+                &settings,
+                force_local,
+                read_clock,
+            ));
+        }
+        self.observed.set(Some(data.revision));
         Ok(json!({
-            "requested_mode": if force_local { "local" } else { "settings" },
+            "requested_mode": if force_live { "live" } else if force_local { "local" } else { "settings" },
             "generated_at": data::clock::format(read_clock),
             "profiles": rows,
         }))
@@ -449,6 +520,11 @@ impl Registry {
 
     pub(crate) fn change_usage(&self, mutation: Mutation) -> Result<Value, Error> {
         let root = self.root();
+        if matches!(mutation, Mutation::Live(_)) && !crate::launch::admission::usage_qualified() {
+            let (data, _lock) = store::snapshot(root, self.expected)?;
+            self.observed.set(Some(data.revision));
+            return Err(Error::LiveDisabled);
+        }
         // An absent registry is at revision zero. Refuse a stale write
         // without creating its lock. Existing registries use the writer lock.
         if self.expected.is_some_and(|revision| revision != 0)
@@ -474,10 +550,15 @@ impl Registry {
         let name = match &mutation {
             Mutation::PlanLabel(name, _) | Mutation::ClaudeStatusline(name, _) => Some(name),
             Mutation::Mode(name, _) => name.as_ref(),
-            Mutation::Interval(_) => None,
+            Mutation::Interval(_) | Mutation::Live(_) => None,
         };
         let profile = name.map(|name| selected(&data, name)).transpose()?;
         let receipt = profile.map(|profile| (profile.id.to_string(), profile.name.clone()));
+        let warnings = if matches!(mutation, Mutation::Live(true)) {
+            json!([{"code":"live_unverified","message":"LIVE has not been verified against real accounts."}])
+        } else {
+            json!([])
+        };
         match mutation {
             Mutation::PlanLabel(_, label) => {
                 settings
@@ -507,7 +588,26 @@ impl Registry {
                     .or_default()
                     .claude_statusline = enable;
             }
-            Mutation::Mode(_, Mode::Live) => return Err(Error::LiveDisabled),
+            Mutation::Live(enabled) => {
+                settings.live = Live {
+                    enabled,
+                    acknowledged_warning: enabled.then_some(CURRENT_WARNING),
+                };
+                if !enabled {
+                    settings.mode = Mode::Local;
+                    for options in settings.profiles.values_mut() {
+                        if options.mode == Mode::Live {
+                            options.mode = Mode::Inherit;
+                        }
+                    }
+                }
+            }
+            Mutation::Mode(_, Mode::Live)
+                if !settings.live.acknowledged()
+                    || !crate::launch::admission::usage_qualified() =>
+            {
+                return Err(Error::LiveDisabled);
+            }
             Mutation::Mode(_, mode) => {
                 if let Some(profile) = profile {
                     settings
@@ -541,7 +641,7 @@ impl Registry {
             self.observed.set(Some(persist(root, data, &settings)?));
         }
         let (id, name) = receipt.unzip();
-        Ok(json!({"changed": changed, "profile_id": id, "name": name, "warnings": []}))
+        Ok(json!({"changed": changed, "profile_id": id, "name": name, "warnings": warnings}))
     }
 }
 

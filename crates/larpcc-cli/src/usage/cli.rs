@@ -13,7 +13,7 @@ pub(crate) fn empty_settings() -> Value {
     serde_json::json!({
         "mode": "local",
         "live": {"state":"off", "enabled":false, "acknowledged_warning":null,
-            "current_warning":1, "verified":false},
+            "current_warning": super::super::CURRENT_WARNING, "verified":false},
         "refresh_interval_seconds": null,
         "profiles": [],
     })
@@ -26,7 +26,7 @@ pub(crate) struct ReadUsage {
     /// Read local usage observations.
     #[arg(long, conflicts_with = "live")]
     local: bool,
-    /// Request LIVE usage (unavailable in this build).
+    /// Request usage from the profile’s qualified official client.
     #[arg(long)]
     live: bool,
 }
@@ -56,6 +56,8 @@ pub(crate) enum ModeArg {
 
 #[derive(Subcommand)]
 pub(crate) enum LiveSetting {
+    /// Ask the profile's qualified official client for limits using its stored sign-in.
+    /// Provider restrictions are possible. LIVE remains unverified against real accounts.
     On {
         #[arg(long)]
         acknowledge_risk: bool,
@@ -65,7 +67,7 @@ pub(crate) enum LiveSetting {
 
 #[derive(Subcommand)]
 pub(crate) enum UsageSetting {
-    /// Change LIVE usage (unavailable in this build).
+    /// Change consent for LIVE usage through qualified official clients.
     Live {
         #[command(subcommand)]
         command: LiveSetting,
@@ -117,8 +119,7 @@ impl ReadUsage {
             if remote {
                 return Err(Error::UsageRemoteUnsupported);
             }
-            registry.check_usage_revision()?;
-            return Err(Error::LiveDisabled);
+            return registry.read_usage(self.profile.as_ref(), false, true, clock);
         }
         registry.usage_rows(self.profile.as_ref(), self.local || remote, clock)
     }
@@ -153,9 +154,8 @@ impl SettingsCommand {
             } => {
                 return Err(Error::UsageConfirmation);
             }
-            UsageSetting::Live { .. } => {
-                registry.check_usage_revision()?;
-                return Err(Error::LiveDisabled);
+            UsageSetting::Live { command } => {
+                Mutation::Live(matches!(command, LiveSetting::On { .. }))
             }
             UsageSetting::Mode { mode, profile } => Mutation::Mode(
                 profile,
@@ -255,6 +255,14 @@ pub(crate) fn human(command: &str, data: &Value) -> String {
         text.push_str("Usage settings saved.\n");
     } else {
         text.push_str("Usage settings unchanged.\n");
+    }
+    if let Some(warnings) = data["warnings"].as_array() {
+        for message in warnings
+            .iter()
+            .filter_map(|warning| warning["message"].as_str())
+        {
+            let _ = writeln!(text, "{message}");
+        }
     }
     text
 }

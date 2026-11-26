@@ -188,7 +188,7 @@ def window_semantic(w, row_captured_at):
 def credits_source_semantic(p):
     # Only the Codex LIVE response carries reset credits, and never their expiry.
     c = p['reset_credits']
-    if p['provider'] == 'claude' or p['mode'] == 'local':
+    if p['mode'] == 'local':
         assert c['state'] == 'unsupported'
     else:
         assert c['state'] != 'unsupported'
@@ -248,6 +248,11 @@ def usage_semantic(data):
             window_semantic(w, p['captured_at'])
             read_clock_semantic(w, data['generated_at'])
         if ws['extra'] is not None:
+            if p['mode'] == 'local' or p['provider'] == 'codex':
+                assert all(re.fullmatch(
+                    r'(?:Codex|Other limit [1-9][0-9]{0,2}|Opus|Sonnet|OAuth apps)'
+                    r'(?: (?:5h|daily|weekly|monthly|annual|[1-9][0-9]{0,6}m|secondary))?',
+                    w['label']) for w in ws['extra'])
             keys = [(w['label'], w['window_seconds'] is None, w['window_seconds'] or 0) for w in ws['extra']]
             assert keys == sorted(keys) and len({w['label'] for w in ws['extra']}) == len(keys)
             assert all(w['pace'] is None for w in ws['extra'] if w['window_seconds'] is None)
@@ -380,6 +385,11 @@ for label, ok in (('Pro', True), ('Max 5x', True), ('Max 20x', True), ('Team (an
     assert matches(label, SCHEMA['$defs']['plan_label']) == ok, label
 assert matches('Opus weekly', SCHEMA['$defs']['usage_extra_label'])
 assert not matches('Opus weekly ', SCHEMA['$defs']['usage_extra_label'])
+assert matches('Fable 1.0-Pro weekly', SCHEMA['$defs']['usage_extra_label'])
+assert not matches('Fable@Pro weekly', SCHEMA['$defs']['usage_extra_label'])
+assert not matches('Fable\u200b weekly', SCHEMA['$defs']['usage_extra_label'])
+assert not matches('  weekly', SCHEMA['$defs']['usage_extra_label'])
+assert not matches('X' * 25 + ' weekly', SCHEMA['$defs']['usage_extra_label'])
 usage = next(x for x in fixtures if x['command'] == 'usage' and x['ok'] and x['data']['profiles'][1:]
              and x['data']['requested_mode'] == 'settings')
 def settings_fixture(x):
@@ -442,6 +452,14 @@ def expired_but_current(x):
 accepted = copy.deepcopy(live_usage)
 accepted['data']['profiles'][1]['plan'] = {'label': 'free_workspace', 'source': 'live_endpoint'}
 semantic(accepted)  # LIVE-only plan value accepted in a LIVE row
+accepted = copy.deepcopy(live_usage)
+claude = accepted['data']['profiles'][0]
+claude.update(source='live_endpoint', captured_at=accepted['data']['generated_at'])
+claude['windows']['extra'] = [dict(
+    claude['windows']['weekly'], label='Fable 1.0-Pro weekly', used_percent=47.0,
+    captured_at=claude['captured_at'], reason='reset_time_unknown')]
+claude['reset_credits'].update(state='available', count=1, expires_state='unsupported')
+semantic(accepted)
 semantic_only = [
     (usage, set_window(reason=None, used_percent=None)),
     (usage, set_window(reason='not_reported')),

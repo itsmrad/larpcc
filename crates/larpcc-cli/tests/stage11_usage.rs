@@ -968,3 +968,130 @@ fn stage11_local_claude_hook_dispatch_is_silent_and_confined() {
     assert_eq!(row["windows"]["five_hour"]["used_percent"], 42.8);
     assert!(row["windows"]["extra"].is_null());
 }
+
+#[cfg(feature = "synthetic-launch")]
+#[test]
+fn stage11_live_official_client() {
+    use sha2::{Digest, Sha256};
+    use std::{process::Stdio, time::Duration};
+    let fixture = Fixture::new();
+    profiles(&fixture);
+    let fake = fixture.temp.path().join("usage-provider");
+    copy_executable(Path::new(env!("CARGO_BIN_EXE_larpcc-fake-provider")), &fake);
+    let digest = format!("{:x}", Sha256::digest(fs::read(&fake).unwrap()));
+    for provider in ["codex", "claude"] {
+        fixture.run(
+            &["cc", "provider", "bind", provider, fake.to_str().unwrap()],
+            0,
+        );
+    }
+    let run = |qualified: bool, args: &[&str], code: i32| {
+        let args = [&["cc", "--json"][..], args].concat();
+        let executable = if qualified {
+            env!("CARGO_BIN_EXE_larpcc-synthetic")
+        } else {
+            env!("CARGO_BIN_EXE_larp")
+        };
+        let mut cmd = fixture.command_for(Path::new(executable), &args);
+        cmd.env("LARPCC_STAGE11_FAKE_DIGEST", &digest)
+            .env("OPENAI_API_KEY", "must stay out of the child")
+            .env("ANTHROPIC_API_KEY", "must stay out of the child")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = wait_output_for(spawn(&mut cmd).unwrap(), Duration::from_secs(15)).unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(output.stderr.is_empty(), "{args:?}: {}", stderr(&output));
+        envelope(&output)
+    };
+    let codex = fixture.root.join("profiles/2/cli");
+    let claude = fixture.root.join("profiles/1/cli");
+    for home in [&codex, &claude] {
+        create_file(&home.join("usage-scenario"), b"success");
+    }
+    let on = ["settings", "usage", "live", "on", "--acknowledge-risk"];
+    let read = ["usage", "--live"];
+    assert_eq!(run(true, &read, 1)["error"]["code"], "live_disabled");
+    assert!(!codex.join("usage-child").exists());
+    assert!(!claude.join("usage-child").exists());
+    let enabled = run(true, &on, 0);
+    assert_eq!(enabled["data"]["changed"], true);
+    assert_eq!(enabled["data"]["warnings"][0]["code"], "live_unverified");
+    assert_eq!(
+        run(true, &["settings", "usage"], 0)["data"]["live"]["state"],
+        "on"
+    );
+    assert_eq!(run(false, &read, 1)["error"]["code"], "live_disabled");
+    assert!(!codex.join("usage-child").exists());
+    assert!(!claude.join("usage-child").exists());
+
+    let result = run(true, &read, 0);
+    assert_eq!(result["data"]["requested_mode"], "live");
+    let rows = &result["data"]["profiles"];
+    assert_eq!(rows[1]["windows"]["five_hour"]["used_percent"], json!(20.0));
+    assert_eq!(rows[1]["windows"]["weekly"]["used_percent"], json!(10.0));
+    assert_eq!(rows[1]["windows"]["extra"], json!([]));
+    assert_eq!(rows[1]["plan"]["label"], "plus");
+    assert_eq!(rows[1]["reset_credits"]["count"], 2);
+    assert_eq!(rows[0]["windows"]["five_hour"]["used_percent"], json!(21.0));
+    assert_eq!(rows[0]["windows"]["weekly"]["used_percent"], json!(35.0));
+    let extras = &rows[0]["windows"]["extra"];
+    assert_eq!(extras.as_array().unwrap().len(), 2);
+    assert_eq!(extras[0]["label"], "Fable 1.0-Pro weekly");
+    assert_eq!(extras[0]["used_percent"], json!(47.0));
+    assert_eq!(extras[1]["label"], "Other limit 2 weekly");
+    assert_eq!(rows[0]["reset_credits"]["state"], "not_recorded");
+    assert!(!result.to_string().contains("Private@Name"));
+
+    for (name, home, scenarios) in [
+        (
+            "codex-45",
+            &codex,
+            &["fallback", "signed-out", "unknown", "oversize", "timeout"][..],
+        ),
+        (
+            "claude-work",
+            &claude,
+            &["credits", "signed-out", "unknown"][..],
+        ),
+    ] {
+        for scenario in scenarios {
+            fs::write(home.join("usage-scenario"), scenario).unwrap();
+            let result = run(true, &["usage", name, "--live"], 0);
+            let row = &result["data"]["profiles"][0];
+            match *scenario {
+                "fallback" => {
+                    assert_eq!(row["windows"]["extra"][0]["label"], "Other limit 1 1440m");
+                    assert_eq!(row["reset_credits"]["state"], "none");
+                }
+                "credits" => assert_eq!(row["reset_credits"]["count"], 1),
+                "signed-out" => assert_eq!(row["windows"]["five_hour"]["reason"], "sign_in_again"),
+                _ => assert_eq!(row["windows"]["five_hour"]["reason"], "live_unavailable"),
+            }
+            let pid: libc::pid_t = fs::read_to_string(home.join("usage-child"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            // SAFETY: signal 0 probes the recorded synthetic PID without delivering a signal.
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "child survived {scenario}"
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
+            );
+        }
+    }
+    assert_eq!(
+        run(true, &["settings", "usage", "live", "off"], 0)["data"]["changed"],
+        true
+    );
+    assert_eq!(run(true, &read, 1)["error"]["code"], "live_disabled");
+}

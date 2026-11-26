@@ -200,14 +200,14 @@ Additive amendment, schema stays 1. Read envelopes `usage` and `settings.usage`;
 mutation receipts `settings.usage.live|mode|interval|claude-statusline` and
 `profile.plan-label`; new error codes `live_disabled`, `statusline_exists` and
 `statusline_unverifiable` (all exit 1). Each usage window carries its own
-`captured_at`; extra-window labels use a fixed Larp vocabulary and never carry
-provider bucket names; `settings.usage` reports `live.state`
+`captured_at`; LOCAL uses fixed extra-window labels and LIVE Claude can use
+a sanitized model display name with a weekly suffix; `settings.usage` reports `live.state`
 (`off|on|needs_acknowledgement`). Grammar, sources,
 reason codes, ordering, normalization and the pace formula are normative in
 [stage 11](../stages/11-usage.md); pace test vectors are in
-[usage-pace-vectors.json](usage-pace-vectors.json). `usage --live --json` is Larp's
-own bounded network request, not native IO, so it is not `json_native_io`;
-per-profile LIVE failures are row reasons in an `ok:true` envelope. Usage rows carry
+[usage-pace-vectors.json](usage-pace-vectors.json). `usage --live --json` returns an envelope derived from a bounded official-client
+request after consent and Stage 03 admission. Client stdout stays on a private
+pipe. Signed-out, timeout and response-shape failures are per-profile reasons. Usage rows carry
 no tokens, account IDs, emails, spend, cost or token counts; `plan` is the user label
 (`user`), a client-recorded LOCAL plan (`client_local`) or the Codex LIVE plan
 (`live_endpoint`). `settings.usage.mode` carries the profile ID and
@@ -283,7 +283,7 @@ an invalid reply leaves the outcome unknown.
 
 Remote profiles use LOCAL usage mode only. If the destination has LIVE enabled,
 forwarded reads still use LOCAL and the receiver refuses requests to read or
-enable LIVE before accessing tokens or contacting a provider. This applies
+enable LIVE before starting an official client. This applies
 independently of the app's controls.
 
 ## Validation without installations

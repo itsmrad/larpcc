@@ -1415,15 +1415,15 @@
             "extra": null
           },
           "reset_credits": {
-            "state": "unsupported",
+            "state": "not_recorded",
             "count": null,
-            "expires_state": "unsupported",
+            "expires_state": "not_recorded",
             "expires_at": null
           },
           "diagnostics": [
             {
               "code": "sign_in_again",
-              "message": "Sign in again in the official client."
+              "message": "Sign in to this profile through its official client."
             }
           ]
         },
@@ -1620,7 +1620,7 @@
           "diagnostics": [
             {
               "code": "live_unavailable",
-              "message": "Usage is not available right now."
+              "message": "The official client did not return usable usage data."
             }
           ]
         }
@@ -1638,7 +1638,7 @@
         "state": "off",
         "enabled": false,
         "acknowledged_warning": null,
-        "current_warning": 1,
+        "current_warning": 2,
         "verified": false
       },
       "refresh_interval_seconds": null,
@@ -1709,7 +1709,7 @@
       "warnings": [
         {
           "code": "live_unverified",
-          "message": "LIVE usage is unverified against real accounts."
+          "message": "LIVE has not been verified against real accounts."
         }
       ]
     }

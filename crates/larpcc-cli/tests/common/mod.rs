@@ -182,7 +182,14 @@ pub fn spawn(command: &mut Command) -> std::io::Result<std::process::Child> {
         }
     }
 }
-pub fn wait_output(mut child: std::process::Child) -> std::io::Result<Output> {
+pub fn wait_output(child: std::process::Child) -> std::io::Result<Output> {
+    wait_output_for(child, std::time::Duration::from_secs(10))
+}
+
+pub fn wait_output_for(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+) -> std::io::Result<Output> {
     use std::{
         io::{self, Read},
         sync::mpsc,
@@ -203,7 +210,7 @@ pub fn wait_output(mut child: std::process::Child) -> std::io::Result<Output> {
     }
     let stdout = reader(child.stdout.take());
     let stderr = reader(child.stderr.take());
-    let end = Instant::now() + Duration::from_secs(10);
+    let end = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -219,7 +226,7 @@ pub fn wait_output(mut child: std::process::Child) -> std::io::Result<Output> {
             }
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                "synthetic child exceeded ten seconds",
+                "synthetic child exceeded its deadline",
             ));
         }
         thread::sleep(Duration::from_millis(5));

@@ -933,8 +933,8 @@
     },
     "usage_extra_label": {
       "type": "string",
-      "pattern": "^(?:Codex|Other limit [1-9][0-9]{0,2}|Opus|Sonnet|OAuth apps)(?: (?:5h|daily|weekly|monthly|annual|[1-9][0-9]{0,6}m|secondary))?$",
-      "description": "Fixed Larp vocabulary only (stage 11); provider bucket names and identifiers never appear."
+      "pattern": "^(?:(?:Codex|Other limit [1-9][0-9]{0,2}|Opus|Sonnet|OAuth apps)(?: (?:5h|daily|weekly|monthly|annual|[1-9][0-9]{0,6}m|secondary))?|(?=[A-Za-z0-9 .-]{0,23}[A-Za-z0-9.-][A-Za-z0-9 .-]* weekly$)[A-Za-z0-9 .-]{1,24} weekly)(?![\\s\\S])",
+      "description": "Fixed labels or a sanitized LIVE Claude model display name followed by weekly. Raw bucket identifiers are omitted."
     },
     "usage_extra_window": {
       "type": "object",
@@ -1092,7 +1092,7 @@
         "source"
       ],
       "additionalProperties": false,
-      "description": "user = the user-entered plan_label (always wins); client_local = plan_type from the LOCAL Codex rollout record (D29); live_endpoint = plan_type from the Codex LIVE usage response (D32). Provider plans are never stored; never from tokens or credential files."
+      "description": "user = the user-entered plan_label (always wins); client_local = plan_type from the LOCAL Codex rollout record (D29); live_endpoint = planType from the Codex official-client LIVE snapshot (existing wire spelling). Provider plans are never stored; never from tokens or credential files."
     },
     "client_version": {
       "type": "string",

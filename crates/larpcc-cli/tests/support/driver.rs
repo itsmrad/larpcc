@@ -78,6 +78,20 @@ fn main() -> std::process::ExitCode {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("stage3")) {
         return stage3();
     }
+    #[cfg(unix)]
+    if let Some(digest) = std::env::var("LARPCC_STAGE11_FAKE_DIGEST")
+        .ok()
+        .and_then(|value| invented_digest(&value))
+    {
+        use launch::admission::{Operation, synthetic_usage_rows};
+        use registry::Provider;
+        synthetic_usage_rows(
+            [Provider::Codex, Provider::Claude]
+                .into_iter()
+                .map(|provider| invented_row(provider, Operation::Usage, digest))
+                .collect(),
+        );
+    }
     if let Some(digest) = std::env::var("LARPCC_STAGE14_FAKE_DIGEST")
         .ok()
         .and_then(|value| invented_digest(&value))
@@ -309,6 +323,10 @@ fn invented_row(
             Operation::Login => &["invented-login"],
             Operation::Status => &["invented-status"],
             Operation::Logout => &["invented-logout"],
+            #[cfg(unix)]
+            Operation::Usage => launch::admission::usage_argv(provider),
+            #[cfg(windows)]
+            Operation::Usage => unreachable!(),
         },
         denied_env: &["LARPCC_SYNTHETIC_DENY_*"],
         paths: &[],

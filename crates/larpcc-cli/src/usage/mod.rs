@@ -6,6 +6,8 @@ mod files;
 pub(crate) mod graph;
 #[cfg(unix)]
 pub(crate) mod hook;
+#[cfg(unix)]
+pub(crate) mod live_client;
 
 use crate::registry::Profile;
 use serde::Serialize;
@@ -111,6 +113,8 @@ fn diagnostic(code: &'static str) -> Diagnostic {
         "clock_skew" => "The usage record and reset time disagree beyond clock tolerance.",
         "extra_duplicate" => "Duplicate extra usage windows were omitted.",
         "extra_truncated" => "Extra usage windows were omitted after the output limit.",
+        "sign_in_again" => "Sign in to this profile through its official client.",
+        "live_unavailable" => "The official client did not return usable usage data.",
         "invalid_record" => "A local usage record was invalid or unsafe.",
         "scan_limit" => "Only the bounded set of recent usage records was scanned.",
         "unsafe_path" => "The root path cannot be safely quoted for the usage hook.",
@@ -192,13 +196,19 @@ pub(crate) fn local_row<'a>(
 }
 
 pub(crate) fn disabled_row(profile: &Profile, label: Option<&str>) -> serde_json::Value {
-    let mut observation = Observation::missing("live_disabled", false);
-    observation.diagnostics.insert("live_disabled");
+    missing_live_row(profile, label, "live_disabled")
+}
+
+pub(crate) fn missing_live_row(
+    profile: &Profile,
+    label: Option<&str>,
+    reason: &'static str,
+) -> serde_json::Value {
+    let mut observation = Observation::missing(reason, false);
+    observation.diagnostics.insert(reason);
     let mut row = row(profile, label, "live", observation);
-    if profile.provider == crate::registry::Provider::Codex {
-        row.reset_credits.state = "not_recorded";
-        row.reset_credits.expires_state = "not_recorded";
-    }
+    row.reset_credits.state = "not_recorded";
+    row.reset_credits.expires_state = "not_recorded";
     serde_json::json!(row)
 }
 
@@ -225,7 +235,11 @@ fn row<'a>(
             .or_else(|| {
                 observation.plan.map(|label| Plan {
                     label,
-                    source: "client_local",
+                    source: if mode == "live" {
+                        "live_endpoint"
+                    } else {
+                        "client_local"
+                    },
                 })
             }),
         windows: observation.windows,

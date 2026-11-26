@@ -285,7 +285,143 @@ fn version_mode(mode: &str) -> io::Result<u32> {
     out.flush()?;
     Ok(0)
 }
+#[cfg(unix)]
+fn usage_mode(codex: bool) -> io::Result<()> {
+    use serde_json::{Value, json};
+    use std::{io::BufRead, path::PathBuf};
+
+    let home = if codex {
+        "CODEX_HOME"
+    } else {
+        "CLAUDE_CONFIG_DIR"
+    };
+    let other = if codex {
+        "CLAUDE_CONFIG_DIR"
+    } else {
+        "CODEX_HOME"
+    };
+    assert!(std::env::var_os(other).is_none());
+    assert!(std::env::var_os("OPENAI_API_KEY").is_none());
+    assert!(std::env::var_os("ANTHROPIC_API_KEY").is_none());
+    let home = PathBuf::from(std::env::var_os(home).unwrap());
+    std::fs::write(home.join("usage-child"), std::process::id().to_string())?;
+    let mode = std::fs::read_to_string(home.join("usage-scenario"))?;
+    let mut lines = io::stdin().lock().lines();
+    let mut next = || -> Value { serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap() };
+    let response = |id, value| {
+        if codex {
+            json!({"id":id, "result":value})
+        } else {
+            json!({"type":"control_response", "response":{
+                "request_id":format!("{id}"),"subtype":"success","response":value
+            }})
+        }
+    };
+    if codex {
+        assert_eq!(next()["method"], "initialize");
+    } else {
+        let frame = next();
+        assert_eq!(frame["type"], "control_request");
+        assert_eq!(frame["request"]["subtype"], "initialize");
+    }
+    println!("{}", response(1, json!({})));
+    if codex {
+        assert_eq!(next()["method"], "initialized");
+        assert_eq!(
+            next(),
+            json!({"id":2,"method":"account/rateLimits/read","params":null})
+        );
+    } else {
+        assert_eq!(
+            next(),
+            json!({"type":"control_request","request_id":"2",
+            "request":{"subtype":"get_usage","skip_behaviors":true}})
+        );
+    }
+    eprintln!("synthetic stderr must stay private");
+    match mode.as_str() {
+        "timeout" => std::thread::sleep(std::time::Duration::from_secs(30)),
+        "oversize" => io::stdout().write_all(&vec![b'x'; 1024 * 1024 + 1])?,
+        "unknown" => println!("{}", response(2, json!({"unexpected":true}))),
+        "signed-out" if codex => println!(
+            "{}",
+            json!({
+                "id":2,"error":{"code":-32603,"message":"Not signed in"}
+            })
+        ),
+        "signed-out" => println!(
+            "{}",
+            json!({"type":"control_response","response":{
+                "request_id":"2","subtype":"error","error":"Please run /login"
+            }})
+        ),
+        "fallback" => println!(
+            "{}",
+            response(
+                2,
+                json!({
+                    "rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":1440}},
+                    "rateLimitResetCredits":{"availableCount":0}
+                })
+            )
+        ),
+        "success" if codex => println!(
+            "{}",
+            response(
+                2,
+                json!({
+                    "rateLimits":{"primary":{"usedPercent":9,"windowDurationMins":300}},
+                    "rateLimitsByLimitId":{
+                        "codex":{"limitId":"codex","planType":"plus",
+                            "primary":{"usedPercent":10,"windowDurationMins":10080},
+                            "secondary":{"usedPercent":20,"windowDurationMins":300}},
+                        "ignored":{"primary":{"usedPercent":99,"windowDurationMins":500}}
+                    },
+                    "rateLimitResetCredits":{"availableCount":2}
+                })
+            )
+        ),
+        "success" | "credits" => {
+            let mut value = json!({"rate_limits_available":true,"rate_limits":{
+                "five_hour":{"utilization":21},
+                "seven_day":{"utilization":35},
+                "model_scoped":[{"display_name":"Fable 1.0-Pro","utilization":47},
+                    {"display_name":"Private@Name","utilization":70},
+                    {"display_name":"Missing","utilization":null}]
+            }});
+            if mode == "credits" {
+                value["rate_limit_reset_credits"] = json!({"available_count":1});
+            }
+            println!("{}", response(2, value));
+        }
+        _ => panic!("unrecognized synthetic usage scenario"),
+    }
+    io::stdout().flush()?;
+    // Keep the protocol open. A successful call must stop the client itself.
+    drop(lines);
+    let _ = io::stdin().lock().read_line(&mut String::new());
+    Ok(())
+}
+
 fn main() -> ExitCode {
+    #[cfg(unix)]
+    match std::env::args().nth(1).as_deref() {
+        Some("app-server") => {
+            return if usage_mode(true).is_ok() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
+        Some("--print") => {
+            return if usage_mode(false).is_ok() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
+        _ => {}
+    }
     if let Some(mode) = std::env::args_os().nth(1).and_then(|a| {
         a.to_str()?
             .strip_prefix("invented-version-")

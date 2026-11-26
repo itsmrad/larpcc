@@ -68,7 +68,7 @@ every account operation. Admission refuses if a replacement in `Caskroom`
 changes those bytes. A plain `run` without admission before qualification rows
 exist still trusts `admin` members to the same extent as root.
 
-## Usage (stage 11, D14)
+## Usage (stage 11, D14 and D56)
 
 Scope: [stage 11](../stages/11-usage.md). The user accepted LIVE's ban risk
 explicitly and informed (2026-11-17); LOCAL stays the default. Controls below
@@ -76,32 +76,21 @@ are requirements with synthetic acceptance, not implementation certification.
 
 | Threat | Required control and discriminating acceptance |
 |---|---|
-| Token in memory, swap, core dumps | zeroizing buffers and token type without Debug/Display, dropped right after the one request; core dumps disabled for the process before a LIVE read on Unix (`RLIMIT_CORE` 0, Linux `PR_SET_DUMPABLE` 0). No `mlock` promise: swap and hibernation images remain a residual risk |
-| Token in logs, panics, error strings | no logging in LIVE paths; fixed codes only; parser/TLS/IO errors never formatted into output; JSON-mode panic hook emits only a fixed envelope. `stage11_secrets` injects failures at every step and finds zero fake-token bytes in stdout/stderr/files/panic output |
-| Token in child argv/env | LIVE starts no child or PTY and never refreshes; tokens never enter argv/env. Asserted by the fake transport and process-spawn seam |
-| Endpoint confusion, MITM, exfiltration | two fixed host/path pairs, TLS verification, proxy env ignored, redirects never followed, no cookies, 64 KiB response cap, 5/10 s timeouts, one attempt. Test-only base-URL/trust-root override is compiled out of release |
-| Hostile or changed response | allowlisted deserializer; unknown shape, out-of-range values or 401/403 fail closed to `live_unavailable`/`sign_in_again`; nothing echoed; account IDs, user IDs, credits and dollar fields discarded unread into output. Codex `plan_type` is the one plan field kept (D32): verified enum value only, in memory for the invocation, never stored, cached or logged |
-| Codex account ID in LIVE | inside D14 (D29): read from auth.json only when LIVE is enabled, zeroized, sent only as `chatgpt-account-id` to the pinned host, never stored or output; covered by `stage11_secrets` with fake account IDs |
+| Credential exposure | Authentication stays within the official client. LarpCC has no token, auth-file or Keychain reader for usage and makes no direct provider HTTP request. Fixed argv, a minimal inherited environment and a profile-home override prevent forwarding credentials from LarpCC. |
+| Wrong account or backend | Require LIVE consent and the exact Stage 03 Usage row with G1 evidence for the bound artifact, profile home and native authentication backend. The client uses its own stored login. Its ability to reuse or fall back to another login is the residual risk the qualification must address. Rows remain empty. |
+| Hostile or changed usage response | Private stdio, discarded stderr, one bounded foreground request, capped stdout, process-group termination and immediate direct-child reap. Fixed diagnostics cover sign-in, protocol and shape errors. Output exposes only the projected usage fields. |
 | Session-log privacy (LOCAL Codex) | confined no-follow reader in the profile's own CODEX_HOME, grammar-checked paths, caps on dirs/files/bytes/lines/time; streaming skip of all non-allowlisted values; `session_meta` yields only `cli_version`. Conversation sentinels in fixtures never appear in output or files |
-| Provider names in output | bucket names/IDs (`limit_name`, `limit_id`, `metered_feature`) can name an organization or private model: labels come only from a fixed Larp vocabulary (`Other limit N` for unreviewed buckets), enforced by the schema pattern; grammar-valid private sentinels never appear in local or forwarded output |
+| Provider names in output | LOCAL keeps the fixed Larp vocabulary. LIVE Claude uses the sanitized model display name where available and a numeric fallback otherwise. Raw identifiers and rejected names are omitted. A grammar-valid display name can identify a model visible to that profile; LIVE stays local. |
 | Wrong-bucket or stale data | filter by `limit_id`, map by `window_minutes` not position, per-window observation time for pace (no row-level mixing), per-file version gate, `reset_since_capture` after reset; resumed sessions written by another Codex version than `session_meta` names are a known limitation (shape check still applies) |
 | Hook injection: hostile statusLine input | fixed argv and `CLAUDE_CONFIG_DIR` match, 256 KiB/2 s stdin cap, allowlist parse, range checks, no stderr, no echo, exit 0; deep nesting, huge strings, NaN and wrong types tested |
 | Overwriting the user's statusLine | capture is opt-in per profile (D29); a key-presence-only check refuses `statusline_exists` on enable and skips injection at launch when the profile or the launch directory's project/local settings (any parent) define a statusLine; an indeterminate check (malformed/unsupported syntax, oversize, unsafe file, IO error, walk cap) refuses `statusline_unverifiable` at enable and launches without injection; never wraps another command; the hook prints nothing. Settings values are never read or output |
 | Torn settings commit | `usage.json` changes use a journaled two-phase commit under the registry lock and the pending-journal gate; recovery runs before any revision comparison or read, so LIVE consent/mode is never visible at the wrong revision; kill-between-writes tests |
 | Hook tamper: file/settings drift | hook is a root-pinned Larp copy validated by receipt and hash; the `--settings` render is an owned, hash-checked file outside native homes and refuses on drift; no native `settings.json` writes. Managed policy, `disableAllHooks` or untrusted workspaces silently stop capture (shows stale/`not_captured`, never guessed) |
 | Capture file forgery by same-user programs | capture is untrusted input to `usage`: no-follow, owner-only, size/field/range checks; a same-user process can still forge plausible numbers. Display is "as reported", never used for automation |
-| macOS Keychain access | a plain read query; macOS prompts the user, and the prompt is explained at enable time (D29). Larp never requests, sets or edits "Always Allow" or the item's ACL. If the user chooses Always Allow themselves, a later compromised Larp binary could read that item without asking |
-| ToS / ban risk | LIVE is off by default, needs `--acknowledge-risk` on every enable, labelled unverified; still a request from a non-official client with the user's token, which the provider may detect and restrict. No imitation of official clients' User-Agent |
+| Provider restrictions | LIVE is off by default and each enable requires explicit acknowledgement. Real-account behavior remains unverified until user-authorized qualification. |
 
-What LarpCC still never does: refresh, store or copy tokens; drive a client in a
-PTY; scrape or capture native client output for usage; read native config
-values (only `statusLine` key presence); read plan or account identity from
-tokens or credential files; poll in the background or at login; switch, rotate or
-pool profiles based on usage; send usage data anywhere; read real credentials
-or call real endpoints in tests (fakes only). Residual risks stay: same-user
-processes can read the same credentials and forge captures, memory can be
-swapped, and a provider can restrict an account for LIVE use regardless of
-these controls.
+The Stage 03 guard coordinates LarpCC operations. Third-party and same-user
+processes remain outside it. All LIVE test clients are synthetic.
 
 ## Desktop dispatch
 
@@ -137,7 +126,7 @@ compromised server can fabricate valid metadata or mutate its own state.
 | Data exfiltration via MCP copy or sync | Require an explicit source, target, digest and approval. Validate the actual command, arguments or URL and reference names before transfer and again on the destination. No credential values, keychain lookups, endpoint requests or server execution. Untrusted output never chooses a routing destination. |
 | Credential-shaped skill files or filesystem escape | Scope transfers to a catalog-owned Stage 06 package and managed receiver staging. Validate path allowlists and limits before reading or accepting file data, reject credential-shaped names, links and special files, and verify the approved digest before commit. Truncated, oversized and malformed frames leave no committed entry. User approval covers the content of accepted files. No arbitrary-path transfer or Larp binary installation. |
 | Stale routing, stale registry or lost receipt | Check host and target revisions independently. Never fall back or retry on conflict. After uncertain mutation outcome, refresh explicitly to reconcile. Mixed sync results preserve confirmed successes and expose unattempted destinations/entries. |
-| Remote usage or native launch bypass | Gate forwarded requests on both sides. Refuse LIVE before token access and closed native operations before SSH; prove zero provider requests and zero native child creation with fakes. |
+| Remote usage or native launch bypass | Gate forwarded requests on both sides. Refuse LIVE before a client process and closed native operations before SSH; prove zero provider requests and zero native child creation with fakes. |
 
 ## Account summary
 
