@@ -1415,9 +1415,9 @@
             "extra": null
           },
           "reset_credits": {
-            "state": "unsupported",
+            "state": "not_recorded",
             "count": null,
-            "expires_state": "unsupported",
+            "expires_state": "not_recorded",
             "expires_at": null
           },
           "diagnostics": [
