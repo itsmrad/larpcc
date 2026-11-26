@@ -61,6 +61,20 @@ final class LocalUsageBridgeTests: XCTestCase {
         XCTAssertNil(codex.extra.last?.window.leftPercent)
     }
 
+    func testLocalUsageRefusalPreservesStableCode() async throws {
+        let bytes = try ProcessBridgeTests.bytes([
+            "schema": 1, "command": "usage", "ok": false,
+            "error": ["code": "busy", "message": "Simulated registry diagnostic"]
+        ])
+        let client = ProcessLarpClient(transport: UsageTransport(bytes: bytes, status: 1))
+        do {
+            _ = try await client.usage(source: .local)
+            XCTFail("Expected a usage refusal")
+        } catch let error as ClientError {
+            XCTAssertEqual(error, .refused(code: "busy"))
+        }
+    }
+
     func testLocalThroughSelectedExecutableRechecksIdentity() async throws {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(UUID().uuidString)
@@ -175,13 +189,17 @@ final class LocalUsageBridgeTests: XCTestCase {
 
 private actor UsageTransport: CLITransport {
     let bytes: Data
+    let status: Int32
     private(set) var calls: [[String]] = []
 
-    init(bytes: Data) { self.bytes = bytes }
+    init(bytes: Data, status: Int32 = 0) {
+        self.bytes = bytes
+        self.status = status
+    }
 
     func run(_ arguments: [String], mutation: Bool) async throws -> ProcessOutput {
         calls.append(arguments)
         guard !mutation else { throw ClientError.invalidResponse }
-        return ProcessOutput(stdout: bytes, status: 0)
+        return ProcessOutput(stdout: bytes, status: status)
     }
 }
