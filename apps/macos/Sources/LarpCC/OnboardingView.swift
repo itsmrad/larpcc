@@ -148,19 +148,30 @@ struct OnboardingView: View {
         case .profile:
             supporting("Profiles give each Claude Code or Codex setup a separate data folder. You can add a profile now or from Settings later.")
         case .done:
-            let tools = providerBindings.union(scan?.executables.filter(\.bound).map(\.provider) ?? [])
-            if tools.isEmpty && desktopBindings.isEmpty {
+            let tools = providerBindings.union(store.snapshot?.boundProviders ?? [])
+            let apps = desktopBindings.union(store.snapshot?.desktopBindings.filter { $0.value.state == .ok }.map(\.key) ?? [])
+            if tools.isEmpty && apps.isEmpty {
                 supporting("You can connect installations from Settings at any time.")
             }
             ForEach(Provider.allCases, id: \.self) { provider in
                 if tools.contains(provider) { Label("\(toolName(provider)) bound", systemImage: "checkmark.circle") }
-                if desktopBindings.contains(provider) { Label("\(provider.desktopApp) bound", systemImage: "checkmark.circle") }
+                if apps.contains(provider) { Label("\(provider.desktopApp) bound", systemImage: "checkmark.circle") }
             }
             if let profileName { Label("Profile added: \(profileName)", systemImage: "checkmark.circle") }
         }
     }
 
     @ViewBuilder private var detectionContent: some View {
+        if step == .desktop {
+            ForEach(Provider.allCases, id: \.self) { provider in
+                if let binding = store.snapshot?.desktopBindings[provider], binding.state == .ok {
+                    HStack(spacing: SettingsSpacing.inline) {
+                        Label("\(provider.desktopApp) bound", systemImage: "checkmark.circle")
+                        if let path = binding.displayPath { pathLabel(path).foregroundStyle(SettingsTypography.supportingInk) }
+                    }
+                }
+            }
+        }
         if let scanError, loadedKey == scanKey {
             UnavailablePane(title: "Detection unavailable", symbol: "terminal",
                             message: scanError, retry: {
@@ -194,7 +205,7 @@ struct OnboardingView: View {
                 }
                 .padding(.trailing, SettingsSpacing.inline)
             }
-            .frame(height: step == .providers ? 345 : 200)
+            .frame(height: step == .providers ? 345 : 225)
             if scan.limited { supporting("The scan reached its limit. Some installations may be missing.") }
             if scan.skippedCount > 0 {
                 supporting("Skipped protected locations (\(scan.skippedCount)).")
@@ -244,6 +255,7 @@ struct OnboardingView: View {
     @ViewBuilder private func desktopRows(_ scan: ProviderDetection) -> some View {
         if scan.desktop_apps.isEmpty { supporting("No desktop apps found") }
         ForEach(scan.desktop_apps, id: \.path) { app in
+            let closed = SetupBinding.desktopBindingClosed(provider: app.provider, isFixture: store.isFixture)
             HStack(alignment: .top, spacing: SettingsSpacing.control) {
                 VStack(alignment: .leading, spacing: SettingsSpacing.tight) {
                     Text(app.provider.desktopApp).font(SettingsTypography.heading)
@@ -251,11 +263,12 @@ struct OnboardingView: View {
                     if let version = app.version { supporting("Version: \(version)") }
                     supporting("Code requirement: \(app.code_requirement.capitalized)")
                     if app.provider == .claude {
-                        supporting("Binding and launch closed · Qualification pending")
+                        supporting(closed ? "Binding and launch closed · Qualification pending"
+                                   : "Launch closed · Qualification pending")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                if app.provider == .codex {
+                if !closed {
                     Button("Bind…") {
                         binding = SetupBinding(provider: app.provider, path: app.path, desktop: true,
                                                revision: loadedKey?.revision)

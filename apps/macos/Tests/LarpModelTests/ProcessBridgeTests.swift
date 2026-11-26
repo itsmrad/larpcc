@@ -143,8 +143,19 @@ final class ProcessBridgeTests: XCTestCase {
         let replacementDeletes = await transport.replacementDeletes
         XCTAssertEqual(replacementDeletes, 1)
     }
+    func testBindingSnapshotDoesNotRequireDiscovery() async throws {
+        let transport = try RecordingTransport(mode: "desktop-binding")
+        let snapshot = try await ProcessLarpClient(transport: transport).snapshot()
+        XCTAssertEqual(snapshot.boundProviders, [.codex])
+        XCTAssertEqual(snapshot.desktopBindings[.claude]?.state, .ok)
+        XCTAssertEqual(snapshot.desktopBindings[.claude]?.displayPath, "/Applications/Claude.app")
+        let calls = await transport.calls
+        XCTAssertTrue(calls.contains(["cc", "provider", "list", "--json", "--expected-revision", "7"]))
+        XCTAssertFalse(calls.contains { $0.prefix(3) == ["cc", "provider", "detect"] })
+    }
+
     func testMixedRevisionAndDanglingSwitchRefuse() async throws {
-        for mode in ["mixed", "dangling", "matrix-columns"] {
+        for mode in ["mixed", "mixed-bindings", "dangling", "matrix-columns"] {
             let transport = try RecordingTransport(mode: mode)
             do { _ = try await ProcessLarpClient(transport: transport).snapshot(); XCTFail(mode) } catch {}
         }
@@ -235,6 +246,18 @@ private actor RecordingTransport: CLITransport {
         if reused, command == "profile.delete" { replacementDeletes += 1 }
         var e = examples.first { $0["command"] as? String == command && $0["ok"] as? Bool == true }!
         if mode == "mixed", command == "mcp.matrix" { e["revision"] = "8" }
+        if mode == "mixed-bindings", command == "provider.list" { e["revision"] = "8" }
+        if mode == "desktop-binding", command == "provider.list" {
+            var data = e["data"] as! [String: Any]
+            var bindings = data["bindings"] as! [[String: Any]]
+            bindings.append([
+                "provider": "claude", "surface": "desktop",
+                "binding": ["path": "/Applications/Claude.app", "recorded_version": NSNull(),
+                            "detected_version": NSNull(), "state": "ok", "qualified": false] as [String: Any]
+            ])
+            data["bindings"] = bindings
+            e["data"] = data
+        }
         if mode == "dangling", command == "mcp.list" {
             var data = e["data"] as! [String: Any], servers = data["servers"] as! [[String: Any]]
             servers[0]["switches"] = [["profile_id": "99", "enabled": true]]; data["servers"] = servers; e["data"] = data

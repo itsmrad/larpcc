@@ -128,6 +128,8 @@ public struct Snapshot: Sendable {
     public var syncNewServers: Bool
     /// Display-only data folder derived from Larp metadata; nil when unknown.
     public var dataFolder: String? = nil
+    public var boundProviders: Set<Provider> = []
+    public var desktopBindings: [Provider: DesktopBinding] = [:]
     public var enabledCount: Int { profiles.filter { $0.cliEnabled || $0.desktopEnabled }.count }
 }
 
@@ -284,7 +286,7 @@ public actor FixtureLarpClient: LarpClient {
         ], skills: [
             CatalogItem(id: "code-review", subtitle: "Shared skill · sample", profileIDs: ["1", "2", "3"]),
             CatalogItem(id: "writing", subtitle: "Shared skill · sample", profileIDs: ["1", "4"])
-        ], syncNewServers: false)
+        ], syncNewServers: false, desktopBindings: [.claude: Self.claudeApp, .codex: Self.chatGPTApp])
     }
     public func snapshot() async throws -> Snapshot { state }
 
@@ -333,7 +335,7 @@ public actor FixtureLarpClient: LarpClient {
             guard LarpNames.isValidProfile(name) else { throw ClientError.invalidName }
             try unusedName(name)
             let id = String((state.profiles.compactMap { UInt64($0.id) }.max() ?? 0) + 1)
-            let binding = state.profiles.first { $0.provider == provider }?.desktopBinding
+            let binding = state.desktopBindings[provider]
                 ?? DesktopBinding(state: .unbound, displayPath: nil, detectedVersion: nil, recordedVersion: nil)
             state.profiles.append(Profile(id: id, name: name, provider: provider, cliEnabled: true, desktopEnabled: false,
                                           needsAttention: false, aliases: [], desktopBinding: binding))
@@ -365,14 +367,16 @@ public actor FixtureLarpClient: LarpClient {
             guard MCPInput.isAbsolutePath(path) else { throw ClientError.invalidInput }
             if providerPaths[provider] != nil, !replace { throw ClientError.alreadyBound }
             providerPaths[provider] = path
+            state.boundProviders.insert(provider)
         case let .open(id, _):
             _ = try index(id)
             throw ClientError.qualificationPending
         case let .bindApp(provider, path, version, replace):
             guard MCPInput.isAbsolutePath(path), path.hasSuffix(".app") else { throw ClientError.invalidInput }
-            let current = state.profiles.first { $0.provider == provider }?.desktopBinding
+            let current = state.desktopBindings[provider]
             if current?.state == .ok, !replace { throw ClientError.alreadyBound }
             let binding = DesktopBinding(state: .ok, displayPath: path, detectedVersion: nil, recordedVersion: version)
+            state.desktopBindings[provider] = binding
             for i in state.profiles.indices where state.profiles[i].provider == provider { state.profiles[i].desktopBinding = binding }
         case let .addAlias(name, id, _, shadow):
             guard LarpNames.isValidAlias(name, shadow: shadow) else { throw ClientError.invalidName }

@@ -7,6 +7,10 @@ struct SetupBinding: Identifiable {
     let desktop: Bool
     let revision: String?
     var id: String { path }
+
+    static func desktopBindingClosed(provider: Provider, isFixture: Bool) -> Bool {
+        provider == .claude && !isFixture
+    }
 }
 
 struct SetupBindingSheet: View {
@@ -21,7 +25,7 @@ struct SetupBindingSheet: View {
     private var canBind: Bool {
         store.snapshot != nil && store.snapshot?.revision == target.revision
             && !store.busy && MCPInput.isAbsolutePath(target.path)
-            && (!target.desktop || (target.provider == .codex && target.path.hasSuffix(".app")))
+            && (!target.desktop || (target.path.hasSuffix(".app") && !SetupBinding.desktopBindingClosed(provider: target.provider, isFixture: store.isFixture)))
     }
 
     var body: some View {

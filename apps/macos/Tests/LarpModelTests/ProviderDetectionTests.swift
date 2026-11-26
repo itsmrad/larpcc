@@ -33,6 +33,13 @@ final class ProviderDetectionTests: XCTestCase {
         data["executables"] = executables
         envelope["data"] = data
         XCTAssertThrowsError(try decode(envelope))
+
+        executables[0]["version"] = "unapproved"
+        data["executables"] = executables
+        envelope["data"] = data
+        let unapproved = try XCTUnwrap(decode(envelope).executables.first)
+        XCTAssertEqual(unapproved.version, "unapproved")
+        XCTAssertEqual(unapproved.version_diagnostic, "version_unapproved")
     }
 
     func testDetectionErrorEnvelopeHasNoData() throws {
