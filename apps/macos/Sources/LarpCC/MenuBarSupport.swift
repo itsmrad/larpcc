@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import LarpModel
 
 // MARK: - Preferences (UserDefaults; never sent anywhere)
@@ -18,9 +19,58 @@ enum MenuBarPreferences {
 
 // MARK: - Store helpers
 
+/// A menu bar window can hide while its SwiftUI view remains mounted.
+struct UsageWindowVisibility: NSViewRepresentable {
+    let store: AppStore
+    let usageView: AppStore.UsageView
+
+    func makeNSView(context: Context) -> Observer {
+        Observer(store: store, usageView: usageView)
+    }
+
+    func updateNSView(_ view: Observer, context: Context) {}
+
+    static func dismantleNSView(_ view: Observer, coordinator: ()) {
+        view.stopObserving()
+    }
+
+    final class Observer: NSView {
+        private weak var store: AppStore?
+        private let usageView: AppStore.UsageView
+        private var observation: AnyCancellable?
+
+        init(store: AppStore, usageView: AppStore.UsageView) {
+            self.store = store
+            self.usageView = usageView
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { return nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observation = window.map { window in
+                NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification, object: window)
+                    .sink { [weak self] _ in self?.updateVisibility() }
+            }
+            updateVisibility()
+        }
+
+        func stopObserving() {
+            observation = nil
+            store?.setUsageView(usageView, visible: false)
+        }
+
+        private func updateVisibility() {
+            store?.setUsageView(usageView, visible: window?.occlusionState.contains(.visible) == true)
+        }
+    }
+}
+
 extension AppStore {
-    /// Opening the panel re-reads Local usage.
+    /// D14: opening the panel re-reads Local usage. Live waits for the user or the opt-in interval.
     func menuBarPanelOpened() {
+        guard UsagePreferences.source == .local else { return }
         if snapshot == nil {
             // A metadata refresh also re-reads Local usage.
             if !busy { startRefresh() }
@@ -29,10 +79,11 @@ extension AppStore {
         }
     }
 
-    /// The panel's Refresh recovers profiles first if needed.
+    /// The panel's Refresh: reads usage from the current source, recovering profiles first if needed.
     func menuBarRefresh() {
         if snapshot == nil, !busy { startRefresh() }
-        if snapshot != nil { refreshUsage() }
+        // A metadata refresh re-reads Local usage itself; Live usage is only read on request.
+        if snapshot != nil || UsagePreferences.source == .live { refreshUsage() }
     }
 }
 
@@ -213,7 +264,9 @@ enum MenuBarSnapshot {
     @MainActor private static func render(to path: String, expanded: String?, selected: String?) async -> Bool {
         let store = AppStore(client: FixtureLarpClient())
         guard store.isFixture else { return false }
+        // Local usage follows the metadata refresh; Live (sample) usage is read once here.
         await store.refresh()
+        if UsagePreferences.source == .live { store.refreshUsage() }
         for await loading in store.$usageLoading.values where !loading { break }
         if let statusPath = statusPath(), !renderStatus(store, to: statusPath) { return false }
 

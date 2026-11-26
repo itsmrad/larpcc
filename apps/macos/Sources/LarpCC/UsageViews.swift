@@ -1,26 +1,151 @@
 import SwiftUI
 import LarpModel
 
+// MARK: - Preferences (UserDefaults; never sent anywhere)
+
+enum UsagePreferences {
+    static let sourceKey = "usageSource"
+    static let consentKey = "usageLiveConsent"
+    static let intervalKey = "usageLiveIntervalMinutes"
+    static let intervals = [0, 5, 15, 30, 60]
+    // The build has no qualified LIVE usage rows.
+    static let liveQualified = false
+
+    static func effectiveSource(stored: String, consented: Bool) -> UsageSource {
+        liveQualified && stored == UsageSource.live.rawValue && consented ? .live : .local
+    }
+
+    /// Live counts only after the one-time confirmation.
+    static var source: UsageSource {
+        effectiveSource(stored: UserDefaults.standard.string(forKey: sourceKey) ?? UsageSource.local.rawValue,
+                        consented: UserDefaults.standard.bool(forKey: consentKey))
+    }
+    static func supportedInterval(_ minutes: Int) -> Int {
+        intervals.contains(minutes) ? minutes : 0
+    }
+    static var intervalMinutes: Int { supportedInterval(UserDefaults.standard.integer(forKey: intervalKey)) }
+
+    static func liveUnavailable(isFixture: Bool) -> String {
+        isFixture ? "Live usage isn't available in this build yet; sample data is shown."
+                  : "Live usage isn't available in this build yet."
+    }
+}
+
 // MARK: - General › Usage
 
 struct UsageSettingsSection: View {
     @ObservedObject var store: AppStore
+    @AppStorage(UsagePreferences.sourceKey) private var source = UsageSource.local.rawValue
+    @AppStorage(UsagePreferences.consentKey) private var consented = false
+    @AppStorage(UsagePreferences.intervalKey) private var interval = 0
+    @State private var confirmingLive = false
+
+    private var effectiveSource: UsageSource {
+        UsagePreferences.effectiveSource(stored: source, consented: consented)
+    }
 
     var body: some View {
-        Section("Usage") {
-            LabeledContent {
-                Text("Local")
+        Section {
+            Picker(selection: Binding(
+                get: { effectiveSource },
+                set: { choice in
+                    guard choice != .live || UsagePreferences.liveQualified else { return }
+                    if choice == .live && !consented { confirmingLive = true } else { select(choice) }
+                }
+            )) {
+                Text(UsageSource.local.title).tag(UsageSource.local)
+                if UsagePreferences.liveQualified {
+                    Text(UsageSource.live.title).tag(UsageSource.live)
+                }
             } label: {
                 Text("Usage source")
-                Text("Local uses only data the official apps already saved on this Mac.")
+                Text(effectiveSource == .live
+                     ? UsagePreferences.liveUnavailable(isFixture: store.isFixture)
+                     : "Local uses only data the official apps already saved on this Mac.")
                     .foregroundStyle(SettingsTypography.supportingInk)
             }
-            LabeledContent("Live usage", value: "Disabled · Unverified")
-                .foregroundStyle(SettingsTypography.supportingInk)
-            if !store.usageLoading, let error = store.usageError {
+            .pickerStyle(.segmented)
+            if !UsagePreferences.liveQualified {
+                LabeledContent("Live usage", value: "Disabled · Unverified")
+                    .foregroundStyle(SettingsTypography.supportingInk)
+            }
+            if effectiveSource == .live {
+                Picker(selection: Binding(
+                    get: { UsagePreferences.supportedInterval(interval) },
+                    set: { interval = $0 }
+                )) {
+                    ForEach(UsagePreferences.intervals, id: \.self) { minutes in
+                        Text(minutes == 0 ? "Off" : "Every \(minutes) min").tag(minutes)
+                    }
+                } label: {
+                    Text("Refresh automatically")
+                    Text("Off means usage updates only when you refresh.")
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                }
+                LabeledContent {
+                    Button("Refresh Now") { store.refreshUsage() }
+                        .disabled(store.usageLoading || store.snapshot == nil)
+                } label: {
+                    Text("Live usage")
+                    if !store.usageLoading, let error = store.usageError {
+                        Text(error).foregroundStyle(SettingsTypography.supportingInk)
+                    } else {
+                        UsageUpdatedText(report: store.usage.values.first, loading: store.usageLoading)
+                    }
+                }
+            } else if !store.usageLoading, let error = store.usageError {
                 Text(error).foregroundStyle(SettingsTypography.supportingInk)
             }
+        } header: {
+            Text("Usage")
         }
+        .onChange(of: interval) { _, _ in store.scheduleLiveRefresh() }
+        .sheet(isPresented: $confirmingLive) {
+            LiveUsageConsentSheet(isFixture: store.isFixture) {
+                guard UsagePreferences.liveQualified else { return }
+                consented = true
+                select(.live)
+            }
+        }
+    }
+
+    private func select(_ choice: UsageSource) {
+        source = choice.rawValue
+        store.scheduleLiveRefresh()
+        store.refreshUsage()
+    }
+}
+
+/// One-time confirmation before Live usage. Cancel keeps Local.
+struct LiveUsageConsentSheet: View {
+    let isFixture: Bool
+    let onEnable: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .symbolRenderingMode(.multicolor)
+                    .font(.system(size: 28))
+                Text("Turn on live usage?")
+                    .font(.headline)
+            }
+            Text("LIVE usage asks the profile's qualified official client for limits using its stored sign-in. Provider restrictions are possible. LIVE remains unverified against real accounts.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text(UsagePreferences.liveUnavailable(isFixture: isFixture))
+                .font(.callout)
+                .foregroundStyle(SettingsTypography.supportingInk)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Enable live usage") { onEnable(); dismiss() }
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
     }
 }
 
@@ -56,7 +181,7 @@ struct UsageSection: View {
                     Text("Reading usage…")
                         .foregroundStyle(SettingsTypography.supportingInk)
                 } else if let error = store.usageError {
-                    RowLabel("Usage unavailable",
+                    RowLabel(UsagePreferences.source == .live ? "Live usage unavailable" : "Usage unavailable",
                              subtitle: error) {
                         Image(systemName: "exclamationmark.circle")
                             .foregroundStyle(SettingsTypography.warningInk)

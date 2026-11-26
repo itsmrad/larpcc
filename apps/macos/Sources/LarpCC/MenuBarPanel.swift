@@ -111,6 +111,8 @@ struct MenuBarPanel: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
+    @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
+    @AppStorage(UsagePreferences.consentKey) private var consented = false
     @FocusState private var hasKeyboardFocus: Bool
     /// One selection for mouse and keyboard. Leaving a row keeps it, so Return still acts on it.
     @State private var selection: Item?
@@ -129,6 +131,9 @@ struct MenuBarPanel: View {
         case profile(String), openDesktop(String), showProfile(String), refresh, settings, quit
     }
 
+    private var source: UsageSource {
+        UsagePreferences.effectiveSource(stored: storedSource, consented: consented)
+    }
     private var allProfiles: [Profile] { store.snapshot?.profiles ?? [] }
     private var groups: [(provider: Provider, profiles: [Profile])] {
         MenuBarSummary.groups(allProfiles, usage: store.usage)
@@ -274,7 +279,8 @@ struct MenuBarPanel: View {
     private var statusLine: String {
         let count = profiles.count
         var parts = [count == 0 ? "No profiles on" : count == 1 ? "1 profile" : "\(count) profiles"]
-        parts.append(store.isFixture ? "Sample data" : "Local usage")
+        parts.append(source == .live ? "Live usage" : "Local usage")
+        if store.isFixture { parts.append("Sample data") }
         return parts.joined(separator: " · ")
     }
 
@@ -403,7 +409,7 @@ struct MenuBarPanel: View {
         let report = store.usage[profile.id]
         return VStack(alignment: .leading, spacing: 0) {
             Button { toggleDetails(for: profile.id) } label: {
-                MenuBarProfileSummary(profile: profile, report: report, now: now,
+                MenuBarProfileSummary(profile: profile, report: report, source: source, now: now,
                                       expanded: isExpanded)
             }
             .buttonStyle(.plain)
@@ -681,6 +687,7 @@ private struct PanelSnapshotBackground: View {
 private struct MenuBarProfileSummary: View {
     let profile: Profile
     let report: UsageReport?
+    let source: UsageSource
     let now: Date
     let expanded: Bool
     @Environment(\.theme) private var theme
@@ -747,7 +754,7 @@ private struct MenuBarProfileSummary: View {
     }
 
     private var subtitle: String {
-        guard let report else { return "No usage saved yet" }
+        guard let report else { return source == .local ? "No usage saved yet" : "Not refreshed yet" }
         if windows.isEmpty { return "No limits reported" }
         let sourceTitle = report.source.title
         guard let captured = report.capturedAt else { return sourceTitle }
