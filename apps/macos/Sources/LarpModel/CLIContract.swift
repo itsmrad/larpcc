@@ -85,6 +85,7 @@ struct CLIEnvelope: Decodable {
         case providerDetect(ProviderDetection)
         case profiles([WireProfile]), profile(WireProfile), aliases([WireAlias]), bindings([Detection])
         case mcp(MCPList), skills(SkillsList), matrix(Matrix), status(Status), mutation(Mutation), receipt(Receipt), text(String), version(String)
+        case usage(WireUsage)
         init(from decoder: Decoder) throws { throw ClientError.invalidResponse }
     }
     enum CodingKeys: String, CodingKey { case schema, command, ok, revision, data, error }
@@ -106,6 +107,7 @@ struct CLIEnvelope: Decodable {
         case "mcp.matrix", "skills.matrix": data = .matrix(try Matrix(from: d))
         case "status", "doctor": data = .status(try Status(from: d))
         case "app.open": data = .receipt(try Receipt(from: d))
+        case "usage": data = .usage(try WireUsage(from: d))
         case "help": data = .text(try TextData(from: d).text)
         case "version": data = .version(try VersionData(from: d).version)
         default: data = .mutation(try Mutation(from: d))
