@@ -12,6 +12,18 @@ final class UsageTests: XCTestCase {
         XCTAssertNil(UsageReport(source: .live, capturedAt: nil, fiveHour: nil, weekly: nil, resetCredits: nil).lowestLeftPercent)
     }
 
+    func testExtraWindowTitlesPreserveFixedLabels() {
+        let window = UsageWindow(usedPercent: nil, resetsAt: nil)
+        let model = UsageReport.ExtraWindow(label: "Sonnet weekly", window: window)
+        XCTAssertEqual(model.title(source: .live), "Weekly · Sonnet")
+        XCTAssertEqual(model.title(source: .local), "Sonnet weekly")
+
+        for label in ["Other limit 1 weekly", "Other limit 2 60m", "Codex secondary"] {
+            let extra = UsageReport.ExtraWindow(label: label, window: window)
+            XCTAssertEqual(extra.title(source: .live), label)
+        }
+    }
+
     func testSampleUsageFollowsSourceAndExistingProfiles() async throws {
         let client = FixtureLarpClient()
         let local = try await client.usage(source: .local)

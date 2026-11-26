@@ -111,8 +111,6 @@ struct MenuBarPanel: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
-    @AppStorage(UsagePreferences.sourceKey) private var storedSource = UsageSource.local.rawValue
-    @AppStorage(UsagePreferences.consentKey) private var consented = false
     @FocusState private var hasKeyboardFocus: Bool
     /// One selection for mouse and keyboard. Leaving a row keeps it, so Return still acts on it.
     @State private var selection: Item?
@@ -131,7 +129,6 @@ struct MenuBarPanel: View {
         case profile(String), openDesktop(String), showProfile(String), refresh, settings, quit
     }
 
-    private var source: UsageSource { storedSource == UsageSource.live.rawValue && consented ? .live : .local }
     private var allProfiles: [Profile] { store.snapshot?.profiles ?? [] }
     private var groups: [(provider: Provider, profiles: [Profile])] {
         MenuBarSummary.groups(allProfiles, usage: store.usage)
@@ -277,8 +274,7 @@ struct MenuBarPanel: View {
     private var statusLine: String {
         let count = profiles.count
         var parts = [count == 0 ? "No profiles on" : count == 1 ? "1 profile" : "\(count) profiles"]
-        parts.append(source == .live ? "Live usage" : "Local usage")
-        if store.isFixture { parts.append("Sample data") }
+        parts.append(store.isFixture ? "Sample data" : "Local usage")
         return parts.joined(separator: " · ")
     }
 
@@ -407,7 +403,7 @@ struct MenuBarPanel: View {
         let report = store.usage[profile.id]
         return VStack(alignment: .leading, spacing: 0) {
             Button { toggleDetails(for: profile.id) } label: {
-                MenuBarProfileSummary(profile: profile, report: report, source: source, now: now,
+                MenuBarProfileSummary(profile: profile, report: report, now: now,
                                       expanded: isExpanded)
             }
             .buttonStyle(.plain)
@@ -685,7 +681,6 @@ private struct PanelSnapshotBackground: View {
 private struct MenuBarProfileSummary: View {
     let profile: Profile
     let report: UsageReport?
-    let source: UsageSource
     let now: Date
     let expanded: Bool
     @Environment(\.theme) private var theme
@@ -695,7 +690,7 @@ private struct MenuBarProfileSummary: View {
             kind.window(in: report).map { (kind.title, $0) }
         }
         let extra = report?.extra ?? []
-        return primary + extra.prefix(expanded ? extra.count : 2).map { ($0.label, $0.window) }
+        return primary + extra.prefix(expanded ? extra.count : 2).map { ($0.title(source: report?.source), $0.window) }
     }
 
     var body: some View {
@@ -739,7 +734,7 @@ private struct MenuBarProfileSummary: View {
             CardSeparator()
             // Reset credits always show, whatever else the card has.
             CardRow {
-                Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
+                ResetCreditLabel(credits: report?.resetCredits)
                     .font(.system(size: 11))
                     .foregroundStyle(SettingsTypography.supportingInk)
             }
@@ -752,7 +747,7 @@ private struct MenuBarProfileSummary: View {
     }
 
     private var subtitle: String {
-        guard let report else { return source == .local ? "No usage saved yet" : "Not refreshed yet" }
+        guard let report else { return "No usage saved yet" }
         if windows.isEmpty { return "No limits reported" }
         let sourceTitle = report.source.title
         guard let captured = report.capturedAt else { return sourceTitle }
@@ -768,7 +763,7 @@ private struct MenuBarProfileSummary: View {
             GridRow {
                 Text(title)
                     .foregroundStyle(SettingsTypography.supportingInk)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .fixedSize(horizontal: false, vertical: true)
                 UsageMeter(leftPercent: left, level: level)
                 Text("\(Int(left.rounded()))%")
                     .fontWeight(.semibold)
@@ -848,7 +843,7 @@ private struct MenuBarProfileDetail<Actions: View>: View {
             kind.window(in: report).flatMap { UsagePace.text($0) }.map { (kind.title, $0) }
         }
         return primary + (report?.extra ?? []).compactMap { extra in
-            UsagePace.text(extra.window).map { (extra.label, $0) }
+            UsagePace.text(extra.window).map { (extra.title(source: report?.source), $0) }
         }
     }
 

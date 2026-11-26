@@ -36,7 +36,6 @@ struct LarpCCApp: App {
             settingsContent
                 .themed()
                 .onAppear { fitWindowOnScreen() }
-                .background { UsageWindowVisibility(store: store, usageView: .settings) }
         }
         .defaultSize(width: 900, height: 680)
         .defaultPosition(.center)
@@ -51,7 +50,6 @@ struct LarpCCApp: App {
         }
         MenuBarExtra(isInserted: MenuBarDockPolicy.insertion($menuBarShown)) {
             MenuBarPanel(store: store)
-                .background { UsageWindowVisibility(store: store, usageView: .menuBar) }
                 .themed()
         } label: {
             MenuBarLabel(store: store)
@@ -139,10 +137,6 @@ final class AppStore: ObservableObject {
     @Published private(set) var usageError: String?
     @Published private(set) var usageLoading = false
     private var usageTask: Task<Void, Never>?
-    private var usageIsScheduled = false
-    private var liveRefresh: Task<Void, Never>?
-    enum UsageView { case settings, menuBar }
-    private var visibleUsageViews: Set<UsageView> = []
     var modeTitle: String { isFixture ? "Sample mode" : "Local Larp CLI" }
     private var client: any LarpClient
     private var operation: Task<Void, Never>?
@@ -174,25 +168,21 @@ final class AppStore: ObservableObject {
             }
         }
     }
-    /// Reads usage for every profile from the current source.
     func refreshUsage() {
-        refreshUsage(scheduledInterval: nil)
-    }
-
-    private func refreshUsage(scheduledInterval: Int?) {
         guard isFixture || selectedPath != nil else { return }
-        let source = scheduledInterval == nil ? UsagePreferences.source : .live
         usageTask?.cancel()
         usageLoading = true
-        usageIsScheduled = scheduledInterval != nil
         usageTask = Task {
             guard !Task.isCancelled else { return }
             defer {
                 if !Task.isCancelled { clearUsageRefresh() }
             }
-            if let scheduledInterval, !canRefreshLive(every: scheduledInterval) { return }
             do {
-                let value = try await client.usage(source: source)
+                let value = if let fixture = client as? FixtureLarpClient {
+                    try await fixture.usage(source: .live)
+                } else {
+                    try await client.usage(source: .local)
+                }
                 guard !Task.isCancelled else { return }
                 usage = value; usageError = nil
             } catch {
@@ -205,45 +195,13 @@ final class AppStore: ObservableObject {
 
     private func clearUsageRefresh() {
         usageTask = nil
-        usageIsScheduled = false
         usageLoading = false
-    }
-
-    func setUsageView(_ view: UsageView, visible: Bool) {
-        let wasVisible = !visibleUsageViews.isEmpty
-        if visible { visibleUsageViews.insert(view) } else { visibleUsageViews.remove(view) }
-        let isVisible = !visibleUsageViews.isEmpty
-        if wasVisible != isVisible { scheduleLiveRefresh() }
-    }
-
-    /// Restarts the opt-in interval while at least one usage view is visible.
-    func scheduleLiveRefresh() {
-        liveRefresh?.cancel(); liveRefresh = nil
-        if usageIsScheduled {
-            usageTask?.cancel()
-            clearUsageRefresh()
-        }
-        let minutes = UsagePreferences.intervalMinutes
-        guard canRefreshLive(every: minutes) else { return }
-        liveRefresh = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(minutes) * 60_000_000_000)
-                guard !Task.isCancelled, let self, self.canRefreshLive(every: minutes) else { return }
-                self.refreshUsage(scheduledInterval: minutes)
-            }
-        }
-    }
-
-    private func canRefreshLive(every minutes: Int) -> Bool {
-        !visibleUsageViews.isEmpty && (isFixture || selectedPath != nil)
-            && UsagePreferences.source == .live && minutes > 0 && UsagePreferences.intervalMinutes == minutes
     }
 
     func useFixture() {
         cancel()
         isFixture = true; selectedPath = nil; snapshot = nil
         client = FixtureLarpClient()
-        scheduleLiveRefresh()
         operation = Task { await refresh() }
     }
     /// True while a change (not a read) is running; Cancel then warns before stopping it.
@@ -254,7 +212,6 @@ final class AppStore: ObservableObject {
         operation?.cancel(); operation = nil
         busy = false
         snapshot = nil
-        liveRefresh?.cancel(); liveRefresh = nil
         usageTask?.cancel(); clearUsageRefresh()
         usage = [:]; usageError = nil
         message = mutating ? ClientError.outcomeUnknown.errorDescription : "Cancelled. Refresh before choosing another action."
@@ -271,13 +228,8 @@ final class AppStore: ObservableObject {
             let value = try await client.snapshot()
             guard generation == token, !Task.isCancelled else { return }
             snapshot = value
-            if let path {
-                selectedPath = path
-                scheduleLiveRefresh()
-            }
-            // Local usage is data already on this Mac, so it follows every refresh.
-            // Live usage is only read on request or on the user's chosen interval.
-            if UsagePreferences.source == .local { refreshUsage() }
+            if let path { selectedPath = path }
+            refreshUsage()
         } catch {
             guard generation == token else { return }
             snapshot = nil

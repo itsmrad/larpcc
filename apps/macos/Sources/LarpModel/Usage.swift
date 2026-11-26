@@ -88,6 +88,17 @@ public struct UsageReport: Sendable, Equatable {
     public struct ExtraWindow: Sendable, Equatable {
         public let label: String
         public let window: UsageWindow
+
+        public func title(source: UsageSource?) -> String {
+            let suffix = " weekly"
+            guard source == .live, label.hasSuffix(suffix) else { return label }
+            let name = label.dropLast(suffix.count)
+            let fallbackPrefix = "Other limit "
+            if name.hasPrefix(fallbackPrefix), Int(name.dropFirst(fallbackPrefix.count)) != nil {
+                return label
+            }
+            return "Weekly · \(name)"
+        }
     }
 
     public let source: UsageSource
