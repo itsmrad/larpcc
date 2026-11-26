@@ -433,17 +433,50 @@ fn measured(
     now: i64,
 ) -> Result<Window, &'static str> {
     let used = optional(value, Value::as_f64)?;
-    if used.is_some_and(|used| !(0.0..=100.0).contains(&used))
-        || reset.is_some_and(|reset| !(clock::MIN_RESET..clock::MAX_RESET).contains(&reset))
-    {
-        return Err(UNAVAILABLE);
-    }
     Ok(Window::from_record(used, reset, now, Some(length), now))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage11_live_codex_keeps_valid_window_when_reset_is_out_of_range() {
+        let now = clock::parse("2026-11-26T08:00:00Z").unwrap();
+        let (observation, _) = parse(
+            Provider::Codex,
+            &json!({"rateLimits": {
+                "primary": {"usedPercent": 31, "windowDurationMins": 300, "resetsAt": now + 3600},
+                "secondary": {"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": clock::MAX_RESET}
+            }}),
+            now,
+        )
+        .unwrap();
+        assert_eq!(observation.windows.five_hour.used_percent, Some(31.0));
+        assert_eq!(observation.windows.weekly.reason, Some("invalid_record"));
+        assert_eq!(observation.windows.weekly.used_percent, None);
+    }
+
+    #[test]
+    fn stage11_live_claude_normalizes_each_window_independently() {
+        let now = clock::parse("2026-11-26T08:00:00Z").unwrap();
+        let (observation, _) = parse(
+            Provider::Claude,
+            &json!({"rate_limits": {
+                "five_hour": {"utilization": 101},
+                "seven_day": {"utilization": 25},
+                "model_scoped": [{"display_name": "Fable", "utilization": 1001}]
+            }}),
+            now,
+        )
+        .unwrap();
+        assert_eq!(observation.windows.five_hour.used_percent, Some(100.0));
+        assert_eq!(observation.windows.weekly.used_percent, Some(25.0));
+        let extras = observation.windows.extra.unwrap();
+        assert_eq!(extras[0].label, "Fable weekly");
+        assert_eq!(extras[0].window.reason, Some("invalid_record"));
+        assert_eq!(extras[0].window.used_percent, None);
+    }
 
     #[test]
     fn stage11_live_model_name_is_bounded_and_ascii() {

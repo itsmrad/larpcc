@@ -237,7 +237,7 @@ null means the source cannot report extras.
 
 | state | count | meaning (app text) |
 |---|---|---|
-| `available` | integer >= 1 | "N resets available" |
+| `available` | integer 1–1000 | "N resets available" |
 | `none` | 0 | the client recorded zero: "No resets available" |
 | `not_recorded` | null | the source can carry it but no value is captured yet |
 | `unsupported` | null | this source/version never records it: "Reset info not available" |
@@ -250,9 +250,9 @@ the same client response:
 
 | LIVE count | `state` / `count` | `expires_state` / `expires_at` |
 |---|---|---|
-| integer >= 1 | `available` / N | `unsupported` / null (expiry needs another request) |
+| integer 1–1000 | `available` / N | `unsupported` / null (expiry needs another request) |
 | 0 | `none` / 0 | `none` / null (general rule) |
-| field absent or null in a usable response, or no usable response | `not_recorded` / null | `not_recorded` / null (general rule) |
+| missing, non-integer or out-of-range count, or no usable response | `not_recorded` / null | `not_recorded` / null (general rule) |
 
 **Plan** (D29, D32). Precedence: the user-entered `plan_label`
 (`source:"user"`) always wins. Otherwise, in a LOCAL row, a plan the official
