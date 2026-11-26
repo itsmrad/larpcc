@@ -688,7 +688,10 @@ pub fn executable(path: &Path, root: &Path) -> Result<(PathBuf, FileIdentity), E
 
 fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObject), Error> {
     use std::io::Read;
-    let _parents = anchor(path)?;
+    let (parents, complete) = anchor_existing(path)?;
+    if !complete {
+        return Err(unsafe_path(path, "does not exist"));
+    }
     let file = open(
         path,
         READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_READ_DATA,
@@ -697,39 +700,38 @@ fn executable_checked(path: &Path, root: &Path) -> Result<(PathBuf, CheckedObjec
     .ok_or_else(|| unsafe_path(path, "does not exist"))?;
     let mut checked = verify(file, path, ObjectKind::File, Policy::Executable)?;
     let target = resolved(&checked.file, path)?;
-    let _resolved_parents = anchor(&target)?;
-    let canonical_root =
-        if let Some(f) = open(
+    let (resolved_parents, complete) = anchor_existing(&target)?;
+    if !complete {
+        return Err(unsafe_path(
+            path,
+            "cannot resolve a trusted executable path",
+        ));
+    }
+    if root.components().any(|c| c == Component::ParentDir) {
+        return Err(unsafe_path(root, "must be normalized"));
+    }
+    wide(root)?;
+    let (root_parents, complete) = anchor_existing(root)?;
+    if root_parents.ancestors.is_empty() {
+        return Err(unsafe_path(root, "filesystem identity cannot be verified"));
+    }
+    // A missing component below a verified directory proves absence at lookup.
+    if complete
+        && let Some(file) = open(
             root,
             READ_CONTROL | FILE_READ_ATTRIBUTES,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
-        )? {
-            resolved(&f, root)?
-        } else {
-            let mut existing = root;
-            let mut suffix = Vec::new();
-            loop {
-                suffix.push(existing.file_name().ok_or_else(|| {
-                    unsafe_path(root, "cannot resolve a trusted executable path")
-                })?);
-                existing = existing
-                    .parent()
-                    .ok_or_else(|| unsafe_path(root, "cannot resolve a trusted executable path"))?;
-                if let Some(f) = open(
-                    existing,
-                    READ_CONTROL | FILE_READ_ATTRIBUTES,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                )? {
-                    let mut p = resolved(&f, existing)?;
-                    for part in suffix.iter().rev() {
-                        p.push(part);
-                    }
-                    break p;
-                }
-            }
-        };
-    if contains_path(&target, &canonical_root)? {
-        return Err(unsafe_path(path, "is inside the Larp CC data directory"));
+        )?
+    {
+        let managed = verify(file, root, ObjectKind::Directory, Policy::Managed)?;
+        if parents
+            .ancestors
+            .iter()
+            .chain(&resolved_parents.ancestors)
+            .any(|ancestor| ancestor.identity == managed.identity)
+        {
+            return Err(unsafe_path(path, "is inside the Larp CC data directory"));
+        }
     }
     for p in [path, target.as_path()] {
         if !p
@@ -1748,12 +1750,55 @@ mod tests {
         assert!(before.starts_with(b"MZ"));
     }
     #[test]
+    fn w06_executable_containment_uses_verified_directory_identity() {
+        let temp = fixture();
+        let managed = temp.path().join("Managed");
+        let inside = managed.join("bin").join("native.exe");
+        let outside = temp.path().join("ManagedX").join("native.exe");
+        fixture_private::create_directory(&managed).unwrap();
+        for path in [&inside, &outside] {
+            fixture_private::create_directory(path.parent().unwrap()).unwrap();
+            fixture_private::create_file(path, b"MZxx").unwrap();
+        }
+
+        let alternate = std::fs::canonicalize(&managed).unwrap();
+        assert!(matches!(
+            alternate.components().next(),
+            Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::VerbatimDisk(_))
+        ));
+        for root in [&managed, &alternate] {
+            assert!(matches!(
+                executable(&inside, root),
+                Err(Error::Unsafe { path, reason }) if path == inside
+                    && reason == "is inside the Larp CC data directory"
+            ));
+            executable(&outside, root).unwrap();
+        }
+
+        let missing = temp.path().join("missing");
+        executable(&outside, &missing).unwrap();
+        executable(&outside, &missing.join("nested")).unwrap();
+        for root in [&inside, &inside.join("nested")] {
+            assert!(matches!(
+                executable(&outside, root),
+                Err(Error::Unsafe { path, reason }) if path == inside && reason == "is not a directory"
+            ));
+        }
+        let unprotected = temp.path().join("unprotected");
+        std::fs::create_dir(&unprotected).unwrap();
+        assert!(matches!(
+            executable(&outside, &unprotected),
+            Err(Error::Unsafe { path, reason }) if path == unprotected
+                && reason == "has an unprotected access control list"
+        ));
+    }
+    #[test]
     fn w06_native_file_and_directory_reparse_paths_refuse() {
         let temp = fixture();
         let root = temp.path().join("private");
         drop(create_directory(&root).unwrap());
         let target = root.join("target.exe");
-        drop(create_file(&target).unwrap());
+        fixture_private::create_file(&target, b"MZxx").unwrap();
         let link = root.join("link.exe");
         std::os::windows::fs::symlink_file(&target, &link)
             .expect("native file-reparse fixture unavailable; W06 cannot qualify on this runner");
@@ -1772,6 +1817,13 @@ mod tests {
         assert!(
             matches!(anchor(&alias.join("leaf")), Err(Error::Unsafe { reason, .. }) if reason == "is a symbolic link or reparse point")
         );
+        for managed in [&alias, &alias.join("missing")] {
+            assert!(matches!(
+                executable(&target, managed),
+                Err(Error::Unsafe { path, reason }) if path == alias
+                    && reason == "is a symbolic link or reparse point"
+            ));
+        }
         assert!(create_file(&alias.join("collision")).is_err());
         assert!(!selected.join("collision").exists());
     }
