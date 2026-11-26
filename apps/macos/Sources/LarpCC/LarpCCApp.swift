@@ -181,7 +181,7 @@ final class AppStore: ObservableObject {
 
     private func refreshUsage(scheduledInterval: Int?) {
         guard isFixture || selectedPath != nil else { return }
-        let source = scheduledInterval == nil ? UsagePreferences.source : .live
+        let source = UsagePreferences.source
         usageTask?.cancel()
         usageLoading = true
         usageIsScheduled = scheduledInterval != nil
@@ -192,7 +192,12 @@ final class AppStore: ObservableObject {
             }
             if let scheduledInterval, !canRefreshLive(every: scheduledInterval) { return }
             do {
-                let value = try await client.usage(source: source)
+                let value = if let fixture = client as? FixtureLarpClient {
+                    // Exercise the LIVE report layout using synthetic data only.
+                    try await fixture.usage(source: .live)
+                } else {
+                    try await client.usage(source: source)
+                }
                 guard !Task.isCancelled else { return }
                 usage = value; usageError = nil
             } catch {

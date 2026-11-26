@@ -8,11 +8,17 @@ enum UsagePreferences {
     static let consentKey = "usageLiveConsent"
     static let intervalKey = "usageLiveIntervalMinutes"
     static let intervals = [0, 5, 15, 30, 60]
+    // The build has no qualified LIVE usage rows.
+    static let liveQualified = false
+
+    static func effectiveSource(stored: String, consented: Bool) -> UsageSource {
+        liveQualified && stored == UsageSource.live.rawValue && consented ? .live : .local
+    }
 
     /// Live counts only after the one-time confirmation.
     static var source: UsageSource {
-        let stored = UsageSource(rawValue: UserDefaults.standard.string(forKey: sourceKey) ?? "") ?? .local
-        return stored == .live && UserDefaults.standard.bool(forKey: consentKey) ? .live : .local
+        effectiveSource(stored: UserDefaults.standard.string(forKey: sourceKey) ?? UsageSource.local.rawValue,
+                        consented: UserDefaults.standard.bool(forKey: consentKey))
     }
     static func supportedInterval(_ minutes: Int) -> Int {
         intervals.contains(minutes) ? minutes : 0
@@ -34,24 +40,36 @@ struct UsageSettingsSection: View {
     @AppStorage(UsagePreferences.intervalKey) private var interval = 0
     @State private var confirmingLive = false
 
+    private var effectiveSource: UsageSource {
+        UsagePreferences.effectiveSource(stored: source, consented: consented)
+    }
+
     var body: some View {
         Section {
             Picker(selection: Binding(
-                get: { source == UsageSource.live.rawValue && consented ? UsageSource.live : .local },
+                get: { effectiveSource },
                 set: { choice in
+                    guard choice != .live || UsagePreferences.liveQualified else { return }
                     if choice == .live && !consented { confirmingLive = true } else { select(choice) }
                 }
             )) {
-                ForEach(UsageSource.allCases, id: \.self) { Text($0.title).tag($0) }
+                Text(UsageSource.local.title).tag(UsageSource.local)
+                if UsagePreferences.liveQualified {
+                    Text(UsageSource.live.title).tag(UsageSource.live)
+                }
             } label: {
                 Text("Usage source")
-                Text(source == UsageSource.live.rawValue && consented
+                Text(effectiveSource == .live
                      ? UsagePreferences.liveUnavailable(isFixture: store.isFixture)
                      : "Local uses only data the official apps already saved on this Mac.")
                     .foregroundStyle(SettingsTypography.supportingInk)
             }
             .pickerStyle(.segmented)
-            if source == UsageSource.live.rawValue && consented {
+            if !UsagePreferences.liveQualified {
+                LabeledContent("Live usage", value: "Disabled · Unverified")
+                    .foregroundStyle(SettingsTypography.supportingInk)
+            }
+            if effectiveSource == .live {
                 Picker(selection: Binding(
                     get: { UsagePreferences.supportedInterval(interval) },
                     set: { interval = $0 }
@@ -72,7 +90,7 @@ struct UsageSettingsSection: View {
                     if !store.usageLoading, let error = store.usageError {
                         Text(error).foregroundStyle(SettingsTypography.supportingInk)
                     } else {
-                        UsageUpdatedText(report: store.usage.values.first, loading: store.usageLoading)
+                        UsageUpdatedText(report: store.usage.values.first, loading: store.usageLoading, isFixture: store.isFixture)
                     }
                 }
             } else if !store.usageLoading, let error = store.usageError {
@@ -84,6 +102,7 @@ struct UsageSettingsSection: View {
         .onChange(of: interval) { _, _ in store.scheduleLiveRefresh() }
         .sheet(isPresented: $confirmingLive) {
             LiveUsageConsentSheet(isFixture: store.isFixture) {
+                guard UsagePreferences.liveQualified else { return }
                 consented = true
                 select(.live)
             }
@@ -112,9 +131,7 @@ struct LiveUsageConsentSheet: View {
                 Text("Turn on live usage?")
                     .font(.headline)
             }
-            Text("LIVE usage reads this profile's sign-in token from its local credential store and sends it to the provider's usage endpoint. This may break the provider's terms of service, and LarpCC can't rule out account restrictions. LIVE is unverified against real accounts. LOCAL mode, the default, never reads tokens and makes no network requests.")
-                .fixedSize(horizontal: false, vertical: true)
-            Text("For Claude profiles, macOS will ask whether larp may read the Claude Code sign-in item in your Keychain. Allow lets it read once. Always Allow lets larp read that item from now on without asking. Deny keeps LIVE from working for that profile. LarpCC never chooses for you.")
+            Text("LIVE usage asks the profile's qualified official client for limits using its stored sign-in. Provider restrictions are possible. LIVE remains unverified against real accounts.")
                 .fixedSize(horizontal: false, vertical: true)
             Text(UsagePreferences.liveUnavailable(isFixture: isFixture))
                 .font(.callout)
@@ -137,6 +154,7 @@ struct LiveUsageConsentSheet: View {
 struct UsageSection: View {
     @ObservedObject var store: AppStore
     let profile: Profile
+    @State private var extrasExpanded = false
 
     var body: some View {
         let report = store.usage[profile.id]
@@ -148,8 +166,15 @@ struct UsageSection: View {
             if let window = report?.fiveHour { UsageWindowRow(title: "5-hour window", window: window) }
             if let window = report?.weekly { UsageWindowRow(title: "Weekly window", window: window) }
             let extra = report?.extra ?? []
-            ForEach(extra.indices, id: \.self) { index in
-                UsageWindowRow(title: extra[index].label, window: extra[index].window)
+            let visibleExtras = extrasExpanded ? extra[...] : extra.prefix(2)
+            ForEach(visibleExtras, id: \.label) { window in
+                UsageWindowRow(title: window.title(source: report?.source), window: window.window)
+            }
+            if extra.count > 2 {
+                Button(extrasExpanded ? "Show fewer usage windows" : "Show more usage windows") {
+                    extrasExpanded.toggle()
+                }
+                .buttonStyle(.borderless)
             }
             if report == nil {
                 if store.usageLoading {
@@ -183,7 +208,7 @@ struct UsageSection: View {
             }
         } footer: {
             if report != nil {
-                UsageUpdatedText(report: report, loading: false)
+                UsageUpdatedText(report: report, loading: false, isFixture: store.isFixture)
                     .font(SettingsTypography.supporting)
             }
         }
@@ -195,15 +220,28 @@ struct ResetAvailabilityRow: View {
     let credits: UsageResetCredits?
     var body: some View {
         LabeledContent {
-            Text(ResetAvailability.text(credits: credits))
+            ResetCreditLabel(credits: credits)
                 .monospacedDigit()
                 .foregroundStyle(SettingsTypography.supportingInk)
         } label: {
             Text("Limit resets")
-            if credits?.state == .available {
-                Text("Each one resets a window early.")
-                    .foregroundStyle(SettingsTypography.supportingInk)
+        }
+    }
+}
+
+struct ResetCreditLabel: View {
+    let credits: UsageResetCredits?
+
+    var body: some View {
+        let text = ResetAvailability.text(credits: credits)
+        if credits?.state == .available, credits?.count != nil {
+            Label {
+                Text(text)
+            } icon: {
+                Image(systemName: "ticket").accessibilityHidden(true)
             }
+        } else {
+            Text(text)
         }
     }
 }
@@ -257,13 +295,14 @@ private struct UsageWindowRow: View {
 struct UsageUpdatedText: View {
     let report: UsageReport?
     let loading: Bool
+    let isFixture: Bool
     var body: some View {
         if loading {
             Text("Updating…").foregroundStyle(SettingsTypography.supportingInk)
         } else if let report, let captured = report.capturedAt {
             TimelineView(.everyMinute) { context in
                 let age = context.date.timeIntervalSince(captured)
-                Text("Updated \(age < 60 ? "just now" : UsageTime.span(age) + " ago") · \(report.source.title)")
+                Text("Updated \(age < 60 ? "just now" : UsageTime.span(age) + " ago") · \(isFixture ? "Sample" : report.source.title)")
             }
             .foregroundStyle(SettingsTypography.supportingInk)
         } else {

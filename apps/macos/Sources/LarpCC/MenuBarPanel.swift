@@ -131,7 +131,9 @@ struct MenuBarPanel: View {
         case profile(String), openDesktop(String), showProfile(String), refresh, settings, quit
     }
 
-    private var source: UsageSource { storedSource == UsageSource.live.rawValue && consented ? .live : .local }
+    private var source: UsageSource {
+        UsagePreferences.effectiveSource(stored: storedSource, consented: consented)
+    }
     private var allProfiles: [Profile] { store.snapshot?.profiles ?? [] }
     private var groups: [(provider: Provider, profiles: [Profile])] {
         MenuBarSummary.groups(allProfiles, usage: store.usage)
@@ -277,8 +279,7 @@ struct MenuBarPanel: View {
     private var statusLine: String {
         let count = profiles.count
         var parts = [count == 0 ? "No profiles on" : count == 1 ? "1 profile" : "\(count) profiles"]
-        parts.append(source == .live ? "Live usage" : "Local usage")
-        if store.isFixture { parts.append("Sample data") }
+        parts.append(store.isFixture ? "Sample data" : "\(source.title) usage")
         return parts.joined(separator: " · ")
     }
 
@@ -408,7 +409,7 @@ struct MenuBarPanel: View {
         return VStack(alignment: .leading, spacing: 0) {
             Button { toggleDetails(for: profile.id) } label: {
                 MenuBarProfileSummary(profile: profile, report: report, source: source, now: now,
-                                      expanded: isExpanded)
+                                      expanded: isExpanded, isFixture: store.isFixture)
             }
             .buttonStyle(.plain)
             .onHover { hover(item, entered: $0) }
@@ -688,6 +689,7 @@ private struct MenuBarProfileSummary: View {
     let source: UsageSource
     let now: Date
     let expanded: Bool
+    let isFixture: Bool
     @Environment(\.theme) private var theme
 
     private var windows: [(title: String, window: UsageWindow)] {
@@ -695,7 +697,7 @@ private struct MenuBarProfileSummary: View {
             kind.window(in: report).map { (kind.title, $0) }
         }
         let extra = report?.extra ?? []
-        return primary + extra.prefix(expanded ? extra.count : 2).map { ($0.label, $0.window) }
+        return primary + extra.prefix(expanded ? extra.count : 2).map { ($0.title(source: report?.source), $0.window) }
     }
 
     var body: some View {
@@ -739,7 +741,7 @@ private struct MenuBarProfileSummary: View {
             CardSeparator()
             // Reset credits always show, whatever else the card has.
             CardRow {
-                Label(ResetAvailability.text(credits: report?.resetCredits), systemImage: "arrow.counterclockwise.circle")
+                ResetCreditLabel(credits: report?.resetCredits)
                     .font(.system(size: 11))
                     .foregroundStyle(SettingsTypography.supportingInk)
             }
@@ -754,7 +756,7 @@ private struct MenuBarProfileSummary: View {
     private var subtitle: String {
         guard let report else { return source == .local ? "No usage saved yet" : "Not refreshed yet" }
         if windows.isEmpty { return "No limits reported" }
-        let sourceTitle = report.source.title
+        let sourceTitle = isFixture ? "Sample" : report.source.title
         guard let captured = report.capturedAt else { return sourceTitle }
         let age = now.timeIntervalSince(captured)
         if age < 60 { return "Updated just now · \(sourceTitle)" }
@@ -766,9 +768,7 @@ private struct MenuBarProfileSummary: View {
         if let left = window.leftPercent {
             let level = UsageLevel(leftPercent: left)
             GridRow {
-                Text(title)
-                    .foregroundStyle(SettingsTypography.supportingInk)
-                    .fixedSize(horizontal: true, vertical: false)
+                meterTitle(title)
                 UsageMeter(leftPercent: left, level: level)
                 Text("\(Int(left.rounded()))%")
                     .fontWeight(.semibold)
@@ -796,15 +796,21 @@ private struct MenuBarProfileSummary: View {
             }
         } else {
             GridRow {
-                Text(title)
-                    .foregroundStyle(SettingsTypography.supportingInk)
-                    .fixedSize(horizontal: true, vertical: false)
+                meterTitle(title)
                 Text(window.reason?.text ?? "Not available")
                     .foregroundStyle(SettingsTypography.supportingInk)
                     .gridCellColumns(3)
                     .gridCellUnsizedAxes(.horizontal)
             }
         }
+    }
+
+    private func meterTitle(_ title: String) -> some View {
+        let isModelWeekly = title.hasPrefix("Weekly · ")
+        return Text(title)
+            .foregroundStyle(SettingsTypography.supportingInk)
+            .fixedSize(horizontal: !isModelWeekly, vertical: true)
+            .frame(width: isModelWeekly ? 108 : nil, alignment: .leading)
     }
 
     private var spokenSummary: String {
@@ -848,7 +854,7 @@ private struct MenuBarProfileDetail<Actions: View>: View {
             kind.window(in: report).flatMap { UsagePace.text($0) }.map { (kind.title, $0) }
         }
         return primary + (report?.extra ?? []).compactMap { extra in
-            UsagePace.text(extra.window).map { (extra.label, $0) }
+            UsagePace.text(extra.window).map { (extra.title(source: report?.source), $0) }
         }
     }
 
