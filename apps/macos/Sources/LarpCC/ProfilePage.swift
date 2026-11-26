@@ -123,6 +123,11 @@ struct ProfilePage: View {
                 Text("\(profile.provider.title) · \(status)")
                     .font(SettingsTypography.supporting)
                     .foregroundStyle(SettingsTypography.supportingInk)
+                if let label = store.usage[profile.id]?.planLabel {
+                    Text(label)
+                        .font(SettingsTypography.supporting)
+                        .foregroundStyle(SettingsTypography.supportingInk)
+                }
                 Text(aliases.isEmpty ? "No command aliases" : aliases)
                     .font(aliases.isEmpty ? SettingsTypography.supporting : SettingsTypography.supporting.monospaced())
                     .foregroundStyle(SettingsTypography.supportingInk)
